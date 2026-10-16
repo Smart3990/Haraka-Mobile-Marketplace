@@ -100,6 +100,8 @@ export interface NotificationItem {
   read: boolean;
   listingId?: string;
   imageUrl?: string;
+  /** Where tapping the notification goes when it is not about an ad or a chat */
+  target?: 'application' | 'dashboard';
 }
 
 // Categories covering all items from user's images

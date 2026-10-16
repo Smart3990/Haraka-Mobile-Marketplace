@@ -51,6 +51,12 @@ export interface UserProfileDoc {
   storeName?: string;
   whatsapp?: string;
   bio?: string;
+  /** Ads the user saved (heart), kept on the account */
+  savedListingIds?: string[];
+  /** Sellers the user follows; their new ads appear in notifications */
+  followedSellerIds?: string[];
+  /** Notifications at or before this time count as read */
+  notificationsReadAtISO?: string;
   createdAt: string;
 }
 

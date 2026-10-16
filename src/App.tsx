@@ -1143,7 +1143,7 @@ export default function App({ native = false }: { native?: boolean } = {}) {
   const toggleFollowSeller = (sellerId: string) => {
     setFollowedSellerIds((prev) => {
       const isFollowing = prev.includes(sellerId);
-      showToast(isFollowing ? 'Unfollowed seller' : 'Now following seller! You will get alerts for new ads.');
+      showToast(isFollowing ? 'Unfollowed seller' : 'Now following seller! Their new ads will show in your notifications.');
       return isFollowing ? prev.filter((id) => id !== sellerId) : [...prev, sellerId];
     });
   };
@@ -1817,6 +1817,9 @@ export default function App({ native = false }: { native?: boolean } = {}) {
   const handleSignOut = () => {
     signOutUser().catch((err) => console.warn('Sign out failed', err));
     setFirebaseUid(null);
+    profileLoadedRef.current = false;
+    setSavedIds([]);
+    setFollowedSellerIds([]);
     profileRoleRef.current = 'buyer';
     setCurrentUserRole('buyer');
     setSubmittedSellerApplicantId(null);
@@ -1829,6 +1832,9 @@ export default function App({ native = false }: { native?: boolean } = {}) {
   const [firebaseUid, setFirebaseUid] = useState<string | null>(null);
   const [isFirebaseAdmin, setIsFirebaseAdmin] = useState(false);
   const [adminAccess, setAdminAccess] = useState<AdminAccess>({ isAdmin: false, canAddAdmins: false, isSystemAdmin: false });
+  const profileLoadedRef = useRef(false);
+  const syncedListsRef = useRef({ saved: '[]', followed: '[]' });
+  const [notificationsReadAt, setNotificationsReadAt] = useState('');
   const firebaseUidRef = useRef<string | null>(null);
   const adminAccessRef = useRef(adminAccess);
   // The role the admin granted on the account (buyer / seller / artisan); admins see the admin dashboard on top
@@ -1839,6 +1845,17 @@ export default function App({ native = false }: { native?: boolean } = {}) {
       setFirebaseUid(user?.uid ?? null);
       if (!user) return;
       setCurrentUserId(user.uid);
+      if (profile) {
+        // Saved ads, follows and the notifications read marker live on the account
+        syncedListsRef.current = {
+          saved: JSON.stringify(profile.savedListingIds || []),
+          followed: JSON.stringify(profile.followedSellerIds || []),
+        };
+        setSavedIds(profile.savedListingIds || []);
+        setFollowedSellerIds(profile.followedSellerIds || []);
+        setNotificationsReadAt(profile.notificationsReadAtISO || '');
+        profileLoadedRef.current = true;
+      }
       if (profile?.role) {
         profileRoleRef.current = profile.role === 'admin' ? 'buyer' : profile.role;
         setCurrentUserRole(adminAccessRef.current.isAdmin ? 'admin' : profileRoleRef.current);
@@ -2106,6 +2123,28 @@ export default function App({ native = false }: { native?: boolean } = {}) {
       })
     );
   }, [chatDocs, activeChatMessages, activeChatId, firebaseUid]);
+
+  // Save hearts and follows to the account whenever they change
+  useEffect(() => {
+    if (!firebaseUid || !profileLoadedRef.current) return;
+    const saved = JSON.stringify(savedIds);
+    const followed = JSON.stringify(followedSellerIds);
+    if (saved === syncedListsRef.current.saved && followed === syncedListsRef.current.followed) return;
+    syncedListsRef.current = { saved, followed };
+    saveUserProfile(firebaseUid, { savedListingIds: savedIds, followedSellerIds }).catch((err) =>
+      console.warn('Could not save favourites', err)
+    );
+  }, [savedIds, followedSellerIds, firebaseUid]);
+
+  // Opening the notifications screen marks everything up to now as read
+  useEffect(() => {
+    if (currentRoute.type !== 'notifications' || !firebaseUid) return;
+    const now = new Date().toISOString();
+    setNotificationsReadAt(now);
+    saveUserProfile(firebaseUid, { notificationsReadAtISO: now }).catch((err) =>
+      console.warn('Could not save notifications read time', err)
+    );
+  }, [currentRoute.type, firebaseUid]);
 
   // Live marketplace listings from Firestore, shown above the built-in sample listings
   const [listingsLoaded, setListingsLoaded] = useState(false);
@@ -3435,6 +3474,111 @@ export default function App({ native = false }: { native?: boolean } = {}) {
         : `✅ Approved ${applicant.name}`
     );
   };
+
+  // Notifications are built only from real events
+  useEffect(() => {
+    if (!firebaseUid) {
+      setNotifications([]);
+      return;
+    }
+    const items: (NotificationItem & { atISO: string })[] = [];
+    const isRead = (iso: string) => Boolean(notificationsReadAt) && iso <= notificationsReadAt;
+
+    // Unread chat messages
+    for (const chat of chatDocs) {
+      if ((chat.unread?.[firebaseUid] || 0) === 0) continue;
+      const otherId = chat.participants.find((p) => p !== firebaseUid) || '';
+      items.push({
+        id: `chat-${chat.id}`,
+        type: chat.lastMessage.startsWith('Offer:') ? 'offer' : 'message',
+        title: `New message from ${chat.people?.[otherId]?.name || 'a user'}`,
+        body: `${chat.listingTitle}: ${chat.lastMessage}`,
+        time: formatChatTime(chat.lastMessageAtISO),
+        read: false,
+        listingId: chat.id,
+        imageUrl: chat.listingImage,
+        atISO: chat.lastMessageAtISO,
+      });
+    }
+
+    // The user's own partner application
+    const myApplication = adminApplicants.find((a) => (a as any).uid === firebaseUid) as any;
+    if (myApplication && !adminAccess.isAdmin) {
+      const atISO = myApplication.decidedAtISO || myApplication.submittedAtISO || '';
+      items.push({
+        id: `app-${myApplication.status}-${atISO}`,
+        type: 'safety',
+        title:
+          myApplication.status === 'approved'
+            ? myApplication.verifiedBadge
+              ? 'Application approved & verified ✓'
+              : 'Application approved'
+            : myApplication.status === 'rejected'
+            ? 'Application not approved'
+            : 'Application received',
+        body:
+          myApplication.status === 'approved'
+            ? 'Your partner account is active. You can now post on Haraka.'
+            : myApplication.status === 'rejected'
+            ? `Reason: ${myApplication.rejectionReason || 'Not given'}. You can update your details and reapply.`
+            : 'Our team is reviewing your documents. This usually takes 24 to 72 hours.',
+        time: formatChatTime(atISO),
+        read: isRead(atISO),
+        target: 'application',
+        atISO,
+      });
+    }
+
+    // New ads from sellers the user follows (posted in the last 7 days)
+    const weekAgo = new Date(Date.now() - 7 * 86400_000).toISOString();
+    for (const l of listings as (Listing & { sellerId?: string; createdAtISO?: string })[]) {
+      if (!l.sellerId || !l.createdAtISO || !followedSellerIds.includes(l.sellerId) || l.createdAtISO < weekAgo) continue;
+      items.push({
+        id: `follow-${l.id}`,
+        type: 'price_drop',
+        title: `New ad from ${l.seller.name}`,
+        body: `${l.title} • ${l.currency} ${l.price.toLocaleString()}`,
+        time: formatChatTime(l.createdAtISO),
+        read: isRead(l.createdAtISO),
+        listingId: l.id,
+        imageUrl: l.images[0],
+        atISO: l.createdAtISO,
+      });
+    }
+
+    // Admins: work waiting for them
+    if (adminAccess.isAdmin) {
+      const pending = adminApplicants.filter((a) => a.status === 'pending') as any[];
+      if (pending.length > 0) {
+        const atISO = pending.map((a) => a.submittedAtISO || '').sort().pop() || '';
+        items.push({
+          id: `admin-pending-${atISO}`,
+          type: 'safety',
+          title: `${pending.length} application${pending.length === 1 ? '' : 's'} waiting for review`,
+          body: 'Open the Admin Control Dashboard to approve, verify or reject.',
+          time: formatChatTime(atISO),
+          read: isRead(atISO),
+          target: 'dashboard',
+          atISO,
+        });
+      }
+      if ((platformStats?.openReports || 0) > 0) {
+        items.push({
+          id: `admin-reports-${platformStats!.openReports}`,
+          type: 'safety',
+          title: `${platformStats!.openReports} open user report${platformStats!.openReports === 1 ? '' : 's'}`,
+          body: 'Listings flagged by users are waiting in the Admin Control Dashboard.',
+          time: '',
+          read: false,
+          target: 'dashboard',
+          atISO: new Date().toISOString(),
+        });
+      }
+    }
+
+    items.sort((a, b) => b.atISO.localeCompare(a.atISO));
+    setNotifications(items.map(({ atISO: _atISO, ...n }) => n));
+  }, [firebaseUid, chatDocs, adminApplicants, listings, followedSellerIds, notificationsReadAt, adminAccess.isAdmin, platformStats]);
 
   const [adminApplicantFilter, setAdminApplicantFilter] = useState<'pending' | 'approved' | 'rejected'>('pending');
   const [rejectModalApplicant, setRejectModalApplicant] = useState<{ id: string; name: string; role: string } | null>(null);
@@ -12061,12 +12205,14 @@ export default function RootLayout() {
                           );
                           navigateTo({ type: 'chat', id: targetConv.id });
                         } else {
-                          navigateTo({ type: 'chat', id: conversations[0]?.id || 'conv-1' });
+                          navigateTo({ type: 'tabs', tab: 'messages' });
                         }
                       } else if (item.listingId) {
                         navigateTo({ type: 'listing', id: item.listingId });
-                      } else if (item.type === 'ad_approved') {
-                        navigateTo({ type: 'listing', id: 'listing-iphone-black' });
+                      } else if (item.target === 'application') {
+                        navigateTo({ type: 'pending-application', applicantId: firebaseUid || undefined });
+                      } else if (item.target === 'dashboard') {
+                        navigateTo({ type: 'tabs', tab: 'dashboard' });
                       } else {
                         goBack();
                       }
