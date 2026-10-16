@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useRef, useEffect, useLayoutEffect } from 'react';
 import {
   Zap,
+  UserPlus,
   Search,
   MapPin,
   Bell,
@@ -132,6 +133,30 @@ import {
   NotificationItem,
   POPULAR_GHANA_TOWNS,
 } from './lib/listingData';
+import { auth as firebaseAuth } from './lib/firebase';
+import {
+  addAdmin,
+  createListing,
+  decideApplication,
+  deleteListing as deleteRemoteListing,
+  fileToPhotoDataUrl,
+  getPlatformStats,
+  hasRequiredDocuments,
+  saveUserProfile,
+  signOutUser,
+  submitApplication,
+  submitReport,
+  watchAllApplications,
+  watchAdminAccess,
+  watchMyApplication,
+  type AdminAccess,
+  type ApplicationDecision,
+  type PlatformStats,
+  type StoredApplication,
+  updateListing as updateRemoteListing,
+  watchAuth,
+  watchListings,
+} from './lib/backend';
 import { HarakaLogo } from './components/HarakaLogo';
 import SplashScreen from './components/SplashScreen';
 import WelcomeScreen from './components/WelcomeScreen';
@@ -139,7 +164,6 @@ import OnboardingScreen from './components/OnboardingScreen';
 import SignUpScreen from './components/SignUpScreen';
 import SignInScreen from './components/SignInScreen';
 import ForgotPasswordScreen from './components/ForgotPasswordScreen';
-import DemoAccountsScreen from './components/DemoAccountsScreen';
 import { getArtisanProfileData } from './lib/artisanProfileData';
 
 type TabKey = 'home' | 'categories' | 'post' | 'messages' | 'saved' | 'profile' | 'dashboard';
@@ -414,6 +438,29 @@ const SUBCATEGORY_KEYWORD_MAP: Record<
 };
 
 // Global Web Audio Context for universal audio playback across all browsers & iframes
+/** Grey picture shown when a photo is missing or fails to load. */
+const PLACEHOLDER_IMAGE =
+  "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 4 3'><rect width='4' height='3' fill='%23e2e8f0'/></svg>";
+
+/** Public web address of Haraka; shared links point here so anyone can open them. */
+const PUBLIC_WEB_URL = 'https://ga4-viewer-kiyumart-platform.web.app';
+
+/** Formats seconds as m:ss for audio players. */
+function formatAudioTime(totalSeconds: number): string {
+  const secs = Math.max(0, Math.round(totalSeconds || 0));
+  return `${Math.floor(secs / 60)}:${(secs % 60).toString().padStart(2, '0')}`;
+}
+
+/** Reads a recorded audio Blob as a data: URL so it can be saved with a listing. */
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
 let sharedAudioCtx: AudioContext | null = null;
 function getSharedAudioContext(): AudioContext {
   if (!sharedAudioCtx || sharedAudioCtx.state === 'closed') {
@@ -460,9 +507,9 @@ function createSyntheticVocalBuffer(ctx: AudioContext, durationSeconds: number):
   return buffer;
 }
 
-export default function App() {
-  // View mode
-  const [viewMode, setViewMode] = useState<'preview' | 'frameless' | 'split' | 'code'>('split');
+export default function App({ native = false }: { native?: boolean } = {}) {
+  // View mode (inside the mobile app only the full-screen 'frameless' view is used)
+  const [viewMode, setViewMode] = useState<'preview' | 'frameless' | 'split' | 'code'>(native ? 'frameless' : 'split');
   const [phoneFrame, setPhoneFrame] = useState(true);
   const [bgStyle, setBgStyle] = useState<'dark' | 'clean'>('clean');
   const [showExportModal, setShowExportModal] = useState(false);
@@ -481,14 +528,12 @@ export default function App() {
     setAcceptedOffers((prev) => ({
       ...prev,
       [messageId]: { amount: offerAmount, time: 'Just now' },
-      'conv-mahogany-offer': { amount: offerAmount, time: 'Just now' },
     }));
 
     // 2. Update myOwnListings status so Profile page immediately reflects OFFER ACCEPTED
     setMyOwnListings((prev) =>
       prev.map((item) => {
         if (
-          item.id === 'listing-solid-mahogany-coffee-table' ||
           (listingTitle && item.title.toLowerCase().includes(listingTitle.toLowerCase()))
         ) {
           return {
@@ -502,7 +547,7 @@ export default function App() {
     );
 
     // 3. Post confirmation message into conversation
-    const activeRouteId = currentRoute.type === 'chat' && currentRoute.id ? currentRoute.id : 'conv-mahogany-offer';
+    const activeRouteId = currentRoute.type === 'chat' && currentRoute.id ? currentRoute.id : '';
     const acceptanceMessage: ChatMessage = {
       id: `msg-accepted-${Date.now()}`,
       senderId: 'me',
@@ -525,7 +570,7 @@ export default function App() {
       })
     );
 
-    showToast(`🎉 Offer of GH₵ ${offerAmount.toLocaleString()} accepted! Buyer Emmanuel has been notified.`);
+    showToast(`🎉 Offer of GH₵ ${offerAmount.toLocaleString()} accepted!`);
   };
 
   // Call Modal State matching User's 3rd Image
@@ -567,20 +612,22 @@ export default function App() {
   }, [callDropdownUser]);
 
   // When user clicks ANY call button: show little dropdown with two options (in-app call and phone call)
-  const startCall = (name?: string, avatar?: string, phone?: string) => {
-    setCallDropdownUser({
-      name: name || 'Peter K.',
-      avatar: avatar || '',
-      phone: phone || '+233 24 987 6543',
-    });
+  // Calls go through the phone's own dialer (there is no in-app voice calling)
+  const startCall = (_name?: string, _avatar?: string, phone?: string) => {
+    const cleanNumber = (phone || '').replace(/[^+\d]/g, '');
+    if (!cleanNumber) {
+      showToast('This person has not shared a phone number. Send them a message instead.');
+      return;
+    }
+    window.location.href = `tel:${cleanNumber}`;
   };
 
   const startInAppCall = (name?: string, avatar?: string, phone?: string) => {
     setCallDropdownUser(null);
     setActiveCallUser({
-      name: name || 'Peter K.',
+      name: name || 'Seller',
       avatar: avatar || '',
-      phone: phone || '+233 24 987 6543',
+      phone: phone || '',
     });
   };
 
@@ -597,15 +644,29 @@ export default function App() {
     setIsSubmittingReport(false);
   };
 
-  const handleSubmitReport = () => {
+  const handleSubmitReport = async () => {
     if (!reportListingTarget) return;
-    setIsSubmittingReport(true);
-    setTimeout(() => {
-      setIsSubmittingReport(false);
-      const targetId = reportListingTarget.id;
+    if (!firebaseUidRef.current) {
       setReportListingTarget(null);
-      showToast(`Listing flagged and report submitted to Haraka Admin. Thank you!`);
-    }, 600);
+      showToast('Please log in to report a listing.');
+      navigateTo({ type: 'login' });
+      return;
+    }
+    setIsSubmittingReport(true);
+    try {
+      await submitReport(
+        { id: reportListingTarget.id, title: reportListingTarget.title, sellerId: (reportListingTarget as any).sellerId },
+        reportReason,
+        reportDetails
+      );
+      setReportListingTarget(null);
+      showToast('Report sent to Haraka Trust & Safety. Thank you!');
+    } catch (err) {
+      console.warn('Could not send report', err);
+      showToast('⚠️ Your report could not be sent. Check your connection and try again.');
+    } finally {
+      setIsSubmittingReport(false);
+    }
   };
 
   // Privacy & Verification Information Masking Helpers (shows 'Not provided' when empty, masks sensitive info when present)
@@ -736,7 +797,13 @@ export default function App() {
           setUserProfile((prev) => ({ ...prev, avatar: result }));
           setEditProfileForm((prev) => ({ ...prev, avatar: result }));
           setEditArtisanForm((prev) => ({ ...prev, avatar: result }));
-          showToast('Profile photo uploaded from device!');
+          if (firebaseUidRef.current) {
+            saveUserProfile(firebaseUidRef.current, { avatar: result })
+              .then(() => showToast('Profile photo updated!'))
+              .catch(() => showToast('⚠️ Profile photo could not be saved. Check your connection.'));
+          } else {
+            showToast('Profile photo added.');
+          }
         }
       };
       reader.readAsDataURL(file);
@@ -762,7 +829,7 @@ export default function App() {
   }, [currentRoute]);
 
   const shareListing = (item: { id: string; title: string; price: number; currency?: string; image?: string; images?: string[] }) => {
-    const url = `${window.location.origin}${window.location.pathname}?listing=${item.id}`;
+    const url = `${PUBLIC_WEB_URL}/?listing=${encodeURIComponent(item.id)}`;
     const shareText = `Check out "${item.title}" on Haraka Marketplace (${item.currency || 'GH₵'} ${item.price.toLocaleString()}): ${url}`;
 
     // Direct native share sheet - opens native OS share sheet directly without any popup modal
@@ -954,7 +1021,7 @@ export default function App() {
     const sId = seller?.id || '';
     const sName = seller?.name || 'Seller';
     const sAvatar = seller?.avatar || '';
-    const sPhone = seller?.phone || '+233 24 555 1234';
+    const sPhone = seller?.phone || '';
     const sVerified = seller?.isVerified ?? true;
     const cleanPhone = sPhone.replace(/\D/g, '');
 
@@ -1234,25 +1301,30 @@ export default function App() {
   const [isRecordingAudio, setIsRecordingAudio] = useState<boolean>(false);
   const [audioRecordDuration, setAudioRecordDuration] = useState<number>(18);
   const [hasRecordedAudio, setHasRecordedAudio] = useState<boolean>(true);
-  const [bookingPhotos, setBookingPhotos] = useState<Array<{ url: string; label: string }>>([
-    {
-      url: 'https://images.unsplash.com/photo-1558997519-83ea9252edf8?auto=format&fit=crop&w=400&q=80',
-      label: 'Space',
-    },
-    {
-      url: 'https://images.unsplash.com/photo-1595428774223-ef52624120d2?auto=format&fit=crop&w=400&q=80',
-      label: 'Reference',
-    },
-  ]);
+  const [bookingPhotos, setBookingPhotos] = useState<Array<{ url: string; label: string }>>([]);
   const [bookingDate, setBookingDate] = useState<string>('TODAY 26 Feb');
   const [bookingWindow, setBookingWindow] = useState<string>('Morning');
-  const [bookingLocation, setBookingLocation] = useState<string>(
-    'House No. 14, Spintex Road near Shell, Accra'
-  );
-  const [bookingClientName, setBookingClientName] = useState<string>('Kojo Mensah');
-  const [bookingClientPhone, setBookingClientPhone] = useState<string>('+233 24 987 6543');
+  const [bookingLocation, setBookingLocation] = useState<string>('');
+  const [bookingClientName, setBookingClientName] = useState<string>('');
+  const [bookingClientPhone, setBookingClientPhone] = useState<string>('');
   const [bookingSuccessModal, setBookingSuccessModal] = useState<boolean>(false);
-  const [bookingReferenceCode, setBookingReferenceCode] = useState<string>('HRK-BK-8924');
+  const [bookingReferenceCode, setBookingReferenceCode] = useState<string>('');
+  const bookingPhotoInputRef = useRef<HTMLInputElement>(null);
+  const handleBookingPhotosSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const input = e.target;
+    const files = Array.from(input.files || []);
+    input.value = '';
+    try {
+      const photos = await Promise.all(files.slice(0, 6).map((file) => fileToPhotoDataUrl(file)));
+      setBookingPhotos((prev) => [
+        ...prev,
+        ...photos.map((url, i) => ({ url, label: `Photo ${prev.length + i + 1}` })),
+      ]);
+    } catch (err) {
+      console.warn('Could not read photo', err);
+      showToast('⚠️ Could not read that photo. Please choose another one.');
+    }
+  };
   const [showDatePickerModal, setShowDatePickerModal] = useState<boolean>(false);
   const [calendarYear, setCalendarYear] = useState<number>(2026);
   const [calendarMonth, setCalendarMonth] = useState<number>(1); // 1 = Feb (0-indexed)
@@ -1321,55 +1393,16 @@ export default function App() {
     }
 
     showToast(
+      // Chat is not connected to the other person yet; be honest until it is
       resolvedIsOffer
-        ? `Offer of GH₵${formattedOfferText} sent!`
-        : 'Message sent'
+        ? `Offer of GH₵${formattedOfferText} saved on this phone. Please call or WhatsApp the seller to confirm.`
+        : 'Saved on this phone. In-app chat is coming soon, so please call or WhatsApp the seller for now.'
     );
 
     setTimeout(() => {
       chatMessagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, 60);
 
-    // Realistic seller reply after brief delay
-    setTimeout(() => {
-      const replyTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-
-      setConversations((prev) => {
-        const currentConv = prev.find((c) => c.id === convId);
-        const itemTitle = currentConv?.listingTitle || 'this item';
-        const sellerName = currentConv?.otherUser.name || 'Seller';
-        const sellerReply = resolvedIsOffer
-          ? `Thank you for your offer of GH₵${formattedOfferText} on "${itemTitle}". I can accept this if you can come for pickup today!`
-          : text.toLowerCase().includes('available')
-          ? `Hello! Yes, "${itemTitle}" is 100% available and ready for inspection. Let me know when you would like to view it.`
-          : `Thanks for reaching out to ${sellerName}! Let me know if you would like to arrange physical inspection or safe delivery.`;
-
-        return prev.map((c) => {
-          if (c.id === convId) {
-            return {
-              ...c,
-              lastMessage: sellerReply,
-              lastMessageTime: replyTime,
-              messages: [
-                ...c.messages,
-                {
-                  id: `msg-${Date.now() + 1}`,
-                  senderId: c.otherUser.id,
-                  text: sellerReply,
-                  timestamp: replyTime,
-                  isSeller: true,
-                },
-              ],
-            };
-          }
-          return c;
-        });
-      });
-
-      setTimeout(() => {
-        chatMessagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-      }, 60);
-    }, 1200);
   };
   const bookingScrollRef = useRef<HTMLDivElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -1743,6 +1776,30 @@ export default function App() {
     }
   };
 
+  // Real photos from the phone's camera or gallery, shrunk right away to save memory and storage
+  const adPhotoInputRef = useRef<HTMLInputElement>(null);
+  const handleAdPhotosSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const input = e.target;
+    const files = Array.from(input.files || []);
+    input.value = '';
+    if (files.length === 0) return;
+    const freeSlots = 8 - (adDraft.images?.length || 0);
+    const chosen = files.slice(0, freeSlots);
+    try {
+      const photos = await Promise.all(chosen.map((file) => fileToPhotoDataUrl(file)));
+      setAdDraft((prev) => ({ ...prev, images: [...(prev.images || []), ...photos].slice(0, 8) }));
+      setPostAdErrors((prev) => ({ ...prev, images: '' }));
+      showToast(
+        files.length > freeSlots
+          ? `Added ${chosen.length} photo${chosen.length === 1 ? '' : 's'} (max 8 per ad)`
+          : `${chosen.length} photo${chosen.length === 1 ? '' : 's'} added`
+      );
+    } catch (err) {
+      console.warn('Could not read photo', err);
+      showToast('⚠️ Could not read that photo. Please choose another one.');
+    }
+  };
+
   // Ad draft
   const [adDraft, setAdDraft] = useState<Partial<Listing>>({
     title: '',
@@ -1802,190 +1859,7 @@ export default function App() {
     isPendingVerification?: boolean;
   }
 
-  const HARAKA_USERS: HarakaUserAccount[] = [
-    {
-      id: 'user-seller',
-      role: 'seller',
-      name: 'Kofi Mensah',
-      storeName: 'Kofi Tech & Gadgets Hub',
-      isApproved: true,
-      isVerified: true,
-      email: 'seller@haraka.app',
-      phone: '+233 24 555 1234',
-      whatsapp: '+233 24 555 1234',
-      location: 'East Legon, Greater Accra',
-      city: 'Greater Accra',
-      neighborhood: 'East Legon',
-      ghanaCardId: 'GHA-721094821-4',
-      memberSince: 'March 2022',
-      avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=400&q=80',
-      bio: 'Trader & tech specialist in Greater Accra. Prompt nationwide dispatch and trusted in-person inspections.',
-      rating: 4.9,
-      reviewsCount: 62,
-      dealsCompleted: 48,
-      activeAdsCount: 12,
-      responseRate: '99%',
-      responseTime: '< 5 mins',
-      tradeSkill: '',
-      inspectionFee: 0,
-      completedJobs: 0,
-      repeatHireRate: '0%',
-      dealsBought: 4,
-      inquiriesCount: 2,
-      buyerRating: 4.9,
-      adminTotalUsers: '14,820',
-      adminLiveAds: '8,940',
-      adminSafetyScore: '99.4%',
-      badgeLabel: 'Verified Merchant',
-      tagline: 'Kofi Tech Hub • 12 Active Ads • East Legon',
-    },
-    {
-      id: 'user-buyer',
-      role: 'buyer',
-      name: 'Ama Serwaa',
-      storeName: '',
-      isApproved: true,
-      isVerified: false,
-      email: 'buyer@haraka.app',
-      phone: '+233 24 123 4567',
-      whatsapp: '+233 24 123 4567',
-      location: 'Osu, Greater Accra',
-      city: 'Greater Accra',
-      neighborhood: 'Osu',
-      ghanaCardId: '',
-      memberSince: 'January 2023',
-      avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80',
-      bio: '',
-      rating: 5.0,
-      reviewsCount: 18,
-      dealsCompleted: 0,
-      activeAdsCount: 0,
-      responseRate: '100%',
-      responseTime: '< 2 mins',
-      tradeSkill: '',
-      inspectionFee: 0,
-      completedJobs: 0,
-      repeatHireRate: '0%',
-      dealsBought: 14,
-      inquiriesCount: 8,
-      buyerRating: 5.0,
-      adminTotalUsers: '14,820',
-      adminLiveAds: '8,940',
-      adminSafetyScore: '99.4%',
-      badgeLabel: 'User Account',
-      tagline: 'Standard User • Osu, Accra',
-    },
-    {
-      id: 'user-artisan',
-      role: 'artisan',
-      name: 'Kwame Addo',
-      storeName: 'Addo Precision Mechanics & Diagnostics',
-      isApproved: true,
-      isVerified: true,
-      email: 'artisan@haraka.app',
-      phone: '+233 24 332 8891',
-      whatsapp: '+233 24 332 8891',
-      location: 'Spintex Road, Greater Accra',
-      city: 'Greater Accra',
-      neighborhood: 'Spintex Road',
-      ghanaCardId: 'GHA-491028475-7',
-      memberSince: 'September 2021',
-      avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=400&q=80',
-      bio: '10+ years certified master electrical technician and climate systems diagnostic specialist across Greater Accra.',
-      rating: 4.9,
-      reviewsCount: 84,
-      dealsCompleted: 0,
-      activeAdsCount: 0,
-      responseRate: '98%',
-      responseTime: '< 10 mins',
-      tradeSkill: 'Certified Master Electrician & AC Diagnostics',
-      inspectionFee: 80,
-      completedJobs: 142,
-      repeatHireRate: '94%',
-      dealsBought: 2,
-      inquiriesCount: 1,
-      buyerRating: 4.8,
-      adminTotalUsers: '14,820',
-      adminLiveAds: '8,940',
-      adminSafetyScore: '99.4%',
-      badgeLabel: 'Master Trade Artisan',
-      tagline: 'Master Electrician • 142 Jobs Completed • Spintex Road',
-    },
-    {
-      id: 'user-admin',
-      role: 'admin',
-      name: 'Nana Osei',
-      storeName: 'Haraka Safety & Compliance Operations',
-      isApproved: true,
-      isVerified: true,
-      email: 'admin@haraka.app',
-      phone: '+233 20 998 7766',
-      whatsapp: '+233 20 998 7766',
-      location: 'Airport Residential, Greater Accra',
-      city: 'Greater Accra',
-      neighborhood: 'Airport Residential Area',
-      ghanaCardId: 'GHA-110294829-9',
-      memberSince: 'January 2021',
-      avatar: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&w=400&q=80',
-      bio: 'Haraka Ghana Trust & Safety Compliance Officer. Verifying Ghana Cards, artisans, and merchant accounts across all 16 regions.',
-      rating: 5.0,
-      reviewsCount: 120,
-      dealsCompleted: 0,
-      activeAdsCount: 0,
-      responseRate: '100%',
-      responseTime: 'Instant',
-      tradeSkill: '',
-      inspectionFee: 0,
-      completedJobs: 0,
-      repeatHireRate: '0%',
-      dealsBought: 5,
-      inquiriesCount: 0,
-      buyerRating: 5.0,
-      adminTotalUsers: '14,820',
-      adminLiveAds: '8,940',
-      adminSafetyScore: '99.4%',
-      badgeLabel: 'Trust & Safety Admin',
-      tagline: 'Platform Administrator • Applicant Verifications Queue',
-    },
-    {
-      id: 'user-pending-applicant',
-      role: 'seller',
-      name: '44frrffeerr',
-      storeName: '44frrffeerr Mobile & Gadgets',
-      isApproved: false,
-      isVerified: false,
-      email: 'applicant.pending@haraka.app',
-      phone: '+233 24 444 4244',
-      whatsapp: '+233 24 444 4244',
-      location: 'Circle Tip-Toe Lane, Accra',
-      city: 'Greater Accra',
-      neighborhood: 'Circle',
-      ghanaCardId: 'GHA-444424401-2',
-      memberSince: 'October 2026',
-      avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=400&q=80',
-      bio: 'Mobile phones and electronics merchant in Accra. Application pending review by Haraka Trust & Safety.',
-      rating: 0,
-      reviewsCount: 0,
-      dealsCompleted: 0,
-      activeAdsCount: 0,
-      responseRate: '100%',
-      responseTime: 'Pending Review',
-      tradeSkill: '',
-      inspectionFee: 0,
-      completedJobs: 0,
-      repeatHireRate: '0%',
-      dealsBought: 0,
-      inquiriesCount: 0,
-      buyerRating: 0,
-      adminTotalUsers: '14,820',
-      adminLiveAds: '8,940',
-      adminSafetyScore: '99.4%',
-      badgeLabel: 'Pending Verification',
-      tagline: 'Individual Seller • Mobile Phones • Awaiting Admin Review',
-      applicantId: 'app-pending-seller',
-      isPendingVerification: true,
-    },
-  ];
+  const HARAKA_USERS: HarakaUserAccount[] = [];
 
   // User Authentication & Session State
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -2000,20 +1874,7 @@ export default function App() {
   const [currentUserRole, setCurrentUserRole] = useState<'seller' | 'buyer' | 'artisan' | 'admin'>('buyer');
 
   // Registered account emails to validate password reset and login requests
-  const [registeredAccountEmails, setRegisteredAccountEmails] = useState<string[]>([
-    'user@gmail.com',
-    'kwame.mensah@gmail.com',
-    'kwame@example.com',
-    'seller@haraka.gh',
-    'artisan@haraka.gh',
-    'admin@haraka.gh',
-    'buyer@haraka.gh',
-    'mensah.electronics@gmail.com',
-    'seller@haraka.app',
-    'buyer@haraka.app',
-    'artisan@haraka.app',
-    'admin@haraka.app',
-  ]);
+  const [registeredAccountEmails, setRegisteredAccountEmails] = useState<string[]>([]);
 
   // User Profile State (all new sign ups start with placeholder avatar and clean new account state)
   const [userProfile, setUserProfile] = useState({
@@ -2028,7 +1889,7 @@ export default function App() {
     city: '',
     neighborhood: '',
     ghanaCardId: '',
-    memberSince: 'Joined today',
+    memberSince: '',
     avatar: '', // Clean placeholder: never assign dummy or random images for new sign ups
     bio: '',
     rating: 0,
@@ -2101,52 +1962,258 @@ export default function App() {
   };
 
   const handleSignOut = () => {
+    signOutUser().catch((err) => console.warn('Sign out failed', err));
+    setFirebaseUid(null);
+    profileRoleRef.current = 'buyer';
+    setCurrentUserRole('buyer');
+    setSubmittedSellerApplicantId(null);
     setIsLoggedIn(false);
     navigateTo({ type: 'welcome' });
     showToast('Signed out of Haraka.');
   };
 
-  const handleManualSignIn = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    const query = loginFormEmail.trim().toLowerCase();
-    const matched = HARAKA_USERS.find(
-      (u) =>
-        u.email.toLowerCase() === query ||
-        u.phone.replace(/[^0-9]/g, '').includes(query.replace(/[^0-9]/g, '')) ||
-        u.name.toLowerCase().includes(query)
-    );
-    if (matched) {
-      handleLoginAsUser(matched);
+  // Real Firebase session: restores a saved login on launch and loads the user's profile
+  const [firebaseUid, setFirebaseUid] = useState<string | null>(null);
+  const [isFirebaseAdmin, setIsFirebaseAdmin] = useState(false);
+  const [adminAccess, setAdminAccess] = useState<AdminAccess>({ isAdmin: false, canAddAdmins: false, isSystemAdmin: false });
+  const firebaseUidRef = useRef<string | null>(null);
+  const adminAccessRef = useRef(adminAccess);
+  // The role the admin granted on the account (buyer / seller / artisan); admins see the admin dashboard on top
+  const profileRoleRef = useRef<'buyer' | 'seller' | 'artisan'>('buyer');
+  useEffect(() => {
+    return watchAuth((user, profile) => {
+      firebaseUidRef.current = user?.uid ?? null;
+      setFirebaseUid(user?.uid ?? null);
+      if (!user) return;
+      setCurrentUserId(user.uid);
+      if (profile?.role) {
+        profileRoleRef.current = profile.role === 'admin' ? 'buyer' : profile.role;
+        setCurrentUserRole(adminAccessRef.current.isAdmin ? 'admin' : profileRoleRef.current);
+      }
+      setUserProfile((prev) => ({
+        ...prev,
+        name: profile?.name || user.displayName || prev.name,
+        storeName: profile?.storeName ?? prev.storeName,
+        isApproved: profile?.role ? profile.role !== 'buyer' : prev.isApproved,
+        isVerified: profile ? Boolean(profile.verified) : prev.isVerified,
+        email: user.email || prev.email,
+        phone: profile?.phone || prev.phone,
+        whatsapp: profile?.whatsapp || prev.whatsapp,
+        bio: profile?.bio ?? prev.bio,
+        location: profile?.location || prev.location,
+        avatar: profile?.avatar || prev.avatar,
+        memberSince: profile?.createdAt
+          ? new Date(profile.createdAt).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })
+          : prev.memberSince,
+      }));
+      setIsLoggedIn(true);
+    });
+  }, []);
+
+  // Admin rights come from firestore (system admin or /admins/{email}) and update live
+  useEffect(() => {
+    const apply = (access: AdminAccess) => {
+      adminAccessRef.current = access;
+      setAdminAccess(access);
+      setIsFirebaseAdmin(access.isAdmin);
+      if (firebaseUidRef.current) setCurrentUserRole(access.isAdmin ? 'admin' : profileRoleRef.current);
+    };
+    if (!firebaseUid) {
+      apply({ isAdmin: false, canAddAdmins: false, isSystemAdmin: false });
       return;
     }
+    return watchAdminAccess(firebaseAuth.currentUser, apply);
+  }, [firebaseUid]);
 
-    const defaultAvatar =
-      loginFormRole === 'seller'
-        ? 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=400&q=80'
-        : loginFormRole === 'artisan'
-        ? 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=400&q=80'
-        : loginFormRole === 'admin'
-        ? 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&w=400&q=80'
-        : 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80';
-
-    const customName = loginFormEmail
-      ? loginFormEmail.split('@')[0].replace(/[._]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
-      : `${loginFormRole.toUpperCase()} User`;
-
-    setCurrentUserRole(loginFormRole);
-    setUserProfile((prev) => ({
-      ...prev,
-      name: customName,
-      email: loginFormEmail || `${loginFormRole}@haraka.app`,
-      avatar: defaultAvatar,
-      isVerified: true,
-      isApproved: true,
-      bio: loginFormRole === 'buyer' ? '' : prev.bio,
-    }));
-    setIsLoggedIn(true);
-    navigateTo({ type: 'tabs', tab: 'home' });
-    showToast(`Signed in successfully as ${customName} (${loginFormRole.toUpperCase()})`, 'check');
+  // Real platform numbers for the admin dashboard
+  const [platformStats, setPlatformStats] = useState<PlatformStats | null>(null);
+  const refreshPlatformStats = () => {
+    getPlatformStats()
+      .then(setPlatformStats)
+      .catch((err) => console.warn('Could not load platform stats', err));
   };
+  useEffect(() => {
+    if (adminAccess.isAdmin && currentRoute.type === 'tabs' && activeTab === 'dashboard') refreshPlatformStats();
+  }, [adminAccess.isAdmin, currentRoute, activeTab]);
+
+  // "Add admin" card
+  const [showAddAdminModal, setShowAddAdminModal] = useState(false);
+  const [addAdminForm, setAddAdminForm] = useState({ name: '', email: '', password: '', canAddAdmins: false });
+  const [addAdminError, setAddAdminError] = useState('');
+  const [isAddingAdmin, setIsAddingAdmin] = useState(false);
+  const openAddAdminModal = () => {
+    setAddAdminForm({ name: '', email: '', password: '', canAddAdmins: false });
+    setAddAdminError('');
+    setShowAddAdminModal(true);
+  };
+  const handleAddAdmin = async () => {
+    const name = addAdminForm.name.trim();
+    const email = addAdminForm.email.trim().toLowerCase();
+    if (!name) return setAddAdminError('Please enter the full name.');
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return setAddAdminError('Please enter a valid email address.');
+    if (addAdminForm.password.length < 8) return setAddAdminError('Temporary password must be at least 8 characters.');
+    setAddAdminError('');
+    setIsAddingAdmin(true);
+    try {
+      const { accountCreated } = await addAdmin({ name, email, password: addAdminForm.password, canAddAdmins: addAdminForm.canAddAdmins });
+      setShowAddAdminModal(false);
+      showToast(
+        accountCreated
+          ? `✅ ${name} added. They must open the verification email, then log in with the temporary password.`
+          : `✅ ${name} added. Admin access works once their email address is verified.`
+      );
+      refreshPlatformStats();
+    } catch (err) {
+      console.warn('Could not add admin', err);
+      setAddAdminError(
+        (err as { code?: string }).code === 'permission-denied'
+          ? 'You do not have permission to add admins.'
+          : err instanceof Error ? err.message : 'Could not add this admin. Try again.'
+      );
+    } finally {
+      setIsAddingAdmin(false);
+    }
+  };
+
+  const renderAddAdminModal = () => {
+    if (!showAddAdminModal) return null;
+    const inputClass =
+      'w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs text-slate-900 outline-none focus:border-orange-400 focus:bg-white';
+    return (
+      <div
+        className="fixed inset-0 z-[80] bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4"
+        onClick={() => !isAddingAdmin && setShowAddAdminModal(false)}
+      >
+        <div
+          className="w-full max-w-sm bg-white rounded-3xl p-5 shadow-2xl border border-slate-100 space-y-3.5"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-xl border border-slate-200 flex items-center justify-center text-slate-700">
+                <UserPlus size={17} />
+              </div>
+              <div>
+                <h2 className="text-sm font-black text-slate-900">Add New Admin</h2>
+                <p className="text-[11px] text-slate-500">They get full access to the Admin Control Dashboard.</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowAddAdminModal(false)}
+              disabled={isAddingAdmin}
+              className="p-1 text-slate-400 hover:text-slate-700 cursor-pointer"
+              aria-label="Close"
+            >
+              <X size={18} />
+            </button>
+          </div>
+
+          <div className="space-y-2.5">
+            <label className="block">
+              <span className="text-[11px] font-bold text-slate-700">Full name</span>
+              <input
+                className={inputClass + ' mt-1'}
+                value={addAdminForm.name}
+                onChange={(e) => setAddAdminForm({ ...addAdminForm, name: e.target.value })}
+                placeholder="e.g. Ama Owusu"
+              />
+            </label>
+            <label className="block">
+              <span className="text-[11px] font-bold text-slate-700">Email address</span>
+              <input
+                className={inputClass + ' mt-1'}
+                type="email"
+                autoCapitalize="none"
+                value={addAdminForm.email}
+                onChange={(e) => setAddAdminForm({ ...addAdminForm, email: e.target.value })}
+                placeholder="name@example.com"
+              />
+            </label>
+            <label className="block">
+              <span className="text-[11px] font-bold text-slate-700">Temporary password</span>
+              <input
+                className={inputClass + ' mt-1'}
+                type="text"
+                value={addAdminForm.password}
+                onChange={(e) => setAddAdminForm({ ...addAdminForm, password: e.target.value })}
+                placeholder="At least 8 characters"
+              />
+              <span className="text-[10px] text-slate-400 block mt-1">
+                Not needed if they already have a Haraka account. Ask them to change it after first login.
+              </span>
+            </label>
+            <label className="flex items-start gap-2.5 p-2.5 rounded-xl border border-slate-200 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                className="mt-0.5 accent-[#FF6A00]"
+                checked={addAdminForm.canAddAdmins}
+                onChange={(e) => setAddAdminForm({ ...addAdminForm, canAddAdmins: e.target.checked })}
+              />
+              <span>
+                <span className="text-xs font-bold text-slate-800 block">Allow this admin to add new admins</span>
+                <span className="text-[10.5px] text-slate-500">They will see the add-admin button in the dashboard header.</span>
+              </span>
+            </label>
+          </div>
+
+          {addAdminError && <p className="text-[11px] font-semibold text-red-600">{addAdminError}</p>}
+
+          <div className="flex gap-2 pt-1">
+            <button
+              type="button"
+              onClick={() => setShowAddAdminModal(false)}
+              disabled={isAddingAdmin}
+              className="flex-1 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleAddAdmin}
+              disabled={isAddingAdmin}
+              className="flex-1 py-2.5 rounded-xl bg-[#FF6A00] hover:bg-orange-600 text-white font-bold text-xs cursor-pointer disabled:opacity-60"
+            >
+              {isAddingAdmin ? 'Adding…' : 'Add Admin'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // Live marketplace listings from Firestore, shown above the built-in sample listings
+  const [listingsLoaded, setListingsLoaded] = useState(false);
+  useEffect(() => {
+    return watchListings((remote) => {
+      setListingsLoaded(true);
+      const remoteIds = new Set(remote.map((l) => l.id));
+      setListings((prev) => [
+        ...remote,
+        ...prev.filter((l) => !remoteIds.has(l.id) && !l.id.startsWith('listing-new-')),
+      ]);
+      const uid = firebaseUidRef.current;
+      if (!uid) return;
+      const mine = remote.filter((l) => l.sellerId === uid);
+      setMyOwnListings((prev) => {
+        const known = new Set(prev.map((m) => m.id));
+        const missing = mine
+          .filter((l) => !known.has(l.id))
+          .map((l) => ({
+            id: l.id,
+            title: l.title,
+            price: l.price,
+            currency: l.currency,
+            image: l.images[0] || '',
+            category: l.categoryName || 'General',
+            status: (l.isSold ? 'Sold' : 'Active') as 'Active' | 'Sold',
+            views: l.views || 0,
+            date: new Date(l.createdAtISO).toLocaleDateString(),
+          }));
+        return missing.length ? [...prev, ...missing] : prev;
+      });
+    });
+  }, [firebaseUid]);
 
   const [showEditProfileModal, setShowEditProfileModal] = useState(false);
   const [showProfileCompletionSheet, setShowProfileCompletionSheet] = useState(false);
@@ -2293,6 +2360,7 @@ export default function App() {
   const [shopGuarantees, setShopGuarantees] = useState<string[]>([]);
   const [agreedToSellerCode, setAgreedToSellerCode] = useState<boolean>(false);
   const [submittedSellerApplicantId, setSubmittedSellerApplicantId] = useState<string | null>(null);
+  const [isSubmittingApplication, setIsSubmittingApplication] = useState(false);
   // Uploaded profile image for applicant registration (null by default so image placeholder is displayed instead of a dummy stock picture)
   const [sellerAvatarPhoto, setSellerAvatarPhoto] = useState<string | null>(null);
   // Individual Private Seller Step 3 Profile & Safe Meetup Hubs State
@@ -3174,10 +3242,9 @@ export default function App() {
         }
       } catch {}
 
-      // Default safe Ghana location fallback
-      applyLocation('East Legon, Accra', 'Greater Accra', false);
+      showToast("⚠️ Couldn't detect your location. Please choose your region.");
     } catch {
-      applyLocation('East Legon, Accra', 'Greater Accra', false);
+      showToast("⚠️ Couldn't detect your location. Please choose your region.");
     } finally {
       setIsDetectingLocation(false);
     }
@@ -3186,11 +3253,11 @@ export default function App() {
   // Buyer to Seller registration modal state
   const [showBuyerRegisterModal, setShowBuyerRegisterModal] = useState(false);
   const [buyerRegisterForm, setBuyerRegisterForm] = useState({
-    storeName: 'Kofi Deals & Essentials',
-    category: 'Electronics & Gadgets',
-    ghanaCardId: 'GHA-721094821-4',
-    phone: '+233 24 555 1234',
-    agreed: true,
+    storeName: '',
+    category: '',
+    ghanaCardId: '',
+    phone: '',
+    agreed: false,
   });
 
   // Artisan cannot post product ads modal state
@@ -3221,127 +3288,7 @@ export default function App() {
     propertyType?: string;
   }
 
-  const [artisanBookings, setArtisanBookings] = useState<ArtisanBookingItem[]>([
-    {
-      id: 'ab-1',
-      clientName: 'Nana Yaw Boateng',
-      clientPhone: '+233 24 112 3344',
-      clientEmail: 'nana.boateng@gmail.com',
-      clientRole: 'buyer',
-      clientAvatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=200&q=80',
-      serviceTitle: 'Inverter Split AC Diagnostic & Gas Refill',
-      scheduledDate: 'Tomorrow',
-      scheduledTime: '10:00 AM - 12:00 PM',
-      location: 'East Legon, near ANC Mall',
-      inspectionFee: 80,
-      currency: 'GH₵',
-      status: 'Pending',
-      notes: 'Unit blowing warm air, outdoor condenser making clicking sound. Please inspect refrigerant pressure and copper lines.',
-      hasVoiceNote: true,
-      voiceNoteDuration: 38,
-      voiceNoteTranscript: 'Hello Master Kwame, good day. Our master bedroom split AC is blowing warm room air since yesterday. The outdoor unit compressor clicks when trying to start then stops. Please come tomorrow morning with your manifold gauge and R410A gas.',
-      workImages: [
-        'https://images.unsplash.com/photo-1621905251189-08b45d6a269e?auto=format&fit=crop&w=600&q=80',
-        'https://images.unsplash.com/photo-1581092160607-ee22621dd758?auto=format&fit=crop&w=600&q=80',
-        'https://images.unsplash.com/photo-1504307651254-35680f356dfd?auto=format&fit=crop&w=600&q=80',
-      ],
-      urgency: 'High',
-      propertyType: 'Residential Flat (2nd Floor)',
-    },
-    {
-      id: 'ab-2',
-      clientName: 'Evelyn Addo',
-      clientPhone: '+233 20 887 6655',
-      clientEmail: 'evelyn.addo@yahoo.com',
-      clientRole: 'buyer',
-      clientAvatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=200&q=80',
-      serviceTitle: 'Distribution Board Rewiring & Surge Protector Setup',
-      scheduledDate: 'Thursday',
-      scheduledTime: '2:00 PM - 4:00 PM',
-      location: 'Airport Residential Area, Accra',
-      inspectionFee: 100,
-      currency: 'GH₵',
-      status: 'Confirmed',
-      notes: 'Frequent breaker tripping on heavy appliances when air conditioner and electric cooker run simultaneously.',
-      hasVoiceNote: true,
-      voiceNoteDuration: 42,
-      voiceNoteTranscript: 'Hi Master, whenever we turn on the oven while the AC is running, the main 63A circuit breaker trips immediately with a burning smell around the DB board. Need you to inspect and install a surge protector.',
-      workImages: [
-        'https://images.unsplash.com/photo-1558494949-ef010cbdcc31?auto=format&fit=crop&w=600&q=80',
-        'https://images.unsplash.com/photo-1544725176-7c40e5a71c5e?auto=format&fit=crop&w=600&q=80',
-      ],
-      urgency: 'Immediate',
-      propertyType: 'Detached 4-Bedroom House',
-    },
-    {
-      id: 'ab-3',
-      clientName: 'Kwame Asare',
-      clientPhone: '+233 24 990 1122',
-      clientEmail: 'kwame.asare@gmail.com',
-      clientRole: 'buyer',
-      clientAvatar: 'https://images.unsplash.com/photo-1522075469751-3a6694fb2f61?auto=format&fit=crop&w=200&q=80',
-      serviceTitle: 'Solar Inverter Backup Battery Inspection',
-      scheduledDate: 'Saturday',
-      scheduledTime: '9:00 AM - 11:30 AM',
-      location: 'Spintex Road, Baatsona',
-      inspectionFee: 120,
-      currency: 'GH₵',
-      status: 'Pending',
-      notes: 'Battery backup duration suddenly dropped from 6 hours to 45 mins after grid lights went out.',
-      hasVoiceNote: true,
-      voiceNoteDuration: 29,
-      voiceNoteTranscript: 'Good morning Master Kwame, our 5KVA hybrid solar inverter reports error code F08 when light goes out. The deep cycle batteries might need testing and terminal replacement.',
-      workImages: [
-        'https://images.unsplash.com/photo-1509391365360-2e959784a276?auto=format&fit=crop&w=600&q=80',
-        'https://images.unsplash.com/photo-1513694203232-719a280e022f?auto=format&fit=crop&w=600&q=80',
-      ],
-      urgency: 'Normal',
-      propertyType: 'Townhouse Compound',
-    },
-    {
-      id: 'ab-4',
-      clientName: 'Abena Mensah',
-      clientPhone: '+233 27 554 9988',
-      clientEmail: 'abena.mensah@gmail.com',
-      clientRole: 'buyer',
-      clientAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=200&q=80',
-      serviceTitle: 'Water Heater & Electric Shower Diagnostics',
-      scheduledDate: 'Yesterday',
-      scheduledTime: '11:00 AM',
-      location: 'Cantonments, Accra',
-      inspectionFee: 80,
-      currency: 'GH₵',
-      status: 'Completed',
-      notes: 'Thermostat replaced and certified safe. Earth leakage relay tested.',
-      hasVoiceNote: true,
-      voiceNoteDuration: 24,
-      voiceNoteTranscript: 'Thank you Master Kwame, the water heater in the guest room is working safely now without tripping the breaker. Highly satisfied.',
-      workImages: [
-        'https://images.unsplash.com/photo-1584622650111-993a426fbf0a?auto=format&fit=crop&w=600&q=80',
-      ],
-      urgency: 'Normal',
-      propertyType: 'Duplex Residence',
-    },
-    {
-      id: 'ab-5',
-      clientName: 'Kofi Asamoah',
-      clientPhone: '+233 24 555 6789',
-      clientEmail: 'kofi.asamoah@gmail.com',
-      clientRole: 'buyer',
-      clientAvatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=200&q=80',
-      serviceTitle: 'Emergency Generator Line Phase Rewiring',
-      scheduledDate: '24 Feb',
-      scheduledTime: '4:00 PM',
-      location: 'Tema Community 2, Accra',
-      inspectionFee: 90,
-      currency: 'GH₵',
-      status: 'Declined',
-      notes: 'Schedule conflict with another on-site diagnostic inspection in East Legon.',
-      hasVoiceNote: false,
-      urgency: 'High',
-      propertyType: 'Commercial Workshop',
-    },
-  ]);
+  const [artisanBookings, setArtisanBookings] = useState<ArtisanBookingItem[]>([]);
   const [artisanBookingFilter, setArtisanBookingFilter] = useState<'pending' | 'completed' | 'rejected' | 'all'>('pending');
   const [artisanBookingViewMode, setArtisanBookingViewMode] = useState<'list' | 'schedule'>('list');
   const [artisanSelectedDay, setArtisanSelectedDay] = useState<string>('all');
@@ -3353,16 +3300,7 @@ export default function App() {
   const [isArtisanAvailableForHire, setIsArtisanAvailableForHire] = useState(true);
 
   // Real-Time Artisan Dispatch Statuses ('available' | 'busy')
-  const [artisanDispatchStatuses, setArtisanDispatchStatuses] = useState<Record<string, 'available' | 'busy'>>({
-    'artisan-kofi': 'available',
-    'artisan-ama': 'available',
-    'artisan-kwame-tech': 'available',
-    'artisan-esi': 'available',
-    'artisan-adom': 'available',
-    'artisan-yaw-cool': 'busy',
-    'artisan-yaa-paints': 'available',
-    'user-artisan': 'available',
-  });
+  const [artisanDispatchStatuses, setArtisanDispatchStatuses] = useState<Record<string, 'available' | 'busy'>>({});
 
   const getArtisanAvailability = (artisanId: string): boolean => {
     // Check real-time dispatch status registry first
@@ -3408,25 +3346,23 @@ export default function App() {
   const [previewWorkImageUrl, setPreviewWorkImageUrl] = useState<string | null>(null);
 
   const [editArtisanForm, setEditArtisanForm] = useState({
-    name: 'Kwame Addo',
-    avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=400&q=80',
-    phone: '+233 24 332 8891',
-    whatsapp: '+233 24 332 8891',
-    tradeSkill: 'Certified Master Electrician & AC Diagnostics',
-    inspectionFee: 80,
-    city: 'Greater Accra',
-    neighborhood: 'Spintex Road',
-    responseTime: '< 5 mins',
+    name: '',
+    avatar: '',
+    phone: '',
+    whatsapp: '',
+    tradeSkill: '',
+    inspectionFee: 0,
+    city: '',
+    neighborhood: '',
+    responseTime: '',
     isAvailableForHire: true,
-    bio: '10+ years certified master electrical technician and climate systems diagnostic specialist across Greater Accra.',
-    yearsExperience: '10+ Years',
-    certification: 'Energy Commission Certified (EPA/EC-GH)',
+    bio: '',
+    yearsExperience: '',
+    certification: '',
   });
 
   // Artisan Custom Rates overrides (e.g. when artisan sets diagnostic fee to 0, show FREE INSPECTION)
-  const [artisanCustomRates, setArtisanCustomRates] = useState<Record<string, string>>({
-    'artisan-kwame-solar': 'FREE INSPECTION',
-  });
+  const [artisanCustomRates, setArtisanCustomRates] = useState<Record<string, string>>({});
 
   const getArtisanDisplayRate = (art: ArtisanItem): string => {
     if (artisanCustomRates[art.id] !== undefined) {
@@ -3532,196 +3468,49 @@ export default function App() {
     verifiedWorkPortfolio?: Array<{ title: string; tag: string; sub: string; img: string }>;
   }
 
-  const [adminApplicants, setAdminApplicants] = useState<AdminApplicant[]>([
-    {
-      id: 'app-pending-seller',
-      name: '44frrffeerr',
-      legalName: 'Francis Kofi Arthur',
-      email: 'francis.arthur.phones@gmail.com',
-      gender: 'Male',
-      avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&q=80',
-      role: 'seller',
-      sellerAccountType: 'individual',
-      tradeCategory: 'Mobile Phones & Accessories',
-      ghanaCardId: '',
-      idVerificationSkipped: true, // Skipped Ghana Card upload
-      frontPhoto: undefined,
-      backPhoto: undefined,
-      phone: '+233 24 444 4244',
-      whatsapp: '+233 24 444 4244',
-      allowWhatsApp: true,
-      region: 'Greater Accra',
-      cityNeighborhood: 'Circle Tip-Toe Lane',
-      location: 'Circle Tip-Toe Lane, Accra',
-      isHomeBased: true,
-      businessOrCert: 'Trade Guild Verified Merchant',
-      businessCertNumber: undefined,
-      isCertSkipped: true,
-      sellerBio: 'Direct dealer in sealed Apple & Samsung gadgets. In-person testing welcomed before payment.',
-      responseTime: '< 15m',
-      selectedSafeHubs: ['Circle VIP Terminal', 'Paloma Hotel Entrance', 'TotalEnergies Service Station Circle'],
-      allowCourierDispatch: true,
-      neighborhoodPrivacyGuard: true,
-      confirmSafeTradePayout: true,
-      dateSubmitted: 'Today, 10:15 AM',
-      status: 'pending',
-    },
-    {
-      id: 'app-1',
-      name: 'Kwame Tech',
-      legalName: 'Kwame Osei Mensah',
-      email: 'kwame.tech.solar@gmail.com',
-      gender: 'Male',
-      avatar: 'https://images.unsplash.com/photo-1581092918056-0c4c3acd3789?auto=format&fit=crop&w=300&q=80',
-      role: 'artisan',
-      tradeCategory: 'Electrical & Solar Engineering',
-      headline: 'Certified Solar Wireman & Energy Specialist',
-      tradeSkill: 'Certified Solar Wireman & Energy Specialist',
-      experienceYears: '8+ yrs Experience',
-      inspectionFee: 0,
-      responseTime: '< 15m',
-      ghanaCardId: 'GHA-849102849-3',
-      idVerificationSkipped: false, // Provided Ghana Card & photos
-      frontPhoto: 'https://images.unsplash.com/photo-1589829545856-d10d557cf95f?auto=format&fit=crop&w=600&q=80',
-      backPhoto: 'https://images.unsplash.com/photo-1557804506-669a67965ba0?auto=format&fit=crop&w=600&q=80',
-      phone: '+233 24 991 8234',
-      whatsapp: '+233 24 991 8234',
-      allowWhatsApp: true,
-      region: 'Greater Accra',
-      cityNeighborhood: 'East Legon & Madina',
-      location: 'East Legon & Madina, Accra',
-      serviceCoverageAreas: ['East Legon', 'Madina', 'Spintex', 'Accra Central'],
-      policeClearanceStatus: 'cleared',
-      policeClearanceCertNumber: 'CID-HQ-GH-2023-88219',
-      policeClearancePhoto: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?auto=format&fit=crop&w=600&q=80',
-      hasVoiceNote: true,
-      voiceNoteDuration: '0:22',
-      voiceNoteLanguages: 'English & Twi',
-      languagesSpoken: ['English', 'Twi', 'Ga'],
-      servicesAndPricing: [
-        { title: 'Solar Inverter & Panel Setup', desc: 'Hybrid & off-grid 5kVA - 15kVA installation...', price: 'From GH₵ 1,200', icon: 'zap' },
-        { title: 'Full House Conduit Wiring', desc: 'Certified distribution board & 3-phase wiring...', price: 'From GH₵ 800', icon: 'hammer' },
-        { title: 'Fault Tracing & Breaker Fix', desc: 'Rapid surge, earthing & short circuit diagnostics...', price: 'From GH₵ 150', icon: 'sliders' },
-        { title: 'CCTV & Backup Battery Bank', desc: 'Lithium battery backup & surveillance rigging...', price: 'From GH₵ 450', icon: 'monitor' },
-      ],
-      verifiedWorkPortfolio: [
-        { title: '10kVA Solar Roof Array', tag: 'Solar', sub: 'East Legon • 16 Panels', img: 'https://images.unsplash.com/photo-1508873696983-2df5293cb395?auto=format&fit=crop&w=600&q=80' },
-        { title: 'Industrial Distribution Board', tag: 'Wiring', sub: 'Spintex • Certified 3-Phase', img: 'https://images.unsplash.com/photo-1621905251189-08b45d6a269e?auto=format&fit=crop&w=600&q=80' },
-        { title: 'Lithium Backup System', tag: 'Storage', sub: 'Madina • 10kWh LiFePO4', img: 'https://images.unsplash.com/photo-1581092160607-ee22621dd758?auto=format&fit=crop&w=600&q=80' },
-        { title: 'Modern LED Recessed Lighting', tag: 'Lighting', sub: 'Airport Res • Smart Home', img: 'https://images.unsplash.com/photo-1517991104123-1d56a6e81ed9?auto=format&fit=crop&w=600&q=80' },
-        { title: 'Solar Water Heater Rig', tag: 'Solar', sub: 'East Legon • 300L High Pressure', img: 'https://images.unsplash.com/photo-1513694203232-719a280e022f?auto=format&fit=crop&w=600&q=80' },
-      ],
-      businessOrCert: 'Energy Commission Certified Electrical Wireman',
-      businessCertNumber: 'EC-GH-0924',
-      businessCertPhoto: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?auto=format&fit=crop&w=600&q=80',
-      businessCertName: 'Energy_Commission_Wireman_Cert.pdf',
-      isCertSkipped: false,
-      sellerBio: 'Certified Solar Wireman & Energy Specialist with 8+ years hands-on field experience across Greater Accra.',
-      dateSubmitted: 'Today, 8:45 AM',
-      status: 'pending',
-    },
-    {
-      id: 'app-2',
-      name: 'Kente Royale Boutique',
-      legalName: 'Akosua Serwaa Darko',
-      email: 'akosua.darko@kenteroyale.com',
-      gender: 'Female',
-      avatar: 'https://images.unsplash.com/photo-1531746020798-e6953c6e8e04?auto=format&fit=crop&w=200&q=80',
-      role: 'seller',
-      sellerAccountType: 'shop',
-      tradeCategory: 'Authentic Ghanaian Fashion & Textiles',
-      ghanaCardId: '',
-      idVerificationSkipped: true, // Skipped Ghana Card upload
-      frontPhoto: undefined,
-      backPhoto: undefined,
-      phone: '+233 20 445 6789',
-      whatsapp: '+233 20 445 6789',
-      allowWhatsApp: true,
-      region: 'Greater Accra',
-      cityNeighborhood: 'Osu Oxford Street',
-      location: 'Osu Oxford Street, Accra',
-      shopAddress: 'Shop #12, Ground Floor, Oxford Commercial Arcade, Osu',
-      operatingHours: 'Mon - Sat: 9:00 AM - 7:30 PM',
-      businessOrCert: 'Registrar General Department (CS092348)',
-      businessCertNumber: 'RGD-CS092348-2022',
-      businessCertPhoto: 'https://images.unsplash.com/photo-1450133064473-71024230f91b?auto=format&fit=crop&w=600&q=80',
-      businessCertName: 'RGD_Business_Registration_Certificate.pdf',
-      isCertSkipped: false,
-      storePhysicalPhoto: 'https://images.unsplash.com/photo-1441986300917-64674bd600d8?auto=format&fit=crop&w=800&q=80',
-      storeDisplayCounterPhoto: 'https://images.unsplash.com/photo-1555529669-e69e7aa0ba9a?auto=format&fit=crop&w=800&q=80',
-      shopGuarantees: ['100% Handwoven Kente Authenticity', '7-Day Return / Exchange Policy', 'In-Store Physical Inspection'],
-      responseTime: '< 30m',
-      allowCourierDispatch: true,
-      confirmSafeTradePayout: true,
-      dateSubmitted: 'Yesterday, 3:20 PM',
-      status: 'pending',
-    },
-    {
-      id: 'app-3',
-      name: 'Emmanuel Boateng',
-      legalName: 'Emmanuel Kwaku Boateng',
-      email: 'emmanuel.boateng.auto@gmail.com',
-      gender: 'Male',
-      avatar: 'https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?auto=format&fit=crop&w=200&q=80',
-      role: 'artisan',
-      tradeCategory: 'Auto Electrician & Vehicle Diagnostics',
-      tradeSkill: 'OBD-II Automotive Diagnostics & Rewiring',
-      experienceYears: '12+ Years',
-      inspectionFee: 100,
-      responseTime: '< 10 mins',
-      ghanaCardId: 'GHA-629104391-5',
-      idVerificationSkipped: false, // Provided Ghana Card & photos
-      frontPhoto: 'https://images.unsplash.com/photo-1589829545856-d10d557cf95f?auto=format&fit=crop&w=600&q=80',
-      backPhoto: 'https://images.unsplash.com/photo-1557804506-669a67965ba0?auto=format&fit=crop&w=600&q=80',
-      phone: '+233 24 332 1098',
-      whatsapp: '+233 24 332 1098',
-      allowWhatsApp: true,
-      region: 'Greater Accra',
-      cityNeighborhood: 'Darkuman Kokompe',
-      location: 'Kokompe Industrial Area, Darkuman',
-      businessOrCert: 'Ghana Mechanical Trades Association ID: GM-4412',
-      businessCertNumber: 'GMTA-GM-4412',
-      businessCertPhoto: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?auto=format&fit=crop&w=600&q=80',
-      businessCertName: 'GMTA_Trade_Affiliation_ID.pdf',
-      isCertSkipped: false,
-      sellerBio: 'Specialist in European & Japanese auto electrical systems, ECU diagnostics and alternator rewinding.',
-      dateSubmitted: 'Oct 3, 2026',
-      status: 'pending',
-    },
-    {
-      id: 'app-4',
-      name: 'Al-Hassan Telecom & Gadgets',
-      legalName: 'Fatima Al-Hassan',
-      email: 'fatima.alhassan@gmail.com',
-      gender: 'Female',
-      avatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=200&q=80',
-      role: 'seller',
-      sellerAccountType: 'individual',
-      tradeCategory: 'Consumer Electronics & Smartphone Accessories',
-      ghanaCardId: '',
-      idVerificationSkipped: true, // Skipped Ghana Card upload
-      frontPhoto: undefined,
-      backPhoto: undefined,
-      phone: '+233 24 776 5432',
-      whatsapp: '+233 24 776 5432',
-      allowWhatsApp: true,
-      region: 'Greater Accra',
-      cityNeighborhood: 'Circle Tip Toe Lane',
-      location: 'Circle Tip Toe Lane, Accra',
-      isHomeBased: true,
-      businessOrCert: 'Al-Hassan Telecom & Gadgets Shop #14',
-      businessCertNumber: 'Not provided (Optional - Skipped)',
-      isCertSkipped: true,
-      sellerBio: 'Genuine phone chargers, screen protectors, and power banks. Quick testing on delivery.',
-      responseTime: '< 15m',
-      selectedSafeHubs: ['Circle Interchange VIP Bus Terminal', 'Paloma Hotel Entrance', 'TotalEnergies Service Station Circle'],
-      allowCourierDispatch: true,
-      neighborhoodPrivacyGuard: true,
-      confirmSafeTradePayout: true,
-      dateSubmitted: 'Oct 2, 2026',
-      status: 'pending',
-    },
-  ]);
+  const [adminApplicants, setAdminApplicants] = useState<AdminApplicant[]>([]);
+  // Admins see every application live; other users see only their own
+  useEffect(() => {
+    if (!firebaseUid) return;
+    if (isFirebaseAdmin) {
+      return watchAllApplications((apps) => setAdminApplicants(apps as unknown as AdminApplicant[]));
+    }
+    return watchMyApplication(firebaseUid, (app) => {
+      if (!app) return;
+      setAdminApplicants((prev) => [app as unknown as AdminApplicant, ...prev.filter((a) => a.id !== app.id)]);
+      setSubmittedSellerApplicantId(app.status === 'approved' ? null : app.id);
+    });
+  }, [firebaseUid, isFirebaseAdmin]);
+
+  /** Admin decision on an application: saved to Firestore when it belongs to a real account. */
+  const decideOnApplicant = async (applicantId: string, decision: ApplicationDecision, reason = '') => {
+    const applicant = adminApplicants.find((a) => a.id === applicantId);
+    if (!applicant) return;
+    if ((applicant as any).uid) {
+      try {
+        await decideApplication(applicant as unknown as StoredApplication, decision, reason);
+      } catch (err) {
+        console.warn('Could not save decision', err);
+        showToast(`⚠️ ${err instanceof Error ? err.message : 'Could not save the decision. Try again.'}`);
+        return;
+      }
+    }
+    const update = {
+      status: (decision === 'reject' ? 'rejected' : 'approved') as AdminApplicant['status'],
+      verifiedBadge: decision === 'verify',
+      rejectionReason: decision === 'reject' ? reason : '',
+    };
+    setAdminApplicants((prev) => prev.map((a) => (a.id === applicantId ? { ...a, ...update } : a)));
+    setViewingApplicantDetails((prev) => (prev && prev.id === applicantId ? { ...prev, ...update } : prev));
+    showToast(
+      decision === 'reject'
+        ? `❌ Rejected ${applicant.name}${reason ? `: ${reason}` : ''}`
+        : decision === 'verify'
+        ? `✅ Approved & verified ${applicant.name}`
+        : `✅ Approved ${applicant.name}`
+    );
+  };
+
   const [adminApplicantFilter, setAdminApplicantFilter] = useState<'pending' | 'approved' | 'rejected'>('pending');
   const [rejectModalApplicant, setRejectModalApplicant] = useState<{ id: string; name: string; role: string } | null>(null);
   const [selectedRejectReason, setSelectedRejectReason] = useState<string>('Blurry or unreadable Ghana Card ID photos');
@@ -3764,37 +3553,6 @@ export default function App() {
     reader.readAsDataURL(file);
   };
 
-  const handleAdminAttachGhanaCard = (applicantId: string) => {
-    const generatedPin = `GHA-${Math.floor(100000000 + Math.random() * 900000000)}-${Math.floor(Math.random() * 9)}`;
-    const sampleFront = 'https://images.unsplash.com/photo-1589829545856-d10d557cf95f?auto=format&fit=crop&w=600&q=80';
-    const sampleBack = 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?auto=format&fit=crop&w=600&q=80';
-    setViewingApplicantDetails((prev) =>
-      prev
-        ? {
-            ...prev,
-            ghanaCardId: generatedPin,
-            idVerificationSkipped: false,
-            frontPhoto: sampleFront,
-            backPhoto: sampleBack,
-          }
-        : null
-    );
-    setAdminApplicants((prev) =>
-      prev.map((a) =>
-        a.id === applicantId
-          ? {
-              ...a,
-              ghanaCardId: generatedPin,
-              idVerificationSkipped: false,
-              frontPhoto: sampleFront,
-              backPhoto: sampleBack,
-            }
-          : a
-      )
-    );
-    showToast('Ghana Card attached and verified for applicant!', 'check');
-  };
-
   // Share Modal State
   const [shareModalItem, setShareModalItem] = useState<{
     id: string;
@@ -3834,6 +3592,8 @@ export default function App() {
     pendingOfferBuyerName?: string;
     pendingOfferChatId?: string;
   }>>([]);
+
+  const [isPublishingAd, setIsPublishingAd] = useState(false);
 
   // Post Ad Validation Errors State
   const [postAdErrors, setPostAdErrors] = useState<Record<string, string>>({});
@@ -3914,237 +3674,149 @@ export default function App() {
     };
   }, [isRecordingAdAudio]);
 
-  const startAdAudioRecording = async () => {
-    try {
-      if (adAudioSourceNodeRef.current) {
-        try {
-          adAudioSourceNodeRef.current.stop();
-        } catch (_) {}
-        adAudioSourceNodeRef.current = null;
-      }
-      if (adAudioPlaybackIntervalRef.current) {
-        clearInterval(adAudioPlaybackIntervalRef.current);
-        adAudioPlaybackIntervalRef.current = null;
-      }
-      setIsPlayingAdAudio(false);
-      setAdAudioProgress(0);
+  const adAudioElementRef = useRef<HTMLAudioElement | null>(null);
+  const adRecordingStartedAtRef = useRef<number>(0);
 
-      const ctx = getSharedAudioContext();
-      if (ctx.state === 'suspended') {
-        await ctx.resume();
-      }
-
-      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        adAudioStreamRef.current = stream;
-        adAudioChunksRef.current = [];
-
-        let options: MediaRecorderOptions = {};
-        if (typeof MediaRecorder !== 'undefined') {
-          if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
-            options = { mimeType: 'audio/webm;codecs=opus' };
-          } else if (MediaRecorder.isTypeSupported('audio/webm')) {
-            options = { mimeType: 'audio/webm' };
-          } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
-            options = { mimeType: 'audio/mp4' };
-          }
-        }
-
-        const recorder = new MediaRecorder(stream, options);
-        adAudioMediaRecorderRef.current = recorder;
-
-        recorder.ondataavailable = (event) => {
-          if (event.data && event.data.size > 0) {
-            adAudioChunksRef.current.push(event.data);
-          }
-        };
-
-        recorder.start(100);
-        setIsRecordingAdAudio(true);
-        showToast('Recording product audio description...');
-      } else {
-        setIsRecordingAdAudio(true);
-        showToast('Recording product audio description...');
-      }
-    } catch (err: any) {
-      console.warn('Microphone access note:', err);
-      setIsRecordingAdAudio(true);
-      showToast('Recording product audio description...');
-    }
-  };
-
-  const stopAdAudioRecording = async (save = true) => {
-    setIsRecordingAdAudio(false);
-
-    if (adAudioMediaRecorderRef.current && adAudioMediaRecorderRef.current.state !== 'inactive') {
-      adAudioMediaRecorderRef.current.onstop = async () => {
-        if (save && adAudioChunksRef.current.length > 0) {
-          const mime = adAudioMediaRecorderRef.current?.mimeType || 'audio/webm';
-          const blob = new Blob(adAudioChunksRef.current, { type: mime });
-          const url = URL.createObjectURL(blob);
-
-          try {
-            const ctx = getSharedAudioContext();
-            const arrayBuf = await blob.arrayBuffer();
-            const decoded = await ctx.decodeAudioData(arrayBuf);
-            adAudioBufferRef.current = decoded;
-            const duration = Math.max(1, Math.round(decoded.duration));
-            setAdDraft((prev) => ({
-              ...prev,
-              hasAudioDescription: true,
-              audioDescriptionDuration: duration,
-              audioDescriptionUrl: url,
-            }));
-            showToast(`Audio description saved (${duration}s)`);
-          } catch (decodeErr) {
-            const ctx = getSharedAudioContext();
-            const duration = Math.max(1, adLiveRecordingSeconds || 8);
-            adAudioBufferRef.current = createSyntheticVocalBuffer(ctx, duration);
-            setAdDraft((prev) => ({
-              ...prev,
-              hasAudioDescription: true,
-              audioDescriptionDuration: duration,
-              audioDescriptionUrl: url,
-            }));
-            showToast(`Audio description saved (${duration}s)`);
-          }
-        } else if (save) {
-          const ctx = getSharedAudioContext();
-          const duration = Math.max(1, adLiveRecordingSeconds || 8);
-          adAudioBufferRef.current = createSyntheticVocalBuffer(ctx, duration);
-          setAdDraft((prev) => ({
-            ...prev,
-            hasAudioDescription: true,
-            audioDescriptionDuration: duration,
-          }));
-          showToast(`Audio description saved (${duration}s)`);
-        }
-        if (adAudioStreamRef.current) {
-          adAudioStreamRef.current.getTracks().forEach((track) => track.stop());
-          adAudioStreamRef.current = null;
-        }
-      };
-      adAudioMediaRecorderRef.current.stop();
-    } else {
-      if (save) {
-        const ctx = getSharedAudioContext();
-        const duration = Math.max(1, adLiveRecordingSeconds || 8);
-        adAudioBufferRef.current = createSyntheticVocalBuffer(ctx, duration);
-        setAdDraft((prev) => ({
-          ...prev,
-          hasAudioDescription: true,
-          audioDescriptionDuration: duration,
-        }));
-        showToast(`Audio description saved (${duration}s)`);
-      }
-      if (adAudioStreamRef.current) {
-        adAudioStreamRef.current.getTracks().forEach((track) => track.stop());
-        adAudioStreamRef.current = null;
-      }
-    }
-  };
-
-  const togglePlayAdAudio = async () => {
-    if (isPlayingAdAudio) {
-      if (adAudioSourceNodeRef.current) {
-        try {
-          adAudioSourceNodeRef.current.stop();
-        } catch (_) {}
-        adAudioSourceNodeRef.current = null;
-      }
-      if (adAudioPlaybackIntervalRef.current) {
-        clearInterval(adAudioPlaybackIntervalRef.current);
-        adAudioPlaybackIntervalRef.current = null;
-      }
-      setIsPlayingAdAudio(false);
-      showToast('Paused audio description');
-      return;
-    }
-
-    try {
-      const ctx = getSharedAudioContext();
-      if (ctx.state === 'suspended') {
-        await ctx.resume();
-      }
-
-      let buffer = adAudioBufferRef.current;
-      if (!buffer) {
-        buffer = createSyntheticVocalBuffer(ctx, adDraft.audioDescriptionDuration || 12);
-        adAudioBufferRef.current = buffer;
-      }
-
-      if (adAudioSourceNodeRef.current) {
-        try {
-          adAudioSourceNodeRef.current.stop();
-        } catch (_) {}
-        adAudioSourceNodeRef.current = null;
-      }
-      if (adAudioPlaybackIntervalRef.current) {
-        clearInterval(adAudioPlaybackIntervalRef.current);
-        adAudioPlaybackIntervalRef.current = null;
-      }
-
-      const source = ctx.createBufferSource();
-      source.buffer = buffer;
-
-      const gainNode = ctx.createGain();
-      gainNode.gain.setValueAtTime(1.0, ctx.currentTime);
-
-      source.connect(gainNode);
-      gainNode.connect(ctx.destination);
-
-      adAudioSourceNodeRef.current = source;
-      setIsPlayingAdAudio(true);
-
-      const totalDuration = buffer.duration || adDraft.audioDescriptionDuration || 12;
-      const startTime = ctx.currentTime;
-
-      adAudioPlaybackIntervalRef.current = setInterval(() => {
-        const elapsed = ctx.currentTime - startTime;
-        const prog = Math.min(1, elapsed / totalDuration);
-        setAdAudioProgress(prog);
-        if (prog >= 1) {
-          if (adAudioPlaybackIntervalRef.current) {
-            clearInterval(adAudioPlaybackIntervalRef.current);
-            adAudioPlaybackIntervalRef.current = null;
-          }
-          setIsPlayingAdAudio(false);
-          setAdAudioProgress(0);
-          adAudioSourceNodeRef.current = null;
-        }
-      }, 50);
-
-      source.onended = () => {
-        if (adAudioPlaybackIntervalRef.current) {
-          clearInterval(adAudioPlaybackIntervalRef.current);
-          adAudioPlaybackIntervalRef.current = null;
-        }
-        setIsPlayingAdAudio(false);
-        setAdAudioProgress(0);
-        adAudioSourceNodeRef.current = null;
-      };
-
-      source.start(0);
-    } catch (err) {
-      console.warn('Post ad audio playback error:', err);
-      showToast('Playing audio description');
-    }
-  };
-
-  const deleteAdAudio = () => {
-    if (adAudioSourceNodeRef.current) {
-      try {
-        adAudioSourceNodeRef.current.stop();
-      } catch (_) {}
-      adAudioSourceNodeRef.current = null;
+  const stopAdAudioPlayback = () => {
+    if (adAudioElementRef.current) {
+      adAudioElementRef.current.pause();
+      adAudioElementRef.current = null;
     }
     if (adAudioPlaybackIntervalRef.current) {
       clearInterval(adAudioPlaybackIntervalRef.current);
       adAudioPlaybackIntervalRef.current = null;
     }
-    adAudioBufferRef.current = null;
     setIsPlayingAdAudio(false);
     setAdAudioProgress(0);
+  };
+
+  const startAdAudioRecording = async () => {
+    stopAdAudioPlayback();
+
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      showToast('⚠️ Voice recording is not supported on this device');
+      return;
+    }
+
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err) {
+      console.warn('Microphone access denied:', err);
+      showToast('⚠️ Microphone access is needed. Allow it in your phone settings and try again.');
+      return;
+    }
+
+    adAudioStreamRef.current = stream;
+    adAudioChunksRef.current = [];
+
+    // Prefer WebM/Opus (Android): it honours the low bitrate, keeping a one-minute note
+    // around 190 KB. iPhones can't record WebM and fall back to MP4.
+    const mimeType = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg'].find((type) =>
+      MediaRecorder.isTypeSupported(type)
+    );
+    const recorder = new MediaRecorder(stream, {
+      ...(mimeType ? { mimeType } : {}),
+      audioBitsPerSecond: 24000,
+    });
+    adAudioMediaRecorderRef.current = recorder;
+
+    // Stop before the note gets too big to save with the listing (some phones ignore the bitrate)
+    const MAX_RECORDING_BYTES = 350_000;
+    let recordedBytes = 0;
+    recorder.ondataavailable = (event) => {
+      if (event.data && event.data.size > 0) {
+        adAudioChunksRef.current.push(event.data);
+        recordedBytes += event.data.size;
+        if (recordedBytes > MAX_RECORDING_BYTES && recorder.state === 'recording') {
+          showToast('Maximum voice note length reached');
+          stopAdAudioRecording(true);
+        }
+      }
+    };
+
+    recorder.start(250);
+    adRecordingStartedAtRef.current = Date.now();
+    setIsRecordingAdAudio(true);
+    showToast('Recording product audio description...');
+  };
+
+  const stopAdAudioRecording = async (save = true) => {
+    setIsRecordingAdAudio(false);
+
+    const releaseMicrophone = () => {
+      if (adAudioStreamRef.current) {
+        adAudioStreamRef.current.getTracks().forEach((track) => track.stop());
+        adAudioStreamRef.current = null;
+      }
+    };
+
+    const recorder = adAudioMediaRecorderRef.current;
+    if (!recorder || recorder.state === 'inactive') {
+      releaseMicrophone();
+      return;
+    }
+
+    recorder.onstop = async () => {
+      releaseMicrophone();
+      if (!save) return;
+      if (adAudioChunksRef.current.length === 0) {
+        showToast('⚠️ Nothing was recorded. Please try again.');
+        return;
+      }
+      const blob = new Blob(adAudioChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
+      const duration = Math.max(1, Math.round((Date.now() - adRecordingStartedAtRef.current) / 1000));
+      try {
+        const dataUrl = await blobToDataUrl(blob);
+        setAdDraft((prev) => ({
+          ...prev,
+          hasAudioDescription: true,
+          audioDescriptionDuration: Math.min(duration, 60),
+          audioDescriptionUrl: dataUrl,
+        }));
+        showToast(`Audio description saved (${formatAudioTime(duration)})`);
+      } catch (err) {
+        console.warn('Could not save recording', err);
+        showToast('⚠️ Could not save the recording. Please try again.');
+      }
+    };
+    recorder.stop();
+  };
+
+  const togglePlayAdAudio = async () => {
+    if (isPlayingAdAudio) {
+      stopAdAudioPlayback();
+      return;
+    }
+    if (!adDraft.audioDescriptionUrl) {
+      showToast('⚠️ No recording yet. Tap record first.');
+      return;
+    }
+
+    const audio = new Audio(adDraft.audioDescriptionUrl);
+    adAudioElementRef.current = audio;
+    const totalDuration = adDraft.audioDescriptionDuration || 1;
+    audio.onended = stopAdAudioPlayback;
+    audio.onerror = () => {
+      stopAdAudioPlayback();
+      showToast('⚠️ This recording could not be played');
+    };
+    adAudioPlaybackIntervalRef.current = setInterval(() => {
+      const total = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : totalDuration;
+      setAdAudioProgress(Math.min(1, audio.currentTime / total));
+    }, 100);
+    setIsPlayingAdAudio(true);
+    try {
+      await audio.play();
+    } catch (err) {
+      console.warn('Post ad audio playback error:', err);
+      stopAdAudioPlayback();
+      showToast('⚠️ This recording could not be played');
+    }
+  };
+
+  const deleteAdAudio = () => {
+    stopAdAudioPlayback();
     setAdDraft((prev) => ({
       ...prev,
       hasAudioDescription: false,
@@ -4159,8 +3831,6 @@ export default function App() {
   const [listingAudioProgress, setListingAudioProgress] = useState<Record<string, number>>({});
   const [listingAudioSpeed, setListingAudioSpeed] = useState<number>(1);
   const [isListingAudioMuted, setIsListingAudioMuted] = useState<boolean>(false);
-  const listingAudioTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const listingAudioSourceRef = useRef<AudioBufferSourceNode | null>(null);
 
   const cycleListingAudioSpeed = () => {
     setListingAudioSpeed((prev) => {
@@ -4178,73 +3848,65 @@ export default function App() {
     });
   };
 
-  const togglePlayListingAudio = (listingId: string, duration = 42) => {
+  const listingAudioElementRef = useRef<HTMLAudioElement | null>(null);
+  const [listingAudioDurations, setListingAudioDurations] = useState<Record<string, number>>({});
+
+  // Apply speed and mute changes to the voice note that is playing
+  useEffect(() => {
+    if (listingAudioElementRef.current) {
+      listingAudioElementRef.current.playbackRate = listingAudioSpeed;
+      listingAudioElementRef.current.muted = isListingAudioMuted;
+    }
+  }, [listingAudioSpeed, isListingAudioMuted]);
+
+  const stopListingAudio = () => {
+    if (listingAudioElementRef.current) {
+      listingAudioElementRef.current.pause();
+      listingAudioElementRef.current = null;
+    }
+    setActiveListingPlayingId(null);
+  };
+
+  const togglePlayListingAudio = async (listingId: string, audioUrl?: string) => {
     if (activeListingPlayingId === listingId) {
-      if (listingAudioSourceRef.current) {
-        try {
-          listingAudioSourceRef.current.stop();
-        } catch (_) {}
-        listingAudioSourceRef.current = null;
-      }
-      if (listingAudioTimerRef.current) {
-        clearInterval(listingAudioTimerRef.current);
-        listingAudioTimerRef.current = null;
-      }
-      setActiveListingPlayingId(null);
-      showToast('Paused audio description');
-    } else {
-      if (listingAudioSourceRef.current) {
-        try {
-          listingAudioSourceRef.current.stop();
-        } catch (_) {}
-        listingAudioSourceRef.current = null;
-      }
-      if (listingAudioTimerRef.current) {
-        clearInterval(listingAudioTimerRef.current);
-        listingAudioTimerRef.current = null;
-      }
-      setActiveListingPlayingId(listingId);
-      const startSec = listingAudioProgress[listingId] ?? 18;
+      stopListingAudio();
+      return;
+    }
+    stopListingAudio();
+    if (!audioUrl) {
+      showToast('⚠️ This voice note is not available');
+      return;
+    }
 
-      try {
-        const ctx = getSharedAudioContext();
-        if (ctx.state === 'suspended') {
-          ctx.resume();
-        }
-        if (!isListingAudioMuted) {
-          const buf = createSyntheticVocalBuffer(ctx, Math.max(1, duration - startSec));
-          const source = ctx.createBufferSource();
-          source.buffer = buf;
-          source.playbackRate.value = listingAudioSpeed;
-          source.connect(ctx.destination);
-          listingAudioSourceRef.current = source;
-          source.onended = () => {
-            setActiveListingPlayingId(null);
-            if (listingAudioTimerRef.current) {
-              clearInterval(listingAudioTimerRef.current);
-              listingAudioTimerRef.current = null;
-            }
-          };
-          source.start(0);
-        }
-      } catch (_) {}
-
-      listingAudioTimerRef.current = setInterval(() => {
-        setListingAudioProgress((prev) => {
-          const current = (prev[listingId] ?? 18) + 1;
-          if (current >= duration) {
-            setActiveListingPlayingId(null);
-            if (listingAudioTimerRef.current) {
-              clearInterval(listingAudioTimerRef.current);
-              listingAudioTimerRef.current = null;
-            }
-            return { ...prev, [listingId]: 0 };
-          }
-          return { ...prev, [listingId]: current };
-        });
-      }, 1000 / listingAudioSpeed);
-
-      showToast('Playing audio description by seller');
+    const audio = new Audio(audioUrl);
+    listingAudioElementRef.current = audio;
+    audio.playbackRate = listingAudioSpeed;
+    audio.muted = isListingAudioMuted;
+    const resumeAt = listingAudioProgress[listingId] || 0;
+    audio.onloadedmetadata = () => {
+      if (Number.isFinite(audio.duration)) {
+        setListingAudioDurations((prev) => ({ ...prev, [listingId]: audio.duration }));
+      }
+      if (resumeAt > 0 && resumeAt < audio.duration) audio.currentTime = resumeAt;
+    };
+    audio.ontimeupdate = () => {
+      setListingAudioProgress((prev) => ({ ...prev, [listingId]: audio.currentTime }));
+    };
+    audio.onended = () => {
+      setListingAudioProgress((prev) => ({ ...prev, [listingId]: 0 }));
+      stopListingAudio();
+    };
+    audio.onerror = () => {
+      stopListingAudio();
+      showToast('⚠️ This voice note could not be played');
+    };
+    setActiveListingPlayingId(listingId);
+    try {
+      await audio.play();
+    } catch (err) {
+      console.warn('Listing audio playback error:', err);
+      stopListingAudio();
+      showToast('⚠️ This voice note could not be played');
     }
   };
 
@@ -5260,7 +4922,7 @@ export default function RootLayout() {
 
           {/* Phone number display on Call Modal as requested */}
           <p className="text-xs font-mono font-bold text-slate-600 mt-0.5 text-center tracking-tight">
-            {activeCallUser.phone || '+233 24 987 6543'}
+            {activeCallUser.phone || 'Phone number not provided'}
           </p>
 
           {/* Calling status in warm brownish-tan tone matching 3rd image */}
@@ -5450,7 +5112,7 @@ export default function RootLayout() {
   const renderCallDropdown = () => {
     if (!callDropdownUser) return null;
 
-    const rawPhone = callDropdownUser.phone || '+233 24 987 6543';
+    const rawPhone = callDropdownUser.phone || '';
     const cleanNumber = rawPhone.replace(/[^+\d]/g, '');
 
     return (
@@ -5719,30 +5381,7 @@ export default function RootLayout() {
                   selectedRejectReason === 'Other / Custom reason' && customRejectReason.trim()
                     ? customRejectReason.trim()
                     : selectedRejectReason;
-                setAdminApplicants((prev) =>
-                  prev.map((a) =>
-                    a.id === rejectModalApplicant.id
-                      ? { ...a, status: 'rejected', rejectionReason: finalReason }
-                      : a
-                  )
-                );
-                setViewingApplicantDetails((prev) =>
-                  prev && prev.id === rejectModalApplicant.id
-                    ? { ...prev, status: 'rejected', rejectionReason: finalReason }
-                    : prev
-                );
-                // Send in-app notification to applicant
-                const rejNotif: NotificationItem = {
-                  id: `notif-app-rej-${Date.now()}`,
-                  type: 'safety',
-                  title: 'Seller Application Decision',
-                  body: `Your seller application for "${rejectModalApplicant.name}" was not approved. Reason: ${finalReason}. You may update your documents or profile details and reapply now.`,
-                  time: 'Just now',
-                  read: false,
-                };
-                setNotifications((prev) => [rejNotif, ...prev]);
-
-                showToast(`❌ Rejected application for ${rejectModalApplicant.name}: ${finalReason}`);
+                decideOnApplicant(rejectModalApplicant.id, 'reject', finalReason);
                 setRejectModalApplicant(null);
               }}
               className="flex-1 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-xs shadow-xs cursor-pointer"
@@ -6502,13 +6141,7 @@ export default function RootLayout() {
                     </div>
 
                     <div className="space-y-2">
-                      {(applicant.servicesAndPricing || [
-                        { title: 'Diagnostic Inspection & System Check', desc: 'Comprehensive fault diagnosis & load assessment', price: 'Free', icon: 'gear' },
-                        { title: 'Solar Inverter & Panel Setup', desc: 'Hybrid & off-grid 5kVA - 15kVA in...', price: 'From GH₵ 1,200', icon: 'zap' },
-                        { title: 'Full House Conduit Wiring', desc: 'Certified distribution board & 3-pha...', price: 'From GH₵ 800', icon: 'hammer' },
-                        { title: 'Fault Tracing & Breaker Fix', desc: 'Rapid surge, earthing & short circuit...', price: 'From GH₵ 150', icon: 'sliders' },
-                        { title: 'CCTV & Backup Battery Bank', desc: 'Lithium battery backup & surveillan...', price: 'From GH₵ 450', icon: 'monitor' },
-                      ]).map((srv, idx) => (
+                      {(applicant.servicesAndPricing || []).map((srv, idx) => (
                         <div
                           key={idx}
                           className="bg-white rounded-xl p-2.5 border border-slate-200/80 flex items-center justify-between gap-2.5 shadow-2xs"
@@ -6534,19 +6167,13 @@ export default function RootLayout() {
                   <div className="space-y-2 pt-2 border-t border-slate-200/60">
                     <div className="flex items-center justify-between">
                       <span className="text-slate-900 font-extrabold text-xs">
-                        Verified Work <span className="text-slate-400 font-normal">({(applicant.verifiedWorkPortfolio || []).length || 5})</span>
+                        Verified Work <span className="text-slate-400 font-normal">({(applicant.verifiedWorkPortfolio || []).length})</span>
                       </span>
                       <span className="text-[10px] text-emerald-700 font-bold">Tap photo to inspect</span>
                     </div>
 
                     <div className="grid grid-cols-2 gap-2">
-                      {(applicant.verifiedWorkPortfolio || [
-                        { title: '10kVA Solar Roof Array', tag: 'Solar', sub: 'East Legon • 16 Panels', img: 'https://images.unsplash.com/photo-1509391365360-2e959784a276?auto=format&fit=crop&w=600&q=80' },
-                        { title: 'Industrial Distribution Board', tag: 'Wiring', sub: 'Spintex • Certified 3-Phase', img: 'https://images.unsplash.com/photo-1621905251189-08b45d6a269e?auto=format&fit=crop&w=600&q=80' },
-                        { title: 'Lithium Backup System', tag: 'Storage', sub: 'Madina • 10kWh LiFePO4', img: 'https://images.unsplash.com/photo-1558441719-8b489c652790?auto=format&fit=crop&w=600&q=80' },
-                        { title: 'Modern LED Recessed Lighting', tag: 'Lighting', sub: 'Airport Res • Smart Home', img: 'https://images.unsplash.com/photo-1565814329452-e1efa11c5b89?auto=format&fit=crop&w=600&q=80' },
-                        { title: 'Solar Water Heater Rig', tag: 'Solar', sub: 'East Legon • 300L High Pressure', img: 'https://images.unsplash.com/photo-1513694203232-719a280e022f?auto=format&fit=crop&w=600&q=80' },
-                      ]).map((work, idx) => (
+                      {(applicant.verifiedWorkPortfolio || []).map((work, idx) => (
                         <div
                           key={idx}
                           onClick={() =>
@@ -6615,42 +6242,26 @@ export default function RootLayout() {
               <button
                 type="button"
                 onClick={() => {
-                  setAdminApplicants((prev) =>
-                    prev.map((a) =>
-                      a.id === applicant.id
-                        ? { ...a, status: 'approved', verifiedBadge: !applicant.idVerificationSkipped }
-                        : a
-                    )
-                  );
+                  decideOnApplicant(applicant.id, 'approve');
                   setViewingApplicantDetails(null);
-
-                  // Send in-app notification to applicant
-                  const appNotif: NotificationItem = {
-                    id: `notif-app-appr-${Date.now()}`,
-                    type: 'safety',
-                    title: 'Application Approved! 🎉',
-                    body: `Congratulations! Your application for "${applicant.name}" has been approved by Haraka Trust & Safety. Your account is now upgraded to a Verified Seller account.`,
-                    time: 'Just now',
-                    read: false,
-                  };
-                  setNotifications((prev) => [appNotif, ...prev]);
-
-                  // Upgrade account to seller account
-                  if (applicant.id === submittedSellerApplicantId || applicant.name === userProfile.name) {
-                    setCurrentUserRole(applicant.role === 'artisan' ? 'artisan' : 'seller');
-                    setUserProfile((prev) => ({
-                      ...prev,
-                      isApproved: true,
-                      isVerified: true,
-                    }));
-                  }
-
-                  showToast(`✅ Approved ${applicant.name}! Account upgraded to Seller.`);
                 }}
-                className="flex-1 py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs cursor-pointer shadow-2xs transition-colors flex items-center justify-center gap-1.5"
+                className="flex-1 py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs cursor-pointer shadow-2xs transition-colors flex items-center justify-center gap-1.5"
               >
                 <CheckCircle2 size={15} />
-                <span>{applicant.idVerificationSkipped ? 'Approve' : 'Approve & Verify'}</span>
+                <span>Approve</span>
+              </button>
+              <button
+                type="button"
+                disabled={!hasRequiredDocuments(applicant)}
+                title={hasRequiredDocuments(applicant) ? 'Approve and give the Verified badge' : 'Needs Ghana Card number and both card photos'}
+                onClick={() => {
+                  decideOnApplicant(applicant.id, 'verify');
+                  setViewingApplicantDetails(null);
+                }}
+                className="flex-1 py-2.5 px-3 rounded-xl bg-[#046A38] hover:bg-[#035a2f] text-white font-bold text-xs cursor-pointer shadow-2xs transition-colors flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <ShieldCheck size={15} />
+                <span>Approve &amp; Verify</span>
               </button>
 
               <button
@@ -6674,13 +6285,7 @@ export default function RootLayout() {
                 <span>{applicant.verifiedBadge ? 'Approved with Verified Badge' : 'Approved Standard Merchant'}</span>
               </span>
               <button
-                onClick={() => {
-                  setAdminApplicants((prev) =>
-                    prev.map((a) => (a.id === applicant.id ? { ...a, status: 'rejected' } : a))
-                  );
-                  setViewingApplicantDetails((prev) => (prev ? { ...prev, status: 'rejected' } : null));
-                  showToast(`Revoked approval for ${applicant.name}`);
-                }}
+                onClick={() => decideOnApplicant(applicant.id, 'reject', 'Approval revoked by admin')}
                 className="py-1.5 px-3 rounded-xl border border-slate-200 text-slate-600 hover:text-red-600 font-bold text-xs cursor-pointer"
               >
                 Revoke
@@ -6693,13 +6298,7 @@ export default function RootLayout() {
                 <span>Application Rejected</span>
               </span>
               <button
-                onClick={() => {
-                  setAdminApplicants((prev) =>
-                    prev.map((a) => (a.id === applicant.id ? { ...a, status: 'approved' } : a))
-                  );
-                  setViewingApplicantDetails((prev) => (prev ? { ...prev, status: 'approved' } : null));
-                  showToast(`Re-approved ${applicant.name}`);
-                }}
+                onClick={() => decideOnApplicant(applicant.id, 'approve')}
                 className="py-1.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs cursor-pointer"
               >
                 Re-evaluate &amp; Approve
@@ -6818,7 +6417,7 @@ export default function RootLayout() {
                       listingTitle: b.serviceTitle || 'Artisan Service Booking',
                       listingPrice: b.inspectionFee || 80,
                       listingCurrency: b.currency || 'GH₵',
-                      listingImage: b.clientAvatar || 'https://images.unsplash.com/photo-1581578731548-c64695cc6952?auto=format&fit=crop&w=400&q=80',
+                      listingImage: b.clientAvatar || PLACEHOLDER_IMAGE,
                       otherUser: {
                         id: `user-${b.id}`,
                         name: b.clientName,
@@ -7431,9 +7030,8 @@ export default function RootLayout() {
             <button
               onClick={() => {
                 setShowArtisanNoticeModal(false);
-                setCurrentUserRole('seller');
-                showToast('Switched to Seller account. You can now post product ads.');
-                navigateTo({ type: 'post-ad-step1' });
+                showToast('Selling products needs a seller application, reviewed by our team.');
+                navigateTo({ type: 'register-partner' });
               }}
               className="w-full py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-bold text-xs transition-colors cursor-pointer text-center"
             >
@@ -7514,6 +7112,17 @@ export default function RootLayout() {
                 )}
               </button>
             )}
+            {currentUserRole === 'admin' && adminAccess.canAddAdmins && (
+              <button
+                type="button"
+                onClick={openAddAdminModal}
+                className="w-8 h-8 rounded-xl border border-slate-200 bg-white flex items-center justify-center text-slate-700 hover:text-slate-900 shadow-2xs active:scale-95 transition-all cursor-pointer"
+                title="Add New Admin"
+                aria-label="Add New Admin"
+              >
+                <UserPlus size={16} />
+              </button>
+            )}
             <button
               onClick={() => navigateTo({ type: 'notifications' })}
               className="w-8 h-8 rounded-xl border border-slate-200 bg-white flex items-center justify-center text-slate-700 hover:text-slate-900 shadow-2xs active:scale-95 transition-all cursor-pointer"
@@ -7523,6 +7132,7 @@ export default function RootLayout() {
             </button>
           </div>
         </div>
+        {renderAddAdminModal()}
 
         {/* Dashboard Body based on Role */}
         <div className="p-3.5 space-y-3">
@@ -7781,7 +7391,7 @@ export default function RootLayout() {
                                       listingTitle: booking.serviceTitle || 'Artisan Service Booking',
                                       listingPrice: booking.inspectionFee || 80,
                                       listingCurrency: booking.currency || 'GH₵',
-                                      listingImage: booking.clientAvatar || 'https://images.unsplash.com/photo-1581578731548-c64695cc6952?auto=format&fit=crop&w=400&q=80',
+                                      listingImage: booking.clientAvatar || PLACEHOLDER_IMAGE,
                                       otherUser: {
                                         id: `user-${booking.id}`,
                                         name: booking.clientName,
@@ -7853,31 +7463,12 @@ export default function RootLayout() {
 
           {/* ADMIN DASHBOARD */}
           {currentUserRole === 'admin' && (() => {
-            // Real verified sellers count from actual listings and approved seller applicants
-            const verifiedSellersTotal = new Set([
-              ...listings.map((l) => l.seller.name),
-              ...adminApplicants.filter((a) => a.role === 'seller' && a.status === 'approved').map((a) => a.name),
-            ]).size;
-
-            // Real trade artisans from actual directory and approved artisan applicants
-            const tradeArtisansTotal = new Set([
-              ...ARTISANS_DIRECTORY.map((artisan) => artisan.id),
-              ...adminApplicants.filter((a) => a.role === 'artisan' && a.status === 'approved').map((a) => a.id),
-            ]).size;
-
-            // Real active users across conversations, client visits and user profiles
-            const activeUsersTotal = new Set([
-              ...conversations.map((c) => c.otherUser.name),
-              ...myBookings.map((b) => b.artisanName),
-              ...adminApplicants.map((a) => a.name),
-              userProfile.name,
-            ]).size;
-
-            // Real platform administrators
-            const platformAdminsTotal = 1;
-
-            // Real total platform users sum
-            const totalUsersCalculated = verifiedSellersTotal + tradeArtisansTotal + activeUsersTotal + platformAdminsTotal;
+            // Counted from the accounts in Firestore (admins added in the app, excluding the system admin)
+            const verifiedSellersTotal = platformStats?.sellers ?? 0;
+            const tradeArtisansTotal = platformStats?.artisans ?? 0;
+            const activeUsersTotal = platformStats?.regularUsers ?? 0;
+            const platformAdminsTotal = platformStats?.admins ?? 0;
+            const totalUsersCalculated = platformStats?.totalUsers ?? 0;
 
             const sellerPct = totalUsersCalculated > 0 ? ((verifiedSellersTotal / totalUsersCalculated) * 100).toFixed(1) : '0.0';
             const artisanPct = totalUsersCalculated > 0 ? ((tradeArtisansTotal / totalUsersCalculated) * 100).toFixed(1) : '0.0';
@@ -7893,12 +7484,12 @@ export default function RootLayout() {
                   <div className="p-3.5 border border-slate-200/80 rounded-2xl bg-white shadow-2xs">
                     <span className="text-slate-500 text-[11px] font-semibold block">Total Platform Users</span>
                     <span className="text-xl font-black text-slate-900 block mt-0.5">{totalUsersCalculated.toLocaleString()}</span>
-                    <span className="text-[10px] text-slate-400 font-medium block mt-1">Verified buyers, sellers &amp; artisans</span>
+                    <span className="text-[10px] text-slate-400 font-medium block mt-1">All registered accounts</span>
                   </div>
                   <div className="p-3.5 border border-slate-200/80 rounded-2xl bg-white shadow-2xs">
                     <span className="text-slate-500 text-[11px] font-semibold block">Live Marketplace Ads</span>
                     <span className="text-xl font-black text-slate-900 block mt-0.5">{liveAdsTotal.toLocaleString()}</span>
-                    <span className="text-[10px] text-slate-400 font-medium block mt-1">Active peer-to-peer ads in Accra</span>
+                    <span className="text-[10px] text-slate-400 font-medium block mt-1">Active ads across Ghana</span>
                   </div>
                   <div className="p-3.5 border border-slate-200/80 rounded-2xl bg-white shadow-2xs">
                     <span className="text-slate-500 text-[11px] font-semibold block">Pending Verification</span>
@@ -7908,9 +7499,11 @@ export default function RootLayout() {
                     <span className="text-[10px] text-orange-600 font-medium block mt-1">Awaiting review</span>
                   </div>
                   <div className="p-3.5 border border-slate-200/80 rounded-2xl bg-white shadow-2xs">
-                    <span className="text-slate-500 text-[11px] font-semibold block">Trust &amp; Safety Score</span>
-                    <span className="text-xl font-black text-emerald-700 block mt-0.5">{userProfile.adminSafetyScore || '99.4%'}</span>
-                    <span className="text-[10px] text-emerald-700 font-medium block mt-1">High inspection &amp; trade rating</span>
+                    <span className="text-slate-500 text-[11px] font-semibold block">Open User Reports</span>
+                    <span className={`text-xl font-black block mt-0.5 ${(platformStats?.openReports ?? 0) > 0 ? 'text-red-600' : 'text-emerald-700'}`}>
+                      {platformStats?.openReports ?? 0}
+                    </span>
+                    <span className="text-[10px] text-slate-500 font-medium block mt-1">Flagged listings to review</span>
                   </div>
                 </div>
 
@@ -7932,12 +7525,12 @@ export default function RootLayout() {
                       <span className="text-[9.5px] text-slate-400 block mt-0.5">{artisanPct}% of userbase</span>
                     </div>
                     <div className="p-2.5 bg-slate-50/70 rounded-xl border border-slate-100">
-                      <span className="text-slate-500 text-[10.5px] block font-medium">Active Users</span>
+                      <span className="text-slate-500 text-[10.5px] block font-medium">Regular Users</span>
                       <span className="text-sm font-black text-slate-900">{activeUsersTotal.toLocaleString()}</span>
                       <span className="text-[9.5px] text-slate-400 block mt-0.5">{userPct}% of userbase</span>
                     </div>
                     <div className="p-2.5 bg-slate-50/70 rounded-xl border border-slate-100">
-                      <span className="text-slate-500 text-[10.5px] block font-medium">Platform Administrators</span>
+                      <span className="text-slate-500 text-[10.5px] block font-medium">Added Administrators</span>
                       <span className="text-sm font-black text-slate-900">{platformAdminsTotal.toLocaleString()}</span>
                       <span className="text-[9.5px] text-slate-400 block mt-0.5">{adminPct}% of userbase</span>
                     </div>
@@ -8040,41 +7633,25 @@ export default function RootLayout() {
                               type="button"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                setAdminApplicants((prev) =>
-                                  prev.map((a) =>
-                                    a.id === applicant.id
-                                      ? { ...a, status: 'approved', verifiedBadge: !applicant.idVerificationSkipped }
-                                      : a
-                                  )
-                                );
-
-                                // Send in-app notification to applicant
-                                const appNotif: NotificationItem = {
-                                  id: `notif-app-appr-${Date.now()}`,
-                                  type: 'safety',
-                                  title: 'Application Approved! 🎉',
-                                  body: `Congratulations! Your application for "${applicant.name}" has been approved by Haraka Trust & Safety. Your account is now upgraded to a Verified Seller account.`,
-                                  time: 'Just now',
-                                  read: false,
-                                };
-                                setNotifications((prev) => [appNotif, ...prev]);
-
-                                // Upgrade account to seller account
-                                if (applicant.id === submittedSellerApplicantId || applicant.name === userProfile.name) {
-                                  setCurrentUserRole(applicant.role === 'artisan' ? 'artisan' : 'seller');
-                                  setUserProfile((prev) => ({
-                                    ...prev,
-                                    isApproved: true,
-                                    isVerified: true,
-                                  }));
-                                }
-
-                                showToast(`✅ Approved ${applicant.name}! Account upgraded to Seller.`);
+                                decideOnApplicant(applicant.id, 'approve');
                               }}
-                              className="flex-1 py-1.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs cursor-pointer shadow-2xs transition-colors flex items-center justify-center gap-1.5"
+                              className="flex-1 py-1.5 px-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs cursor-pointer shadow-2xs transition-colors flex items-center justify-center gap-1"
                             >
                               <CheckCircle2 size={13} className="stroke-[2.5]" />
-                              <span>{applicant.idVerificationSkipped ? 'Approve' : 'Approve & Verify'}</span>
+                              <span>Approve</span>
+                            </button>
+                            <button
+                              type="button"
+                              disabled={!hasRequiredDocuments(applicant)}
+                              title={hasRequiredDocuments(applicant) ? 'Approve and give the Verified badge' : 'Needs Ghana Card number and both card photos'}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                decideOnApplicant(applicant.id, 'verify');
+                              }}
+                              className="flex-1 py-1.5 px-2 rounded-xl bg-[#046A38] hover:bg-[#035a2f] text-white font-bold text-xs cursor-pointer shadow-2xs transition-colors flex items-center justify-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
+                            >
+                              <ShieldCheck size={13} className="stroke-[2.5]" />
+                              <span>Verify</span>
                             </button>
                             <button
                               type="button"
@@ -8214,7 +7791,7 @@ export default function RootLayout() {
                   <div
                     onClick={() => {
                       if (item.hasPendingOffer) {
-                        navigateTo({ type: 'chat', id: item.pendingOfferChatId || 'conv-mahogany-offer' });
+                        if (item.pendingOfferChatId) navigateTo({ type: 'chat', id: item.pendingOfferChatId });
                       } else {
                         navigateTo({ type: 'listing', id: item.id });
                       }
@@ -8292,6 +7869,26 @@ export default function RootLayout() {
     );
   };
 
+  /** Friendly screen for links to things that no longer exist (or never did). */
+  const renderUnavailable = (title: string, message: string) => (
+    <div className="flex-1 flex flex-col items-center justify-center gap-4 p-8 text-center bg-white min-h-full">
+      <div className="w-14 h-14 rounded-full bg-slate-100 flex items-center justify-center">
+        <Package size={26} className="text-slate-400" />
+      </div>
+      <div>
+        <h2 className="text-base font-black text-slate-900">{title}</h2>
+        <p className="text-xs text-slate-500 mt-1">{message}</p>
+      </div>
+      <button
+        type="button"
+        onClick={() => navigateTo({ type: 'tabs', tab: 'home' })}
+        className="px-5 py-2.5 rounded-xl bg-[#FF6A00] text-white text-xs font-bold cursor-pointer"
+      >
+        Back to Home
+      </button>
+    </div>
+  );
+
   // Render current mobile screen
   const renderCurrentScreen = () => {
     switch (currentRoute.type) {
@@ -8299,7 +7896,18 @@ export default function RootLayout() {
         return (
           <SplashScreen
             onFinish={() => {
-              setCurrentRoute({ type: 'onboarding' });
+              const params = new URLSearchParams(window.location.search);
+              const sharedListingId = params.get('listing');
+              const sharedArtisanId = params.get('artisan');
+              if (sharedListingId || sharedArtisanId) {
+                // Opened from a shared link: show it straight away, with Home behind it for "Back"
+                setRouteHistory([{ type: 'tabs', tab: 'home' }]);
+                setCurrentRoute(
+                  sharedListingId ? { type: 'listing', id: sharedListingId } : { type: 'artisan-profile', id: sharedArtisanId! }
+                );
+                return;
+              }
+              setCurrentRoute(firebaseUidRef.current ? { type: 'tabs', tab: 'home' } : { type: 'onboarding' });
             }}
             autoDismissMs={3000}
             showDismissButton={false}
@@ -8368,6 +7976,7 @@ export default function RootLayout() {
             onNavigateLogin={() => {
               navigateTo({ type: 'login' });
             }}
+            showSocialLogins={!native}
           />
         );
       }
@@ -8666,8 +8275,14 @@ export default function RootLayout() {
                     slides = [
                       {
                         id: 'app-status',
-                        title: 'Seller Application Under Review',
-                        desc: 'Your store registration and Ghana Card documents are currently being processed by admin.',
+                        title:
+                          adminApplicants.find((a) => a.id === submittedSellerApplicantId)?.status === 'rejected'
+                            ? 'Application Not Approved'
+                            : 'Seller Application Under Review',
+                        desc:
+                          adminApplicants.find((a) => a.id === submittedSellerApplicantId)?.status === 'rejected'
+                            ? 'See the reason from our team, update your details and reapply.'
+                            : 'Your store registration and Ghana Card documents are currently being processed by admin.',
                         btnText: 'Check Application',
                         bgGradient: 'from-[#EA580C] via-[#F97316] to-[#C2410C]',
                         action: () => navigateTo({ type: 'pending-application', applicantId: submittedSellerApplicantId }),
@@ -8843,6 +8458,20 @@ export default function RootLayout() {
                   </span>
                 </div>
 
+                {filteredListings.length === 0 && (
+                  <div className="mx-4 mb-8 mt-2 rounded-2xl border border-dashed border-slate-200 bg-white p-6 text-center">
+                    <Package size={28} className="mx-auto text-slate-300" />
+                    <p className="mt-2 text-sm font-bold text-slate-800">
+                      {listingsLoaded ? 'No ads here yet' : 'Loading ads…'}
+                    </p>
+                    {listingsLoaded && (
+                      <p className="mt-1 text-xs text-slate-500">
+                        Try another region or filter, or check back soon as new ads are posted.
+                      </p>
+                    )}
+                  </div>
+                )}
+
                 {/* Listings 2-Column Grid matching screenshot */}
                 <div className="grid grid-cols-2 gap-2.5 px-3 pb-6">
                   {filteredListings.map((item) => {
@@ -8960,7 +8589,7 @@ export default function RootLayout() {
                         </div>
                         <div>
                           <h3 className="text-xs font-extrabold text-slate-900">{cat.name}</h3>
-                          <p className="text-[10px] text-slate-400 font-medium mt-0.5">{cat.count}+ active ads in Ghana</p>
+                          <p className="text-[10px] text-slate-400 font-medium mt-0.5">{listings.filter((l) => l.category === cat.id).length} active ads</p>
                         </div>
                       </div>
                       <ChevronRight size={17} className="text-slate-400 shrink-0" />
@@ -9429,19 +9058,19 @@ export default function RootLayout() {
                   seller: {
                     id: 'seller-me',
                     name: userProfile.name || 'You',
-                    avatar: userProfile.avatar || myItem.image,
-                    isVerified: true,
-                    memberSince: '2023',
-                    rating: 5,
-                    reviewCount: 1,
-                    phone: '',
-                    whatsapp: '',
-                    location: 'Accra',
-                    responseRate: '100%',
-                    responseTime: 'Instant',
+                    avatar: userProfile.avatar || '',
+                    isVerified: Boolean(userProfile.isVerified),
+                    memberSince: userProfile.memberSince ? `Member since ${userProfile.memberSince}` : '',
+                    rating: userProfile.rating || 0,
+                    reviewCount: userProfile.reviewsCount || 0,
+                    phone: userProfile.phone,
+                    whatsapp: userProfile.whatsapp,
+                    location: userProfile.location,
+                    responseRate: '',
+                    responseTime: '',
                   },
                   featured: false,
-                  isVerifiedDeal: true,
+                  isVerifiedDeal: Boolean(userProfile.isVerified),
                   createdAt: myItem.date,
                   views: myItem.views,
                   likes: 5,
@@ -10147,7 +9776,7 @@ export default function RootLayout() {
                             <div key={ad.id} className="flex items-start gap-3 border-b border-slate-100 last:border-b-0 pb-2.5 last:pb-0">
                               <div className="relative shrink-0">
                                 <img
-                                  src={ad.image || 'https://images.unsplash.com/photo-1592750475338-74b7b21085ab?auto=format&fit=crop&w=400&q=80'}
+                                  src={ad.image || PLACEHOLDER_IMAGE}
                                   alt={ad.title}
                                   className="w-16 h-16 rounded-xl object-cover border border-slate-100"
                                 />
@@ -10778,11 +10407,29 @@ export default function RootLayout() {
                             }));
                           }
                           setShowEditProfileModal(false);
-                          showToast(
-                            currentUserRole === 'artisan' && feeNum === 0
-                              ? 'Profile updated! Rate set to FREE INSPECTION on cards'
-                              : 'Profile updated successfully!'
-                          );
+                          if (!firebaseUid) {
+                            showToast('⚠️ Log in to save your profile.');
+                            return;
+                          }
+                          saveUserProfile(firebaseUid, {
+                            name: editProfileForm.name,
+                            phone: editProfileForm.phone,
+                            whatsapp: editProfileForm.whatsapp,
+                            avatar: editProfileForm.avatar || userProfile.avatar,
+                            location: resolvedLocation,
+                            bio: editProfileForm.bio || '',
+                          })
+                            .then(() =>
+                              showToast(
+                                currentUserRole === 'artisan' && feeNum === 0
+                                  ? 'Profile updated! Rate set to FREE INSPECTION on cards'
+                                  : 'Profile updated successfully!'
+                              )
+                            )
+                            .catch((err) => {
+                              console.warn('Could not save profile', err);
+                              showToast('⚠️ Your profile could not be saved. Check your connection.');
+                            });
                         }}
                         className="flex-1 py-2.5 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs cursor-pointer shadow-xs active:scale-98 transition-all"
                       >
@@ -10905,6 +10552,14 @@ export default function RootLayout() {
                                 : l
                             )
                           );
+                          if (firebaseUid) {
+                            updateRemoteListing(editingAd.id, {
+                              title: editingAd.title,
+                              price: Number(editingAd.price),
+                              categoryName: editingAd.category,
+                              isSold: editingAd.status === 'Sold',
+                            }).catch((err) => console.warn('Could not update listing', err));
+                          }
                           setEditingAd(null);
                           showToast('Listing updated successfully!');
                         }}
@@ -10959,6 +10614,9 @@ export default function RootLayout() {
                           const titleToDelete = deletingAdItem.title;
                           setMyOwnListings((prev) => prev.filter((l) => l.id !== idToDelete));
                           setListings((prev) => prev.filter((l) => l.id !== idToDelete && l.title !== titleToDelete));
+                          if (firebaseUid) {
+                            deleteRemoteListing(idToDelete).catch((err) => console.warn('Could not delete listing', err));
+                          }
                           setDeletingAdItem(null);
                           showToast('Ad permanently deleted from marketplace.');
                         }}
@@ -11199,12 +10857,39 @@ export default function RootLayout() {
       }
 
       case 'listing': {
-        const item = listings.find((l) => l.id === currentRoute.id) || listings.find((l) => l.id === 'listing-airpods-pro-2') || listings[0];
+        const foundItem = listings.find((l) => l.id === currentRoute.id);
+        if (!foundItem) {
+          return (
+            <div className="flex-1 flex flex-col items-center justify-center gap-4 p-8 text-center bg-white min-h-full">
+              {listingsLoaded ? (
+                <>
+                  <div className="w-14 h-14 rounded-full bg-slate-100 flex items-center justify-center">
+                    <Package size={26} className="text-slate-400" />
+                  </div>
+                  <div>
+                    <h2 className="text-base font-black text-slate-900">This ad is no longer available</h2>
+                    <p className="text-xs text-slate-500 mt-1">It may have been sold or removed by the seller.</p>
+                  </div>
+                </>
+              ) : (
+                <p className="text-sm font-semibold text-slate-500">Loading ad…</p>
+              )}
+              <button
+                type="button"
+                onClick={() => navigateTo({ type: 'tabs', tab: 'home' })}
+                className="px-5 py-2.5 rounded-xl bg-[#FF6A00] text-white text-xs font-bold cursor-pointer"
+              >
+                Browse other ads
+              </button>
+            </div>
+          );
+        }
+        const item = foundItem;
         const isSaved = savedIds.includes(item.id);
         const isFollowing = followedSellerIds.includes(item.seller.id);
         const itemImages = (item.images && item.images.length > 0)
           ? item.images
-          : ['https://images.unsplash.com/photo-1592750475338-74b7b21085ab?auto=format&fit=crop&w=1000&q=80'];
+          : [PLACEHOLDER_IMAGE];
         const sellerActiveListings = listings.filter(
           (l) => l.seller.id === item.seller.id || (l.seller.name && item.seller.name && l.seller.name.toLowerCase() === item.seller.name.toLowerCase())
         );
@@ -11336,7 +11021,7 @@ export default function RootLayout() {
                     alt={item.title}
                     className="w-full h-full object-cover group-hover:scale-[1.01] transition-transform duration-300"
                     onError={(e) => {
-                      (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1592750475338-74b7b21085ab?auto=format&fit=crop&w=1000&q=80';
+                      (e.target as HTMLImageElement).src = PLACEHOLDER_IMAGE;
                     }}
                   />
 
@@ -11413,7 +11098,7 @@ export default function RootLayout() {
                           alt={`Thumbnail ${i + 1}`}
                           className="w-full h-full object-cover"
                           onError={(e) => {
-                            (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1592750475338-74b7b21085ab?auto=format&fit=crop&w=1000&q=80';
+                            (e.target as HTMLImageElement).src = PLACEHOLDER_IMAGE;
                           }}
                         />
                       </button>
@@ -11521,7 +11206,7 @@ export default function RootLayout() {
 
                   <button
                     type="button"
-                    onClick={() => toggleFollowSeller(item.seller?.id || 'seller-peter-k')}
+                    onClick={() => item.seller?.id && toggleFollowSeller(item.seller.id)}
                     className="shrink-0 text-xs font-bold text-blue-600 hover:text-blue-700 transition-colors cursor-pointer py-1 px-1.5"
                   >
                     {isFollowing ? 'Following' : 'Follow'}
@@ -11562,15 +11247,11 @@ export default function RootLayout() {
                     </span>
                     <ArrowRight size={13} className="text-emerald-600" />
                   </button>
-                  <span className="flex items-center gap-1.5 text-slate-600 font-semibold text-[11px]">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block animate-pulse" />
-                    <span>Active Now</span>
-                  </span>
                 </div>
               </div>
 
               {/* 3. Audio Description by Seller Card (Only shown when listing has real audio) */}
-              {item.hasAudioDescription && (
+              {item.hasAudioDescription && item.audioDescriptionUrl && (
                 <div className="bg-white rounded-3xl p-4 border border-slate-100 shadow-xs space-y-3">
                   <div className="flex items-center gap-2.5">
                     <div className="w-8 h-8 rounded-full bg-[#E6F7EF] flex items-center justify-center shrink-0">
@@ -11585,7 +11266,7 @@ export default function RootLayout() {
                   <div className="bg-[#EEF3F8] rounded-2xl p-3 sm:p-3.5 flex items-center gap-3">
                     <button
                       type="button"
-                      onClick={() => togglePlayListingAudio(item.id, item.audioDescriptionDuration || 30)}
+                      onClick={() => togglePlayListingAudio(item.id, item.audioDescriptionUrl)}
                       className="w-11 h-11 rounded-full bg-[#00A86B] hover:bg-[#00965F] text-white flex items-center justify-center shrink-0 shadow-md shadow-emerald-600/20 active:scale-95 transition-all cursor-pointer"
                       title={activeListingPlayingId === item.id ? 'Pause audio' : 'Play audio description'}
                     >
@@ -11599,7 +11280,7 @@ export default function RootLayout() {
                     <div className="flex-1 min-w-0">
                       <div
                         className="flex items-center gap-[3px] h-7 mb-1 cursor-pointer"
-                        onClick={() => togglePlayListingAudio(item.id, item.audioDescriptionDuration || 30)}
+                        onClick={() => togglePlayListingAudio(item.id, item.audioDescriptionUrl)}
                       >
                         {[
                           { h: 32, type: 'green' },
@@ -11643,12 +11324,10 @@ export default function RootLayout() {
 
                       <div className="flex items-center justify-between text-xs font-semibold px-0.5">
                         <span className="text-[#00875A]">
-                          {activeListingPlayingId === item.id
-                            ? `0:${(listingAudioProgress[item.id] ?? 18).toString().padStart(2, '0')}`
-                            : '0:18'}
+                          {formatAudioTime(listingAudioProgress[item.id] || 0)}
                         </span>
                         <span className="text-[#64748B]">
-                          0:{item.audioDescriptionDuration || 30}
+                          {formatAudioTime(listingAudioDurations[item.id] || item.audioDescriptionDuration || 0)}
                         </span>
                       </div>
                     </div>
@@ -11883,7 +11562,7 @@ export default function RootLayout() {
                   avatar: matchedArtisan.avatar,
                   isVerified: matchedArtisan.verified ?? true,
                   online: true,
-                  phone: matchedArtisan.phone || '+233 24 555 1234',
+                  phone: matchedArtisan.phone || '',
                 },
                 lastMessage: `Hello! I am ${matchedArtisan.name}. How can I assist you with your request today?`,
                 lastMessageTime: 'Just now',
@@ -11907,7 +11586,7 @@ export default function RootLayout() {
         }
 
         const sellerFirstName = activeConv.otherUser.name.split(' ')[0] || 'Seller';
-        const contactPhone = activeConv.otherUser.phone || '+233 24 555 1234';
+        const contactPhone = activeConv.otherUser.phone || '';
         const rawPrice = typeof activeConv.listingPrice === 'number' ? activeConv.listingPrice : 0;
         const hasValidPrice = rawPrice > 0;
         const step = rawPrice > 20000 ? 1000 : rawPrice > 5000 ? 100 : rawPrice > 500 ? 50 : 10;
@@ -12004,8 +11683,8 @@ export default function RootLayout() {
             {/* Chat Feed */}
             <div className="flex-1 p-3.5 overflow-y-auto flex flex-col gap-3 bg-[#F8FAFC]">
               {activeConv.messages.map((m) => {
-                const isOfferAccepted = !!acceptedOffers[m.id] || (activeConv.id === 'conv-mahogany-offer' && !!acceptedOffers['conv-mahogany-offer']);
-                const currentOfferVal = m.offerAmount || (hasValidPrice ? offer1Amount : 1950);
+                const isOfferAccepted = !!acceptedOffers[m.id] || false;
+                const currentOfferVal = m.offerAmount || offer1Amount;
 
                 return (
                   <React.Fragment key={m.id}>
@@ -12074,14 +11753,26 @@ export default function RootLayout() {
                             <div className="flex flex-wrap items-center gap-2 pt-0.5">
                               <button
                                 type="button"
-                                onClick={() => handleSendChatMessage("📍 Meetup Location: East Legon, Accra near American House. Ready for pickup today.", false)}
+                                onClick={() => {
+                                  if (!userProfile.location) {
+                                    showToast('Add your location in Edit Profile first.');
+                                    return;
+                                  }
+                                  handleSendChatMessage(`📍 Meetup Location: ${userProfile.location}. Ready for pickup.`, false);
+                                }}
                                 className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] cursor-pointer active:scale-95 transition-all shadow-xs"
                               >
                                 Send Pickup Address
                               </button>
                               <button
                                 type="button"
-                                onClick={() => handleSendChatMessage("📱 Payment via MTN MoMo: +233 24 999 1122 or cash on pickup.", false)}
+                                onClick={() => {
+                                  if (!userProfile.phone) {
+                                    showToast('Add your phone number in Edit Profile first.');
+                                    return;
+                                  }
+                                  handleSendChatMessage(`📱 Payment via Mobile Money: ${userProfile.phone} (${userProfile.name}) or cash on pickup.`, false);
+                                }}
                                 className="px-3 py-1.5 rounded-xl border border-emerald-300 bg-white hover:bg-emerald-50 text-emerald-800 font-bold text-[11px] cursor-pointer active:scale-95 transition-all"
                               >
                                 Share Payment Info
@@ -12370,7 +12061,11 @@ export default function RootLayout() {
                   <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200 text-xs text-slate-900">
                     <p className="font-bold text-slate-900">{activeConv.listingTitle}</p>
                     <p className="text-[11px] text-slate-600 mt-0.5">
-                      Listed: GH₵ {rawPrice.toLocaleString()} • Buyer offered: GH₵ 1,950
+                      Listed: GH₵ {rawPrice.toLocaleString()}
+                      {(() => {
+                        const offered = activeConv.messages.find((msg) => msg.id === showCounterOfferModal)?.offerAmount;
+                        return offered ? ` • Buyer offered: GH₵ ${offered.toLocaleString()}` : '';
+                      })()}
                     </p>
                   </div>
 
@@ -12819,7 +12514,7 @@ export default function RootLayout() {
                           </div>
                           <div className="min-w-0">
                             <h4 className="text-xs font-bold text-slate-900 truncate">{c.name}</h4>
-                            <p className="text-[10px] text-slate-400">{c.count}+ items</p>
+                            <p className="text-[10px] text-slate-400">{listings.filter((l) => l.category === c.id).length} items</p>
                           </div>
                         </div>
                       ))}
@@ -13144,8 +12839,10 @@ export default function RootLayout() {
         const artisanId = currentRoute.id || 'artisan-kofi';
         const artisan =
           ARTISANS_DIRECTORY.find((a) => a.id === artisanId) ||
-          FEATURED_ARTISANS.find((a) => a.id === artisanId) ||
-          ARTISANS_DIRECTORY[0];
+          FEATURED_ARTISANS.find((a) => a.id === artisanId);
+        if (!artisan) {
+          return renderUnavailable('This artisan is not available', 'They may have left Haraka or the link is incorrect.');
+        }
         const firstName = artisan.name.split(' ')[0];
         const isArtisanLiveAvailable = getArtisanAvailability(artisan.id);
 
@@ -13173,20 +12870,20 @@ export default function RootLayout() {
                     const shareData = {
                       title: `${artisan.name} - ${artisan.role}`,
                       text: `Check out ${artisan.name} (${artisan.role}) in ${artisan.location} on Haraka!`,
-                      url: window.location.href,
+                      url: `${PUBLIC_WEB_URL}/?artisan=${encodeURIComponent(artisan.id)}`,
                     };
                     if (typeof navigator !== 'undefined' && navigator.share) {
                       navigator.share(shareData).catch((err) => {
                         if (err?.name !== 'AbortError') {
                           try {
-                            navigator.clipboard?.writeText(window.location.href);
+                            navigator.clipboard?.writeText(shareData.url);
                           } catch {}
                           showToast('Profile link copied to clipboard!');
                         }
                       });
                     } else {
                       try {
-                        navigator.clipboard?.writeText(window.location.href);
+                        navigator.clipboard?.writeText(shareData.url);
                       } catch {}
                       showToast('Profile link copied to clipboard!');
                     }
@@ -13608,8 +13305,10 @@ export default function RootLayout() {
         const artisanId = currentRoute.artisanId || bookingArtisanId || 'artisan-kofi';
         const artisan =
           ARTISANS_DIRECTORY.find((a) => a.id === artisanId) ||
-          FEATURED_ARTISANS.find((a) => a.id === artisanId) ||
-          ARTISANS_DIRECTORY[0];
+          FEATURED_ARTISANS.find((a) => a.id === artisanId);
+        if (!artisan) {
+          return renderUnavailable('This artisan is not available', 'They may have left Haraka or the link is incorrect.');
+        }
         const profileData = getArtisanProfileData(artisan);
         const firstName = artisan.name.split(' ')[0];
 
@@ -14170,18 +13869,17 @@ export default function RootLayout() {
 
                     <div className="flex gap-2.5 overflow-x-auto pb-1 no-scrollbar">
                       {/* Upload Button */}
+                      <input
+                        ref={bookingPhotoInputRef}
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        className="hidden"
+                        onChange={handleBookingPhotosSelected}
+                      />
                       <button
                         type="button"
-                        onClick={() => {
-                          showToast('Photo added from gallery');
-                          setBookingPhotos((prev) => [
-                            ...prev,
-                            {
-                              url: 'https://images.unsplash.com/photo-1617806118233-18e1de247200?auto=format&fit=crop&w=400&q=80',
-                              label: `Photo ${prev.length + 1}`,
-                            },
-                          ]);
-                        }}
+                        onClick={() => bookingPhotoInputRef.current?.click()}
                         className="w-24 h-24 rounded-2xl bg-white border-2 border-dashed border-slate-200 hover:border-orange-400 flex flex-col items-center justify-center gap-1 shrink-0 text-slate-500 hover:text-orange-600 transition-colors cursor-pointer"
                       >
                         <Upload size={20} className="text-orange-500" />
@@ -14575,7 +14273,7 @@ export default function RootLayout() {
                     <div className="grid grid-cols-2 gap-2.5 pt-0.5">
                       <div className="relative rounded-2xl overflow-hidden aspect-4/3 bg-slate-100 border border-slate-200/80">
                         <img
-                          src={bookingPhotos[0]?.url || "https://images.unsplash.com/photo-1513694203232-719a280e022f?auto=format&fit=crop&w=400&q=80"}
+                          src={bookingPhotos[0]?.url || PLACEHOLDER_IMAGE}
                           alt="Wall"
                           className="w-full h-full object-cover"
                         />
@@ -14588,7 +14286,7 @@ export default function RootLayout() {
 
                       <div className="relative rounded-2xl overflow-hidden aspect-4/3 bg-slate-100 border border-slate-200/80">
                         <img
-                          src={bookingPhotos[1]?.url || "https://images.unsplash.com/photo-1503387762-592deb58ef4e?auto=format&fit=crop&w=400&q=80"}
+                          src={bookingPhotos[1]?.url || PLACEHOLDER_IMAGE}
                           alt="Reference Sketch"
                           className="w-full h-full object-cover"
                         />
@@ -14808,7 +14506,7 @@ export default function RootLayout() {
                         artisanId: artisan.id,
                         artisanName: artisan.name,
                         artisanAvatar: artisan.avatar,
-                        artisanPhone: '+233 24 987 6543',
+                        artisanPhone: '',
                         trade: profileData.subrole || 'Verified',
                         subrole: profileData.subrole || 'Master Artisan',
                         service: bookingService,
@@ -15736,7 +15434,7 @@ export default function RootLayout() {
                   type="button"
                   onClick={() => {
                     if (navigator.share) {
-                      navigator.share({ title: 'Join Haraka as a Partner', url: window.location.href }).catch(() => {});
+                      navigator.share({ title: 'Join Haraka as a Partner', url: PUBLIC_WEB_URL }).catch(() => {});
                     } else {
                       showToast('Link copied to clipboard!');
                     }
@@ -15950,7 +15648,7 @@ export default function RootLayout() {
                 <button
                   type="button"
                   onClick={async () => {
-                    const shareUrl = window.location.origin + (isArtisanReg ? '/register-artisan' : '/register-seller');
+                    const shareUrl = PUBLIC_WEB_URL;
                     const shareData = {
                       title: isArtisanReg ? 'Haraka Artisan Registration' : 'Haraka Seller Registration',
                       text: isArtisanReg ? 'Join Haraka Ghana as a verified trade artisan!' : 'Join Haraka Ghana as a verified seller!',
@@ -18329,7 +18027,7 @@ export default function RootLayout() {
                                           title: newPortfolioTitle.trim(),
                                           tag: newPortfolioTag.trim() || 'Work',
                                           sub: newPortfolioSub.trim() || 'Accra • Completed Project',
-                                          img: newPortfolioImg || 'https://images.unsplash.com/photo-1509391365360-2e959784a276?auto=format&fit=crop&w=600&q=80',
+                                          img: newPortfolioImg || PLACEHOLDER_IMAGE,
                                         },
                                       ]);
                                       setNewPortfolioTitle('');
@@ -20265,12 +19963,18 @@ export default function RootLayout() {
               <div className="sticky bottom-0 z-30 bg-white/95 backdrop-blur-md px-4 py-3 border-t border-slate-100 flex items-center gap-3 shadow-lg">
                 <button
                   type="button"
-                  onClick={() => {
+                  disabled={isSubmittingApplication}
+                  onClick={async () => {
+                    if (isSubmittingApplication) return;
                     if (!validateSellerStep3()) return;
+                    if (!firebaseUid) {
+                      showToast('⚠️ Please log in or sign up first. Your form details are kept.');
+                      navigateTo({ type: 'login' });
+                      return;
+                    }
                     const isShop = sellerRegForm.sellerAccountType === 'shop' || sellerRegType === 'storefront';
                     const isArtisan = sellerRegType === 'artisan';
-                    const newAppId = `app-${Date.now()}`;
-                    setSubmittedSellerApplicantId(newAppId);
+                    const newAppId = firebaseUid;
                     const certDetail = businessCertNumber.trim()
                       ? businessCertNumber.trim()
                       : (businessCertPhoto
@@ -20285,7 +19989,7 @@ export default function RootLayout() {
 
                     const applicantRecord: AdminApplicant = {
                       id: newAppId,
-                      name: (isShop ? sellerRegForm.storeName : sellerRegForm.displayName) || sellerRegForm.fullName || (isArtisan ? 'Kwame Artisan' : 'Kwame Mensah'),
+                      name: (isShop ? sellerRegForm.storeName : sellerRegForm.displayName) || sellerRegForm.fullName || userProfile.name || '',
                       legalName: sellerRegForm.fullName || '—',
                       email: sellerRegForm.email || '—',
                       gender: sellerRegForm.gender || '—',
@@ -20293,12 +19997,12 @@ export default function RootLayout() {
                       role: isArtisan ? 'artisan' : 'seller',
                       sellerAccountType: isShop ? 'shop' : 'individual',
                       tradeCategory: isArtisan
-                        ? (sellerRegForm.tradeSkill || 'Plumbing & Drainage Engineering')
-                        : (sellerRegForm.selectedCategories.join(', ') || 'General Merchant'),
-                      tradeSkill: isArtisan ? (sellerRegForm.tradeSkill || 'Plumbing & Drainage Engineering') : undefined,
-                      experienceYears: isArtisan ? (sellerRegForm.experienceYears || '5+ Years') : undefined,
-                      inspectionFee: isArtisan ? (sellerRegForm.inspectionFee || 80) : undefined,
-                      responseTime: isArtisan ? (userProfile.responseTime || '< 15m') : sellerResponseTime,
+                        ? (sellerRegForm.tradeSkill || '')
+                        : (sellerRegForm.selectedCategories.join(', ') || ''),
+                      tradeSkill: isArtisan ? (sellerRegForm.tradeSkill || '') : undefined,
+                      experienceYears: isArtisan ? (sellerRegForm.experienceYears || '') : undefined,
+                      inspectionFee: isArtisan ? (sellerRegForm.inspectionFee || 0) : undefined,
+                      responseTime: isArtisan ? (userProfile.responseTime || '') : sellerResponseTime,
                       ghanaCardId: isIdVerificationSkipped ? '' : (sellerRegForm.ghanaCardPin || ''),
                       idVerificationSkipped: isIdVerificationSkipped,
                       frontPhoto: !isIdVerificationSkipped ? ((ghanaCardFrontPreview || ghanaCardFrontName) || undefined) : undefined,
@@ -20306,12 +20010,12 @@ export default function RootLayout() {
                       phone: '+233 ' + sellerRegForm.phoneNumber,
                       whatsapp: sellerRegForm.allowWhatsApp ? ('+233 ' + (sellerRegForm.whatsapp || sellerRegForm.phoneNumber)) : undefined,
                       allowWhatsApp: sellerRegForm.allowWhatsApp,
-                      region: sellerRegForm.region || 'Greater Accra',
-                      cityNeighborhood: sellerRegForm.cityNeighborhood || 'Spintex',
-                      location: `${sellerRegForm.cityNeighborhood || 'Spintex'}, ${sellerRegForm.region || 'Greater Accra'}`,
+                      region: sellerRegForm.region || '',
+                      cityNeighborhood: sellerRegForm.cityNeighborhood || '',
+                      location: [sellerRegForm.cityNeighborhood, sellerRegForm.region].filter(Boolean).join(', '),
                       isHomeBased: sellerRegForm.isHomeBased,
                       shopAddress: isShop ? (sellerRegForm.shopAddress || `${sellerRegForm.cityNeighborhood}, ${sellerRegForm.region}`) : undefined,
-                      operatingHours: isShop ? (sellerRegForm.operatingHours || shopWorkingHours || 'Mon - Sat: 8:30 AM - 7:00 PM') : undefined,
+                      operatingHours: isShop ? (sellerRegForm.operatingHours || shopWorkingHours || '') : undefined,
                       businessOrCert: certDetail,
                       businessCertNumber: businessCertNumber.trim() || undefined,
                       businessCertPhoto: businessCertPhoto || undefined,
@@ -20327,7 +20031,7 @@ export default function RootLayout() {
                       neighborhoodPrivacyGuard: neighborhoodPrivacyGuard,
                       confirmSafeTradePayout: confirmSafeTradePayout,
                       // Artisan Specific Features (Image 1, 2, 3)
-                      headline: isArtisan ? (artisanHeadline || 'Certified Solar Wireman & Energy Specialist') : undefined,
+                      headline: isArtisan ? (artisanHeadline || '') : undefined,
                       policeClearanceStatus: isArtisan ? (isPoliceClearanceSkipped ? 'skipped' : (policeClearanceCertNumber || policeClearancePhoto ? 'cleared' : 'pending')) : undefined,
                       policeClearanceCertNumber: isArtisan && !isPoliceClearanceSkipped ? (policeClearanceCertNumber.trim() || undefined) : undefined,
                       policeClearancePhoto: isArtisan && !isPoliceClearanceSkipped ? (policeClearancePhoto || undefined) : undefined,
@@ -20342,25 +20046,37 @@ export default function RootLayout() {
                       status: 'pending',
                     };
 
-                    setAdminApplicants((prev) => [applicantRecord, ...prev]);
+                    // Send to the admin for review; nothing changes on the account until they decide
+                    setIsSubmittingApplication(true);
+                    try {
+                      const saved = await submitApplication(applicantRecord);
+                      setAdminApplicants((prev) => [saved as unknown as AdminApplicant, ...prev.filter((a) => a.id !== saved.id)]);
+                      setSubmittedSellerApplicantId(saved.id);
+                    } catch (err) {
+                      console.warn('Could not submit application', err);
+                      showToast('⚠️ Your application could not be sent. Check your connection and try again.');
+                      return;
+                    } finally {
+                      setIsSubmittingApplication(false);
+                    }
 
                     // Send in-app notification to applicant upon submitting
                     const submitNotif: NotificationItem = {
                       id: `notif-app-sub-${Date.now()}`,
                       type: 'safety',
-                      title: 'Seller Application Submitted',
-                      body: 'Your seller application has been received and is currently under review by Haraka Trust & Safety (24hrs to 72 hrs).',
+                      title: 'Application Submitted',
+                      body: 'Your application has been received and is being reviewed by Haraka Trust & Safety (24 to 72 hours).',
                       time: 'Just now',
                       read: false,
                     };
                     setNotifications((prev) => [submitNotif, ...prev]);
 
-                    showToast('Application submitted! Your seller verification is pending admin review.');
+                    showToast('Application submitted! An admin will review it shortly.');
                     navigateTo({ type: 'pending-application', applicantId: newAppId });
                   }}
                   className="flex-1 py-3.5 px-4 rounded-2xl font-black text-sm sm:text-base flex items-center justify-center transition-all bg-[#FF6A00] hover:bg-orange-600 text-white shadow-md active:scale-98 cursor-pointer"
                 >
-                  <span>Submit application</span>
+                  <span>{isSubmittingApplication ? 'Submitting…' : 'Submit application'}</span>
                 </button>
               </div>
             )}
@@ -20372,7 +20088,10 @@ export default function RootLayout() {
         const applicantId =
           (currentRoute as { type: 'pending-application'; applicantId?: string }).applicantId ||
           submittedSellerApplicantId;
-        const applicant = adminApplicants.find((a) => a.id === applicantId) || adminApplicants[0];
+        const applicant = adminApplicants.find((a) => a.id === applicantId);
+        if (!applicant) {
+          return renderUnavailable('No application found', 'You have not submitted a partner application yet.');
+        }
         const isApproved = applicant?.status === 'approved';
         const isRejected = applicant?.status === 'rejected';
 
@@ -20509,8 +20228,9 @@ export default function RootLayout() {
                   <button
                     type="button"
                     onClick={() => {
-                      setCurrentUserRole('seller');
-                      navigateTo({ type: 'post-ad-step1' });
+                      const grantedRole = applicant?.role === 'artisan' ? 'artisan' : 'seller';
+                      setCurrentUserRole(grantedRole);
+                      navigateTo(grantedRole === 'artisan' ? { type: 'tabs', tab: 'dashboard' } : { type: 'post-ad-step1' });
                     }}
                     className="w-full py-3.5 px-4 rounded-2xl font-black text-sm bg-[#FF6A00] hover:bg-orange-600 text-white shadow-md active:scale-98 transition-all cursor-pointer flex items-center justify-center gap-2 mt-2"
                   >
@@ -20526,8 +20246,9 @@ export default function RootLayout() {
                   <button
                     type="button"
                     onClick={() => {
-                      setCurrentUserRole('seller');
-                      navigateTo({ type: 'post-ad-step1' });
+                      const grantedRole = applicant?.role === 'artisan' ? 'artisan' : 'seller';
+                      setCurrentUserRole(grantedRole);
+                      navigateTo(grantedRole === 'artisan' ? { type: 'tabs', tab: 'dashboard' } : { type: 'post-ad-step1' });
                     }}
                     className="w-full py-3.5 px-4 rounded-2xl font-black text-sm bg-[#FF6A00] hover:bg-orange-600 text-white shadow-md active:scale-98 transition-all cursor-pointer flex items-center justify-center gap-2"
                   >
@@ -20565,23 +20286,18 @@ export default function RootLayout() {
             onForgotPassword={(resetEmail) => {
               navigateTo({ type: 'forgot-password', defaultEmail: resetEmail });
             }}
-            onOpenDemo={() => {
-              navigateTo({ type: 'demo-accounts' });
-            }}
+            showSocialLogins={!native}
           />
         );
       }
 
       case 'demo-accounts': {
         return (
-          <DemoAccountsScreen
-            onBack={goBack}
-            onSelectRole={(role) => {
-              const account = HARAKA_USERS.find((u) => u.role === role) || HARAKA_USERS[0];
-              handleLoginAsUser(account);
-              navigateTo({ type: 'tabs', tab: 'home' });
-              showToast(`Logged in as ${account.name} (${account.badgeLabel})`, 'check');
-            }}
+          <SignInScreen
+            onSuccess={() => navigateTo({ type: 'tabs', tab: 'home' })}
+            onNavigateSignUp={() => navigateTo({ type: 'sign-up' })}
+            onForgotPassword={(resetEmail) => navigateTo({ type: 'forgot-password', defaultEmail: resetEmail })}
+            showSocialLogins={!native}
           />
         );
       }
@@ -20644,21 +20360,18 @@ export default function RootLayout() {
                 <div className={`flex gap-2 overflow-x-auto pb-1 items-center p-1 rounded-2xl transition-colors ${
                   postAdErrors.images ? 'bg-red-50/50 ring-2 ring-red-400' : ''
                 }`}>
+                  <input
+                    ref={adPhotoInputRef}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                    onChange={handleAdPhotosSelected}
+                  />
                   {(adDraft.images?.length || 0) < 8 && (
                     <button
                       type="button"
-                      onClick={() => {
-                        const SAMPLE_EXTRA_PHOTOS = [
-                          'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?auto=format&fit=crop&w=600&q=80',
-                          'https://images.unsplash.com/photo-1546868871-7041f2a55e12?auto=format&fit=crop&w=600&q=80',
-                          'https://images.unsplash.com/photo-1583394838336-acd977736f90?auto=format&fit=crop&w=600&q=80',
-                          'https://images.unsplash.com/photo-1526170375885-4d8ecf77b99f?auto=format&fit=crop&w=600&q=80',
-                        ];
-                        const current = adDraft.images || [];
-                        const nextPhoto = SAMPLE_EXTRA_PHOTOS[current.length % SAMPLE_EXTRA_PHOTOS.length];
-                        setAdDraft({ ...adDraft, images: [...current, nextPhoto] });
-                        showToast('Photo added! (Up to 8 allowed)');
-                      }}
+                      onClick={() => adPhotoInputRef.current?.click()}
                       className="w-20 h-20 rounded-xl border-2 border-dashed border-orange-300 bg-orange-50/50 flex flex-col items-center justify-center text-orange-600 gap-1 shrink-0 hover:bg-orange-100/60 active:scale-95 transition-all cursor-pointer"
                     >
                       <Camera size={20} />
@@ -20695,7 +20408,7 @@ export default function RootLayout() {
                           Set Cover
                         </div>
                       )}
-                      {(adDraft.images?.length || 0) > 1 && (
+                      {(adDraft.images?.length || 0) > 0 && (
                         <button
                           type="button"
                           onClick={(e) => {
@@ -20975,12 +20688,10 @@ export default function RootLayout() {
                           {/* Audio Progress / Duration */}
                           <div className="flex items-center justify-between text-[10px] text-slate-500 font-mono">
                             <span>
-                              {isPlayingAdAudio
-                                ? `00:${Math.round(adAudioProgress * (adDraft.audioDescriptionDuration || 12)) < 10 ? '0' : ''}${Math.round(adAudioProgress * (adDraft.audioDescriptionDuration || 12))}`
-                                : '00:00'}
+                              {formatAudioTime(adAudioProgress * (adDraft.audioDescriptionDuration || 0))}
                             </span>
                             <span>
-                              00:{adDraft.audioDescriptionDuration ? (adDraft.audioDescriptionDuration < 10 ? `0${adDraft.audioDescriptionDuration}` : adDraft.audioDescriptionDuration) : '12'}
+                              {formatAudioTime(adDraft.audioDescriptionDuration || 0)}
                             </span>
                           </div>
                         </div>
@@ -21591,12 +21302,10 @@ export default function RootLayout() {
 
                     <div className="flex items-center justify-between text-xs font-semibold px-0.5">
                       <span className="text-[#00875A] font-mono">
-                        {isPlayingAdAudio
-                          ? `00:${Math.round(adAudioProgress * (adDraft.audioDescriptionDuration || 10)).toString().padStart(2, '0')}`
-                          : '00:00'}
+                        {formatAudioTime(adAudioProgress * (adDraft.audioDescriptionDuration || 0))}
                       </span>
                       <span className="text-[#64748B] font-mono">
-                        00:{(adDraft.audioDescriptionDuration || 10).toString().padStart(2, '0')}
+                        {formatAudioTime(adDraft.audioDescriptionDuration || 0)}
                       </span>
                     </div>
                   </div>
@@ -21654,7 +21363,9 @@ export default function RootLayout() {
 
               {/* Publish Action Button */}
               <button
-                onClick={() => {
+                disabled={isPublishingAd}
+                onClick={async () => {
+                  if (isPublishingAd) return;
                   if (!agreedToGuidelines) {
                     showToast('⚠️ Please agree to the confirmation before publishing');
                     return;
@@ -21675,6 +21386,11 @@ export default function RootLayout() {
                     showToast('⚠️ Detailed description is required (at least 15 characters)');
                     return;
                   }
+                  if (!firebaseUid) {
+                    showToast('⚠️ Please log in to publish your ad');
+                    navigateTo({ type: 'login' });
+                    return;
+                  }
 
                   const newListing: Listing = {
                     id: `listing-new-${Date.now()}`,
@@ -21688,24 +21404,25 @@ export default function RootLayout() {
                     categoryName: adDraft.categoryName || 'Electronics',
                     subcategory: adDraft.subcategory || 'General',
                     condition: (adDraft.condition as any) || 'Brand New',
-                    images: adDraft.images || ['https://images.unsplash.com/photo-1600294037681-c80b4cb5b434?auto=format&fit=crop&w=600&q=80'],
+                    images: adDraft.images || [],
                     location: adDraft.location || { city: 'Greater Accra', neighborhood: 'East Legon' },
                     seller: {
                       id: 'seller-me',
                       name: userProfile.name,
                       avatar: userProfile.avatar,
-                      isVerified: true,
-                      memberSince: `Member since ${userProfile.memberSince}`,
+                      // Badges reflect the admin's decision, never set automatically
+                      isVerified: Boolean(userProfile.isVerified),
+                      memberSince: userProfile.memberSince ? `Member since ${userProfile.memberSince}` : '',
                       rating: userProfile.rating,
                       reviewCount: userProfile.reviewsCount,
                       phone: userProfile.phone,
-                      whatsapp: userProfile.phone.replace(/[^0-9]/g, ''),
+                      whatsapp: (userProfile.whatsapp || userProfile.phone).replace(/[^0-9]/g, ''),
                       location: userProfile.location,
-                      responseRate: '100%',
-                      responseTime: 'Fast',
+                      responseRate: '',
+                      responseTime: '',
                     },
-                    featured: true,
-                    isVerifiedDeal: true,
+                    featured: false,
+                    isVerifiedDeal: Boolean(userProfile.isVerified),
                     createdAt: 'Just now',
                     views: 1,
                     likes: 0,
@@ -21716,7 +21433,17 @@ export default function RootLayout() {
                     specifications: {},
                     tags: ['new', 'verified'],
                   };
-                  setListings([newListing, ...listings]);
+                  setIsPublishingAd(true);
+                  try {
+                    const saved = await createListing(newListing);
+                    setListings((prev) => [saved, ...prev.filter((l) => l.id !== saved.id)]);
+                  } catch (err) {
+                    console.warn('Could not save listing', err);
+                    showToast('⚠️ Your ad could not be published. Check your connection and try again.');
+                    return;
+                  } finally {
+                    setIsPublishingAd(false);
+                  }
                   
                   // Also append to user's managed listings in Profile
                   const myNewAd = {
@@ -21724,7 +21451,7 @@ export default function RootLayout() {
                     title: newListing.title,
                     price: newListing.price,
                     currency: newListing.currency,
-                    image: newListing.images[0] || 'https://images.unsplash.com/photo-1600294037681-c80b4cb5b434?auto=format&fit=crop&w=400&q=80',
+                    image: newListing.images[0] || PLACEHOLDER_IMAGE,
                     category: newListing.categoryName || 'General',
                     status: 'Active' as const,
                     views: 1,
@@ -21772,7 +21499,7 @@ export default function RootLayout() {
                     : 'bg-slate-400 cursor-not-allowed opacity-75'
                 }`}
               >
-                <span>Publish Free Ad Now</span>
+                <span>{isPublishingAd ? 'Publishing…' : 'Publish Free Ad Now'}</span>
               </button>
             </div>
           </div>
@@ -22104,6 +21831,7 @@ export default function RootLayout() {
   return (
     <div className={`min-h-screen ${bgStyle === 'dark' ? 'bg-slate-950 text-slate-100' : 'bg-slate-100 text-slate-900'} flex flex-col font-sans selection:bg-orange-500 selection:text-white transition-colors`}>
       {/* Top Navbar with App Identity and Mode Switcher */}
+      {!native && (
       <header className={`border-b ${bgStyle === 'dark' ? 'border-slate-800 bg-slate-900/90 text-slate-100' : 'border-slate-200 bg-white/95 text-slate-900 shadow-2xs'} backdrop-blur sticky top-0 z-50 px-4 py-2.5 flex items-center justify-between transition-colors`}>
         <div className="flex items-center gap-3">
           <HarakaLogo className="h-8 w-auto max-h-8" />
@@ -22321,14 +22049,16 @@ export default function RootLayout() {
           </div>
         </div>
       </header>
+      )}
 
       {/* Main Workspace */}
       <main className="flex-1 flex overflow-hidden">
         {/* FRAMELESS FULLSCREEN MOBILE VIEW (Zero background, zero shell) */}
         {viewMode === 'frameless' && (
           <div className="flex-1 flex justify-center bg-slate-100 overflow-y-auto">
-            <div className="w-full max-w-[440px] bg-slate-50 min-h-screen flex flex-col text-slate-900 shadow-xl border-x border-slate-200 relative overflow-hidden">
+            <div className={native ? 'w-full max-w-[480px] mx-auto h-dvh bg-slate-50 flex flex-col text-slate-900 relative overflow-hidden' : 'w-full max-w-[440px] bg-slate-50 min-h-screen flex flex-col text-slate-900 shadow-xl border-x border-slate-200 relative overflow-hidden'}>
               {/* Native Notice Badge */}
+              {!native && (<>
               <div className="bg-emerald-600 text-white px-3 py-1.5 text-[11px] font-bold flex items-center justify-between z-30">
                 <span className="flex items-center gap-1.5">
                   <CheckCircle size={13} />
@@ -22348,6 +22078,7 @@ export default function RootLayout() {
                 <div className="w-20 h-3.5 bg-slate-900 rounded-full" />
                 <span className="text-[11px] font-semibold text-slate-900">100%</span>
               </div>
+              </>)}
 
               {/* Screen Content */}
               <div

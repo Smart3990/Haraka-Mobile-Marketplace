@@ -8,3 +8,6 @@ coverage/
 !.env.example
 .aistudio/
 *.rgba
+
+# Firebase CLI deploy cache
+.firebase/

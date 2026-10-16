@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Lock, Eye, EyeOff, CheckCircle2, RefreshCw, KeyRound, ExternalLink } from 'lucide-react';
+import { friendlyAuthError, sendPasswordReset } from '../lib/backend';
 
 interface ForgotPasswordScreenProps {
   initialEmail?: string;
@@ -57,23 +58,13 @@ export default function ForgotPasswordScreen({
     }
 
     setLoading(true);
-    setTimeout(() => {
-      setLoading(false);
-
-      // Check if email is registered in Haraka
-      const isRegistered = registeredEmails.some(
-        (regEmail) => regEmail.trim().toLowerCase() === cleanEmail
-      );
-
-      if (!isRegistered) {
-        setError("This email isn't registered with Haraka. Please check your spelling or sign up.");
-        return;
-      }
-
-      // Email is registered -> generate and send reset link
-      setStep('link_sent');
-      setInfoMessage(`A password reset link has been dispatched to ${cleanEmail}`);
-    }, 500);
+    sendPasswordReset(cleanEmail)
+      .then(() => {
+        setStep('link_sent');
+        setInfoMessage(`If an account exists for ${cleanEmail}, a password reset link is on its way.`);
+      })
+      .catch((err) => setError(friendlyAuthError(err)))
+      .finally(() => setLoading(false));
   };
 
   // Open reset link directly in browser to let user set new password
@@ -86,10 +77,10 @@ export default function ForgotPasswordScreen({
   // Resend reset link
   const handleResendLink = () => {
     setLoading(true);
-    setTimeout(() => {
-      setLoading(false);
-      setInfoMessage(`A fresh reset link has been sent to ${email.trim()}`);
-    }, 500);
+    sendPasswordReset(email.trim().toLowerCase())
+      .then(() => setInfoMessage(`A fresh reset link has been sent to ${email.trim()}`))
+      .catch((err) => setError(friendlyAuthError(err)))
+      .finally(() => setLoading(false));
   };
 
   // Save new password
@@ -203,7 +194,7 @@ export default function ForgotPasswordScreen({
                   type="submit"
                   disabled={loading}
                 >
-                  <span className="text-base">{loading ? 'Verifying Account...' : 'Send Reset Link'}</span>
+                  <span className="text-base">{loading ? 'Sending…' : 'Send Reset Link'}</span>
                   <svg
                     className="w-5 h-5"
                     fill="none"
@@ -230,7 +221,7 @@ export default function ForgotPasswordScreen({
                   <span className="text-3xl">✉️</span>
                 </h1>
                 <p className="text-gray-600 text-sm mt-2.5 leading-relaxed font-normal">
-                  We've verified your registered email and sent a secure reset link to <strong className="text-gray-900">{email}</strong>.
+                  Open the link we sent to <strong className="text-gray-900">{email}</strong> to choose a new password, then log in. Check your spam folder if you don't see it.
                 </p>
               </section>
 
@@ -244,10 +235,9 @@ export default function ForgotPasswordScreen({
               <button
                 className="w-full bg-[#1FA971] hover:bg-[#188659] active:scale-[0.99] text-white font-bold py-4 px-6 rounded-2xl flex items-center justify-center gap-2 shadow-md shadow-[#1FA971]/20 transition-all duration-150 mt-2 cursor-pointer"
                 type="button"
-                onClick={handleOpenResetLink}
+                onClick={onNavigateLogin}
               >
-                <span className="text-base">Open Password Reset Page</span>
-                <ExternalLink className="w-5 h-5" strokeWidth={2.3} />
+                <span className="text-base">Back to Log In</span>
               </button>
 
               <div className="flex flex-col items-center gap-2 pt-3">

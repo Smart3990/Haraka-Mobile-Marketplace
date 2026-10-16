@@ -1,10 +1,13 @@
 import React, { useState } from 'react';
 import { GoogleAuthProvider, signInWithPopup, OAuthProvider } from 'firebase/auth';
 import { auth } from '../lib/firebase';
+import { friendlyAuthError, signUpWithEmail } from '../lib/backend';
 
 interface SignUpScreenProps {
   onSuccess: (userData: { fullName: string; email: string }) => void;
   onNavigateLogin: () => void;
+  /** Google/Apple popup sign-in only works in a browser, not inside the mobile app. */
+  showSocialLogins?: boolean;
 }
 
 const HARAKA_LOGO_URL =
@@ -13,6 +16,7 @@ const HARAKA_LOGO_URL =
 export default function SignUpScreen({
   onSuccess,
   onNavigateLogin,
+  showSocialLogins = true,
 }: SignUpScreenProps) {
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
@@ -21,8 +25,9 @@ export default function SignUpScreen({
   const [agreeTerms, setAgreeTerms] = useState(true);
   const [error, setError] = useState('');
   const [isSocialLoading, setIsSocialLoading] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleSubmit = (e?: React.FormEvent) => {
+  const handleSubmit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     setError('');
 
@@ -46,10 +51,18 @@ export default function SignUpScreen({
       return;
     }
 
-    onSuccess({
-      fullName: nameClean,
-      email: emailClean,
-    });
+    setIsSubmitting(true);
+    try {
+      await signUpWithEmail(nameClean, emailClean, password);
+      onSuccess({
+        fullName: nameClean,
+        email: emailClean,
+      });
+    } catch (err) {
+      setError(friendlyAuthError(err));
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleSocialSignUp = async (provider: 'Google' | 'Apple') => {
@@ -259,10 +272,11 @@ export default function SignUpScreen({
 
           {/* Primary CTA: Create Account */}
           <button
-            className="w-full h-13 py-3.5 bg-[#006B44] hover:bg-[#005435] active:scale-[0.99] text-white font-bold rounded-2xl flex items-center justify-center gap-2 shadow-[0px_8px_20px_-4px_rgba(0,107,68,0.35)] transition-all text-base cursor-pointer"
+            className="w-full h-13 py-3.5 bg-[#006B44] hover:bg-[#005435] active:scale-[0.99] text-white font-bold rounded-2xl flex items-center justify-center gap-2 shadow-[0px_8px_20px_-4px_rgba(0,107,68,0.35)] transition-all text-base cursor-pointer disabled:opacity-60"
             type="submit"
+            disabled={isSubmitting}
           >
-            <span>Create Account</span>
+            <span>{isSubmitting ? 'Creating Account…' : 'Create Account'}</span>
             <svg className="w-5 h-5 stroke-[2.2]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
@@ -270,6 +284,7 @@ export default function SignUpScreen({
         </form>
         {/* END: SignUpForm */}
 
+        {showSocialLogins && (<>
         {/* BEGIN: SocialDivider */}
         <div className="relative my-6 text-center">
           <div aria-hidden="true" className="absolute inset-0 flex items-center">
@@ -319,6 +334,7 @@ export default function SignUpScreen({
           </button>
         </div>
         {/* END: SocialAuthButtons */}
+        </>)}
       </div>
 
       {/* BEGIN: Footer */}

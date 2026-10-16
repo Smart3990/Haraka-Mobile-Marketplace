@@ -11,9 +11,11 @@
     "lint": "tsc --noEmit",
     "start": "expo start",
     "android": "expo start --android",
-    "build:apk": "eas build -p android --profile preview"
+    "build:apk": "eas build -p android --profile preview",
+    "deploy:web": "vite build && npx firebase-tools deploy --only hosting,firestore:rules"
   },
   "dependencies": {
+    "@expo/metro-runtime": "~58.0.14",
     "@google/genai": "^2.4.0",
     "@tailwindcss/vite": "^4.3.3",
     "@vitejs/plugin-react": "^6.1.1",
@@ -37,9 +39,11 @@
     "react-native-screens": "~4.30.0",
     "react-native-svg": "15.16.0",
     "react-native-web": "^0.21.4",
+    "react-native-webview": "14.0.1",
     "vite": "^8.3.0"
   },
   "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
     "@types/react": "^19.3.0",

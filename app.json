@@ -14,14 +14,27 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.haraka.app"
+      "bundleIdentifier": "com.haraka.app",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Haraka uses the microphone to record voice descriptions for your ads and bookings.",
+        "NSLocationWhenInUseUsageDescription": "Haraka uses your location to show listings and artisans in your region.",
+        "NSCameraUsageDescription": "Haraka uses the camera so you can take photos of items you want to sell.",
+        "NSPhotoLibraryUsageDescription": "Haraka accesses your photos so you can add pictures to your ads."
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#EA580C"
       },
-      "package": "com.haraka.app"
+      "package": "com.haraka.app",
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.CAMERA"
+      ]
     },
     "web": {
       "bundler": "metro",

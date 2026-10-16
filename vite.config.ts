@@ -6,6 +6,8 @@ import {defineConfig} from 'vite';
 export default defineConfig(() => {
   return {
     plugins: [react(), tailwindcss()],
+    // Tailwind runs through @tailwindcss/vite here; postcss.config.mjs is only for the Expo bundler.
+    css: { postcss: { plugins: [] } },
     resolve: {
       alias: {
         '@': path.resolve(import.meta.dirname || '.', '.'),

@@ -1,12 +1,15 @@
 import React, { useState } from 'react';
 import { GoogleAuthProvider, signInWithPopup, OAuthProvider } from 'firebase/auth';
 import { auth } from '../lib/firebase';
+import { friendlyAuthError, signInWithEmail } from '../lib/backend';
 
 interface SignInScreenProps {
   onSuccess: (userData: { email: string; name?: string }) => void;
   onNavigateSignUp: () => void;
   onForgotPassword?: (email: string) => void;
   onOpenDemo?: () => void;
+  /** Google/Apple popup sign-in only works in a browser, not inside the mobile app. */
+  showSocialLogins?: boolean;
 }
 
 const HARAKA_LOGO_URL =
@@ -17,6 +20,7 @@ export default function SignInScreen({
   onNavigateSignUp,
   onForgotPassword,
   onOpenDemo,
+  showSocialLogins = true,
 }: SignInScreenProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -25,8 +29,9 @@ export default function SignInScreen({
   const [error, setError] = useState('');
   const [infoMessage, setInfoMessage] = useState('');
   const [isSocialLoading, setIsSocialLoading] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleSubmit = (e?: React.FormEvent) => {
+  const handleSubmit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     setError('');
     setInfoMessage('');
@@ -41,12 +46,18 @@ export default function SignInScreen({
       return;
     }
 
-    const nameFromEmail = emailClean.split('@')[0].replace(/[._-]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-
-    onSuccess({
-      email: emailClean,
-      name: nameFromEmail || '',
-    });
+    setIsSubmitting(true);
+    try {
+      const user = await signInWithEmail(emailClean, password);
+      onSuccess({
+        email: user.email || emailClean,
+        name: user.displayName || '',
+      });
+    } catch (err) {
+      setError(friendlyAuthError(err));
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleSocialSignIn = async (provider: 'Google' | 'Apple') => {
@@ -272,10 +283,11 @@ export default function SignInScreen({
 
           {/* Submit Button */}
           <button
-            className="w-full bg-[#1FA971] hover:bg-[#188659] active:scale-[0.99] text-white font-bold py-4 px-6 rounded-2xl flex items-center justify-center gap-2 shadow-md shadow-[#1FA971]/20 transition-all duration-150 mt-4 cursor-pointer"
+            className="w-full bg-[#1FA971] hover:bg-[#188659] active:scale-[0.99] text-white font-bold py-4 px-6 rounded-2xl flex items-center justify-center gap-2 shadow-md shadow-[#1FA971]/20 transition-all duration-150 mt-4 cursor-pointer disabled:opacity-60"
             type="submit"
+            disabled={isSubmitting}
           >
-            <span className="text-base">Log In</span>
+            <span className="text-base">{isSubmitting ? 'Logging In…' : 'Log In'}</span>
             <svg
               className="w-5 h-5"
               fill="none"
@@ -292,6 +304,7 @@ export default function SignInScreen({
         </form>
         {/* END: SignInForm */}
 
+        {showSocialLogins && (<>
         {/* BEGIN: SocialDivider */}
         <div className="relative flex items-center justify-center my-6">
           <div className="border-t border-gray-200 w-full" />
@@ -339,8 +352,10 @@ export default function SignInScreen({
           </button>
         </div>
         {/* END: SocialLogins */}
+        </>)}
 
         {/* Demo colored text button with NO background color */}
+        {onOpenDemo && (
         <div className="mt-5 text-center">
           <button
             type="button"
@@ -350,6 +365,7 @@ export default function SignInScreen({
             Demo
           </button>
         </div>
+        )}
       </div>
 
       {/* BEGIN: Footer */}
