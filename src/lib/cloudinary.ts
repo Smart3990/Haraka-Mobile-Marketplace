@@ -7,8 +7,8 @@
  */
 
 /** Cloudinary account settings (not secret). Fill in from the Cloudinary dashboard. */
-export const CLOUDINARY_CLOUD_NAME = '';
-export const CLOUDINARY_UPLOAD_PRESET = '';
+export const CLOUDINARY_CLOUD_NAME = 'j1hpbhhy';
+export const CLOUDINARY_UPLOAD_PRESET = 'cykuxii0';
 
 export function isCloudinaryConfigured(): boolean {
   return Boolean(CLOUDINARY_CLOUD_NAME && CLOUDINARY_UPLOAD_PRESET);
@@ -20,8 +20,11 @@ export function isCloudinaryConfigured(): boolean {
  */
 export async function uploadMedia(file: string | Blob, folder: string): Promise<string> {
   if (!isCloudinaryConfigured()) throw new Error('Media storage is not set up yet.');
+  // Send as a file: Cloudinary rejects data: URLs with extra parameters such as "audio/webm;codecs=opus"
+  const blob = typeof file === 'string' ? await (await fetch(file)).blob() : file;
+  const extension = (blob.type.split('/')[1] || 'bin').split(';')[0];
   const form = new FormData();
-  form.append('file', file);
+  form.append('file', blob, `upload.${extension}`);
   form.append('upload_preset', CLOUDINARY_UPLOAD_PRESET);
   form.append('folder', `haraka/${folder}`);
   // "auto" accepts images and audio (Cloudinary stores audio as a video resource)
