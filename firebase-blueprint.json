@@ -1,0 +1,79 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Registered user profile with role attributes",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "maxLength": 256 },
+        "name": { "type": "string", "maxLength": 128 },
+        "role": { "type": "string", "enum": ["buyer", "seller", "artisan", "admin"] },
+        "phone": { "type": "string", "maxLength": 32 },
+        "location": { "type": "string", "maxLength": 128 },
+        "avatar": { "type": "string", "maxLength": 512 },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "email", "name", "role"]
+    },
+    "Listing": {
+      "title": "Listing",
+      "description": "Peer-to-peer and merchant classifieds listing document",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 160 },
+        "description": { "type": "string", "maxLength": 2048 },
+        "price": { "type": "number" },
+        "category": { "type": "string", "maxLength": 64 },
+        "location": { "type": "string", "maxLength": 128 },
+        "condition": { "type": "string", "maxLength": 64 },
+        "images": { "type": "array" },
+        "sellerId": { "type": "string", "maxLength": 128 },
+        "sellerName": { "type": "string", "maxLength": 128 },
+        "sellerPhone": { "type": "string", "maxLength": 32 },
+        "sellerAvatar": { "type": "string", "maxLength": 512 },
+        "status": { "type": "string", "enum": ["active", "sold", "draft", "archived"] },
+        "isVerified": { "type": "boolean" },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "title", "price", "category", "sellerId"]
+    },
+    "Booking": {
+      "title": "Booking",
+      "description": "Artisan trade booking diagnostic appointment",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "referenceCode": { "type": "string", "maxLength": 32 },
+        "artisanId": { "type": "string", "maxLength": 128 },
+        "artisanName": { "type": "string", "maxLength": 128 },
+        "customerId": { "type": "string", "maxLength": 128 },
+        "customerName": { "type": "string", "maxLength": 128 },
+        "customerPhone": { "type": "string", "maxLength": 32 },
+        "service": { "type": "string", "maxLength": 128 },
+        "bookingDate": { "type": "string", "maxLength": 64 },
+        "bookingWindow": { "type": "string", "maxLength": 64 },
+        "location": { "type": "string", "maxLength": 128 },
+        "inspectionFee": { "type": "string", "maxLength": 64 },
+        "status": { "type": "string", "enum": ["Pending", "Confirmed", "In Progress", "Completed", "Declined", "Cancelled"] },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "artisanId", "customerId", "service", "status"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Collection of user profile records"
+    },
+    "/listings/{listingId}": {
+      "schema": "Listing",
+      "description": "Collection of active marketplace listings"
+    },
+    "/bookings/{bookingId}": {
+      "schema": "Booking",
+      "description": "Collection of artisan service bookings"
+    }
+  }
+}

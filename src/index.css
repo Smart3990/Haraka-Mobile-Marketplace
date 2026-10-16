@@ -1,0 +1,49 @@
+@import "tailwindcss";
+
+/* Universally eliminate all browser scrollbars for clean native mobile look */
+*, *::before, *::after {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+
+::-webkit-scrollbar {
+  display: none !important;
+  width: 0px !important;
+  height: 0px !important;
+  background: transparent !important;
+}
+
+::-webkit-scrollbar-track {
+  display: none !important;
+  background: transparent !important;
+}
+
+::-webkit-scrollbar-thumb {
+  display: none !important;
+  background: transparent !important;
+}
+
+::-webkit-scrollbar-button {
+  display: none !important;
+  width: 0px !important;
+  height: 0px !important;
+}
+
+/* Fallback class for specific wrappers */
+.no-scrollbar {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+/* Polished dot grid background pattern for Admin & Artisan dashboards as in image 4 */
+.bg-dashboard-dots {
+  background-color: #F8FAFC;
+  background-image: radial-gradient(#94A3B8 1.25px, transparent 1.25px);
+  background-size: 16px 16px;
+}
+

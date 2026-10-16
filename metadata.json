@@ -1,0 +1,8 @@
+{
+  "name": "38 Haraka Mobile Marketplace",
+  "description": "Production-ready Expo React Native classifieds marketplace app with Expo Router, verified deals, fast seller flow, chat, and categorized listings.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
