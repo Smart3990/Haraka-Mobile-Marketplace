@@ -107,6 +107,34 @@ service cloud.firestore {
       );
     }
 
+    // Chats: one per buyer per ad, readable and writable only by the buyer and the ad's seller
+    match /chats/{chatId} {
+      allow get: if isSignedIn() && (resource == null || request.auth.uid in resource.data.participants);
+      allow list: if isSignedIn() && request.auth.uid in resource.data.participants;
+      allow create: if isSignedIn() && isValidId(chatId)
+        && request.resource.data.buyerId == request.auth.uid
+        && request.resource.data.sellerId != request.auth.uid
+        && request.resource.data.participants == [request.auth.uid, request.resource.data.sellerId]
+        && chatId == request.resource.data.listingId + '__' + request.auth.uid
+        && get(/databases/$(database)/documents/listings/$(request.resource.data.listingId)).data.sellerId == request.resource.data.sellerId;
+      allow update: if isSignedIn() && request.auth.uid in resource.data.participants
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastMessage', 'lastMessageAtISO', 'lastSenderId', 'unread']);
+
+      match /messages/{messageId} {
+        function chatParticipants() {
+          return get(/databases/$(database)/documents/chats/$(chatId)).data.participants;
+        }
+        allow read: if isSignedIn() && request.auth.uid in chatParticipants();
+        allow create: if isSignedIn() && request.auth.uid in chatParticipants()
+          && request.resource.data.senderId == request.auth.uid;
+        // Only the person who received an offer can accept it
+        allow update: if isSignedIn() && request.auth.uid in chatParticipants()
+          && resource.data.senderId != request.auth.uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['offerStatus'])
+          && request.resource.data.offerStatus == 'accepted';
+      }
+    }
+
     // "Report this listing": any signed-in user can send one; only admins read and handle them
     match /reports/{reportId} {
       allow create: if isSignedIn() && isValidId(reportId)

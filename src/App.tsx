@@ -135,6 +135,7 @@ import {
 } from './lib/listingData';
 import { auth as firebaseAuth } from './lib/firebase';
 import {
+  acceptOffer,
   addAdmin,
   createListing,
   decideApplication,
@@ -142,15 +143,22 @@ import {
   fileToPhotoDataUrl,
   getPlatformStats,
   hasRequiredDocuments,
+  markChatRead,
+  openChat,
   saveUserProfile,
+  sendChatMessage,
   signOutUser,
   submitApplication,
   submitReport,
   watchAllApplications,
   watchAdminAccess,
+  watchChatMessages,
   watchMyApplication,
+  watchMyChats,
   type AdminAccess,
   type ApplicationDecision,
+  type ChatDoc,
+  type ChatMessageDoc,
   type PlatformStats,
   type StoredApplication,
   updateListing as updateRemoteListing,
@@ -445,6 +453,15 @@ const PLACEHOLDER_IMAGE =
 /** Public web address of Haraka; shared links point here so anyone can open them. */
 const PUBLIC_WEB_URL = 'https://ga4-viewer-kiyumart-platform.web.app';
 
+/** Chat times: "14:05" today, otherwise "16 Oct". */
+function formatChatTime(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toDateString() === new Date().toDateString()
+    ? date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+}
+
 /** Formats seconds as m:ss for audio players. */
 function formatAudioTime(totalSeconds: number): string {
   const secs = Math.max(0, Math.round(totalSeconds || 0));
@@ -523,54 +540,26 @@ export default function App({ native = false }: { native?: boolean } = {}) {
   const [showCounterOfferModal, setShowCounterOfferModal] = useState<string | null>(null);
   const [counterOfferInputAmount, setCounterOfferInputAmount] = useState<number>(2050);
 
-  const handleAcceptOffer = (messageId: string, offerAmount: number, listingTitle?: string) => {
-    // 1. Record offer as accepted
-    setAcceptedOffers((prev) => ({
-      ...prev,
-      [messageId]: { amount: offerAmount, time: 'Just now' },
-    }));
-
-    // 2. Update myOwnListings status so Profile page immediately reflects OFFER ACCEPTED
+  const handleAcceptOffer = (messageId: string, offerAmount: number, _listingTitle?: string) => {
+    const chat = chatDocs.find((c) => c.id === (currentRoute.type === 'chat' ? currentRoute.id : ''));
+    if (!chat) return;
+    setAcceptedOffers((prev) => ({ ...prev, [messageId]: { amount: offerAmount, time: 'Just now' } }));
     setMyOwnListings((prev) =>
-      prev.map((item) => {
-        if (
-          (listingTitle && item.title.toLowerCase().includes(listingTitle.toLowerCase()))
-        ) {
-          return {
-            ...item,
-            pendingOfferStatus: 'accepted' as const,
-            pendingOfferAmount: offerAmount,
-          };
-        }
-        return item;
-      })
+      prev.map((item) =>
+        item.id === chat.listingId ? { ...item, pendingOfferStatus: 'accepted' as const, pendingOfferAmount: offerAmount } : item
+      )
     );
-
-    // 3. Post confirmation message into conversation
-    const activeRouteId = currentRoute.type === 'chat' && currentRoute.id ? currentRoute.id : '';
-    const acceptanceMessage: ChatMessage = {
-      id: `msg-accepted-${Date.now()}`,
-      senderId: 'me',
-      text: `🎉 Offer of GH₵ ${offerAmount.toLocaleString()} ACCEPTED! Deal is locked for cash pickup. We can coordinate the exact time and meetup point in East Legon.`,
-      timestamp: 'Just now',
-      isSeller: true,
-    };
-
-    setConversations((prev) =>
-      prev.map((c) => {
-        if (c.id === activeRouteId || c.listingId === activeRouteId) {
-          return {
-            ...c,
-            lastMessage: `Accepted offer: GH₵ ${offerAmount.toLocaleString()}`,
-            lastMessageTime: 'Just now',
-            messages: [...c.messages, acceptanceMessage],
-          };
-        }
-        return c;
-      })
-    );
-
-    showToast(`🎉 Offer of GH₵ ${offerAmount.toLocaleString()} accepted!`);
+    acceptOffer(chat, messageId, offerAmount)
+      .then(() => showToast(`🎉 Offer of GH₵ ${offerAmount.toLocaleString()} accepted!`))
+      .catch((err) => {
+        console.warn('Could not accept offer', err);
+        setAcceptedOffers((prev) => {
+          const next = { ...prev };
+          delete next[messageId];
+          return next;
+        });
+        showToast('⚠️ Could not accept the offer. Try again.');
+      });
   };
 
   // Call Modal State matching User's 3rd Image
@@ -1018,154 +1007,51 @@ export default function App({ native = false }: { native?: boolean } = {}) {
     },
     initialMessageText?: string
   ) => {
-    const sId = seller?.id || '';
-    const sName = seller?.name || 'Seller';
-    const sAvatar = seller?.avatar || '';
-    const sPhone = seller?.phone || '';
-    const sVerified = seller?.isVerified ?? true;
-    const cleanPhone = sPhone.replace(/\D/g, '');
-
-    // 1. Look for existing conversation to avoid duplicate/multiple chats
-    let existing: ChatConversation | undefined;
-
-    // A. Match by listingId or conv ID if listing is provided
-    const lId = listing?.id;
-    if (lId) {
-      existing = conversations.find(
-        (c) =>
-          c.listingId === lId ||
-          c.id === `conv-${lId}` ||
-          c.id === lId ||
-          (lId.startsWith('booking-') && c.listingTitle?.includes(lId.replace('booking-', '')))
-      );
-    }
-
-    // B. Match by otherUser ID
-    if (!existing && sId) {
-      existing = conversations.find(
-        (c) =>
-          c.otherUser.id === sId ||
-          c.id === `conv-${sId}` ||
-          (sId.startsWith('artisan-') && c.otherUser.id.includes(sId.replace('artisan-', ''))) ||
-          (c.otherUser.id.startsWith('artisan-') && sId.includes(c.otherUser.id.replace('artisan-', '')))
-      );
-    }
-
-    // C. Match by phone number if present
-    if (!existing && cleanPhone && cleanPhone.length >= 7) {
-      existing = conversations.find(
-        (c) => c.otherUser.phone && c.otherUser.phone.replace(/\D/g, '').endsWith(cleanPhone.slice(-7))
-      );
-    }
-
-    // D. Match by exact otherUser name
-    if (!existing && sName && sName !== 'Seller') {
-      existing = conversations.find(
-        (c) => c.otherUser.name.trim().toLowerCase() === sName.trim().toLowerCase()
-      );
-    }
-
-    // E. Match by exact listing title if title is distinctive
-    if (!existing && listing?.title && listing.title.length > 5) {
-      existing = conversations.find(
-        (c) => c.listingTitle?.trim().toLowerCase() === listing.title!.trim().toLowerCase()
-      );
-    }
-
-    if (existing) {
-      // Mark as read when opened, and update listing info if missing
-      setConversations((prev) =>
-        prev.map((c) => {
-          if (c.id === existing!.id) {
-            return {
-              ...c,
-              unreadCount: 0,
-              ...(listing?.id && !c.listingId
-                ? {
-                    listingId: listing.id,
-                    listingTitle: listing.title || c.listingTitle,
-                    listingPrice: listing.price || c.listingPrice,
-                    listingImage: listing.image || c.listingImage,
-                  }
-                : {}),
-            };
-          }
-          return c;
-        })
-      );
-      navigateTo({ type: 'chat', id: existing.id });
+    if (!firebaseUidRef.current) {
+      showToast('Please log in to message the seller.');
+      navigateTo({ type: 'login' });
       return;
     }
-
-    // 2. Otherwise create a brand new conversation specifically for this item or artisan
-    const newConvId = listing?.id
-      ? `conv-${listing.id.replace(/[^a-zA-Z0-9-]/g, '')}`
-      : `conv-${sId ? sId.replace(/[^a-zA-Z0-9-]/g, '') : (sName ? sName.replace(/[^a-zA-Z0-9-]/g, '').toLowerCase() : Date.now())}`;
-
-    // Ensure we don't have a conversation with this newConvId already
-    const idExisting = conversations.find((c) => c.id === newConvId);
-    if (idExisting) {
-      setConversations((prev) =>
-        prev.map((c) => (c.id === idExisting.id ? { ...c, unreadCount: 0 } : c))
-      );
-      navigateTo({ type: 'chat', id: idExisting.id });
+    const stored = listing?.id
+      ? (listings.find((l) => l.id === listing.id) as (Listing & { sellerId?: string }) | undefined)
+      : undefined;
+    if (!stored?.sellerId) {
+      showToast('Messaging is available for ads posted on Haraka. Please call instead.');
       return;
     }
-    const cleanPrice = typeof listing?.price === 'number' ? listing.price : 0;
-    const cleanCurrency = listing?.currency || 'GH₵';
-    const cleanTitle = listing?.title || `${sName} Services`;
-    const cleanImage = listing?.image || sAvatar;
-
-    const welcomeMsg =
-      initialMessageText ||
-      (listing?.title
-        ? `Hello! Thanks for your interest in "${listing.title}". Feel free to make an offer or ask any questions.`
-        : `Hello! I am ${sName}. How can I assist you with your request today?`);
-
-    const newConv: ChatConversation = {
-      id: newConvId,
-      listingId: listing?.id,
-      listingTitle: cleanTitle,
-      listingPrice: cleanPrice,
-      listingCurrency: cleanCurrency,
-      listingImage: cleanImage,
-      otherUser: {
-        id: sId || `seller-${Date.now()}`,
-        name: sName,
-        avatar: sAvatar,
-        isVerified: sVerified,
-        online: true,
-        phone: sPhone,
+    const sellerId = stored.sellerId;
+    openChat({
+      listing: {
+        id: stored.id,
+        title: stored.title,
+        price: stored.price,
+        currency: stored.currency,
+        image: stored.images[0] || '',
+        sellerId,
       },
-      lastMessage: welcomeMsg,
-      lastMessageTime: 'Just now',
-      unreadCount: 0,
-      messages: [
-        {
-          id: `msg-${Date.now()}`,
-          senderId: sId || 'seller',
-          text: welcomeMsg,
-          timestamp: 'Just now',
-          isSeller: true,
-        },
-      ],
-    };
-
-    setConversations((prev) => {
-      // Re-verify no duplicate exists in prev
-      const alreadyPresent = prev.find(
-        (c) =>
-          c.id === newConvId ||
-          (listing?.id && c.listingId === listing.id) ||
-          (sId && c.otherUser.id === sId) ||
-          (sName && sName !== 'Seller' && c.otherUser.name.trim().toLowerCase() === sName.trim().toLowerCase())
-      );
-      if (alreadyPresent) {
-        return prev.map((c) => (c.id === alreadyPresent.id ? { ...c, unreadCount: 0 } : c));
-      }
-      return [newConv, ...prev];
-    });
-    navigateTo({ type: 'chat', id: newConvId });
+      seller: {
+        name: stored.seller.name || seller?.name || 'Seller',
+        avatar: stored.seller.avatar || '',
+        phone: stored.seller.phone || '',
+        isVerified: Boolean(stored.seller.isVerified),
+      },
+      me: {
+        name: userProfile.name || 'Buyer',
+        avatar: userProfile.avatar || '',
+        phone: userProfile.phone || '',
+        isVerified: Boolean(userProfile.isVerified),
+      },
+    })
+      .then(async (chatId) => {
+        navigateTo({ type: 'chat', id: chatId });
+        if (initialMessageText) {
+          await sendChatMessage(
+            { id: chatId, participants: [firebaseUidRef.current!, sellerId], listingCurrency: stored.currency } as ChatDoc,
+            { text: initialMessageText }
+          );
+        }
+      })
+      .catch((err) => showToast(`⚠️ ${err instanceof Error ? err.message : 'Could not open the chat.'}`));
   };
 
   // Automatically mark conversation as read when user is on its chat screen
@@ -1355,54 +1241,21 @@ export default function App({ native = false }: { native?: boolean } = {}) {
       offerAmount ||
       (offerMatch ? parseInt(offerMatch[1].replace(/,/g, ''), 10) : undefined);
 
-    const activeRouteId = currentRoute.type === 'chat' && currentRoute.id ? currentRoute.id : (conversations[0]?.id || 'conv-1');
-    const targetConv =
-      conversations.find((c) => c.id === activeRouteId) ||
-      conversations.find((c) => c.listingId === activeRouteId) ||
-      conversations.find((c) => c.otherUser.id === activeRouteId) ||
-      conversations[0];
-    const convId = targetConv?.id || 'conv-1';
-    const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const formattedOfferText = resolvedOfferAmount ? resolvedOfferAmount.toLocaleString() : (targetConv?.listingPrice ? Math.round(targetConv.listingPrice * 0.9).toLocaleString() : 'Negotiable');
-
-    const newMsg: ChatMessage = {
-      id: `msg-${Date.now()}`,
-      senderId: 'me',
-      text,
-      timestamp: nowTime,
-      isOffer: resolvedIsOffer,
-      offerAmount: resolvedOfferAmount,
-    };
-
-    setConversations((prev) =>
-      prev.map((c) => {
-        if (c.id === convId) {
-          return {
-            ...c,
-            lastMessage: resolvedIsOffer ? `Offer: GH₵${formattedOfferText}` : text,
-            lastMessageTime: nowTime,
-            messages: [...c.messages, newMsg],
-          };
-        }
-        return c;
-      })
-    );
-
-    if (textToSend === undefined) {
-      setChatInputText('');
+    const chat = chatDocs.find((c) => c.id === (currentRoute.type === 'chat' ? currentRoute.id : ''));
+    if (!chat) {
+      showToast('⚠️ Open a conversation first.');
+      return;
     }
-
-    showToast(
-      // Chat is not connected to the other person yet; be honest until it is
-      resolvedIsOffer
-        ? `Offer of GH₵${formattedOfferText} saved on this phone. Please call or WhatsApp the seller to confirm.`
-        : 'Saved on this phone. In-app chat is coming soon, so please call or WhatsApp the seller for now.'
-    );
-
-    setTimeout(() => {
-      chatMessagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, 60);
-
+    if (textToSend === undefined) setChatInputText('');
+    sendChatMessage(chat, { text, isOffer: resolvedIsOffer, offerAmount: resolvedOfferAmount })
+      .then(() => {
+        setTimeout(() => chatMessagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 60);
+      })
+      .catch((err) => {
+        console.warn('Could not send message', err);
+        showToast('⚠️ Message not sent. Check your connection and try again.');
+        if (textToSend === undefined) setChatInputText(rawText);
+      });
   };
   const bookingScrollRef = useRef<HTMLDivElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -2181,6 +2034,78 @@ export default function App({ native = false }: { native?: boolean } = {}) {
       </div>
     );
   };
+
+  // ---------- Real chat: conversations and messages live from Firestore ----------
+  const [chatDocs, setChatDocs] = useState<ChatDoc[]>([]);
+  const [chatsLoaded, setChatsLoaded] = useState(false);
+  const [activeChatMessages, setActiveChatMessages] = useState<ChatMessageDoc[]>([]);
+  const activeChatId = currentRoute.type === 'chat' ? currentRoute.id : '';
+  useEffect(() => {
+    setChatDocs([]);
+    setChatsLoaded(false);
+    if (!firebaseUid) return;
+    return watchMyChats(firebaseUid, (chats) => {
+      setChatDocs(chats);
+      setChatsLoaded(true);
+    });
+  }, [firebaseUid]);
+  useEffect(() => {
+    setActiveChatMessages([]);
+    if (!firebaseUid || !activeChatId) return;
+    return watchChatMessages(activeChatId, setActiveChatMessages);
+  }, [firebaseUid, activeChatId]);
+  // Opening a conversation marks it as read
+  useEffect(() => {
+    const chat = chatDocs.find((c) => c.id === activeChatId);
+    if (chat && firebaseUid && (chat.unread?.[firebaseUid] || 0) > 0) {
+      markChatRead(chat.id).catch((err) => console.warn('Could not mark chat read', err));
+    }
+  }, [chatDocs, activeChatId, firebaseUid]);
+  // The Messages tab and chat screen read these conversations
+  useEffect(() => {
+    if (!firebaseUid) {
+      setConversations([]);
+      return;
+    }
+    setConversations(
+      chatDocs.map((chat) => {
+        const otherId = chat.participants.find((p) => p !== firebaseUid) || '';
+        const other = chat.people?.[otherId];
+        return {
+          id: chat.id,
+          listingId: chat.listingId,
+          listingTitle: chat.listingTitle,
+          listingPrice: chat.listingPrice,
+          listingCurrency: chat.listingCurrency,
+          listingImage: chat.listingImage,
+          otherUser: {
+            id: otherId,
+            name: other?.name || (otherId === chat.sellerId ? 'Seller' : 'Buyer'),
+            avatar: other?.avatar || '',
+            isVerified: Boolean(other?.isVerified),
+            online: false,
+            phone: other?.phone || '',
+          },
+          lastMessage: chat.lastMessage || 'No messages yet',
+          lastMessageTime: formatChatTime(chat.lastMessageAtISO),
+          unreadCount: chat.unread?.[firebaseUid] || 0,
+          messages:
+            chat.id === activeChatId
+              ? activeChatMessages.map((m) => ({
+                  id: m.id,
+                  senderId: m.senderId === firebaseUid ? 'me' : m.senderId,
+                  text: m.text,
+                  timestamp: formatChatTime(m.createdAtISO),
+                  isOffer: m.isOffer,
+                  offerAmount: m.offerAmount,
+                  offerStatus: m.offerStatus,
+                  isSeller: m.senderId === chat.sellerId,
+                }))
+              : [],
+        };
+      })
+    );
+  }, [chatDocs, activeChatMessages, activeChatId, firebaseUid]);
 
   // Live marketplace listings from Firestore, shown above the built-in sample listings
   const [listingsLoaded, setListingsLoaded] = useState(false);
@@ -11504,86 +11429,18 @@ export default function RootLayout() {
 
       case 'chat': {
         const routeChatId = currentRoute.type === 'chat' ? currentRoute.id : '';
-        let activeConv =
-          conversations.find((c) => c.id === routeChatId) ||
-          conversations.find((c) => c.listingId === routeChatId) ||
-          conversations.find((c) => c.otherUser.id === routeChatId);
-
+        const activeConv = conversations.find((c) => c.id === routeChatId);
         if (!activeConv) {
-          // Dynamic lookup if routeChatId is a listing ID
-          const matchedListing = listings.find((l) => l.id === routeChatId);
-          if (matchedListing) {
-            activeConv = {
-              id: `conv-${matchedListing.id}`,
-              listingId: matchedListing.id,
-              listingTitle: matchedListing.title,
-              listingPrice: matchedListing.price,
-              listingCurrency: matchedListing.currency,
-              listingImage: matchedListing.images[0],
-              otherUser: {
-                id: matchedListing.seller.id,
-                name: matchedListing.seller.name,
-                avatar: matchedListing.seller.avatar,
-                isVerified: matchedListing.seller.isVerified,
-                online: true,
-                phone: matchedListing.seller.phone,
-              },
-              lastMessage: `Hello! Thanks for your interest in "${matchedListing.title}".`,
-              lastMessageTime: 'Just now',
-              unreadCount: 0,
-              messages: [
-                {
-                  id: `msg-${Date.now()}`,
-                  senderId: matchedListing.seller.id,
-                  text: `Hello! Thanks for your interest in "${matchedListing.title}". Feel free to make an offer or ask any questions.`,
-                  timestamp: 'Just now',
-                  isSeller: true,
-                },
-              ],
-            };
-          } else {
-            // Dynamic lookup if routeChatId is an artisan ID
-            const matchedArtisan =
-              ARTISANS_DIRECTORY.find((a) => a.id === routeChatId) ||
-              FEATURED_ARTISANS.find((a) => a.id === routeChatId);
-            if (matchedArtisan) {
-              activeConv = {
-                id: `conv-${matchedArtisan.id}`,
-                listingId: matchedArtisan.id,
-                listingTitle: `${matchedArtisan.name} - ${matchedArtisan.role || 'Services'}`,
-                listingPrice: typeof matchedArtisan.rate === 'string'
-                  ? parseInt(matchedArtisan.rate.replace(/\D/g, ''), 10) || 100
-                  : 100,
-                listingCurrency: 'GH₵',
-                listingImage: matchedArtisan.avatar,
-                otherUser: {
-                  id: matchedArtisan.id,
-                  name: matchedArtisan.name,
-                  avatar: matchedArtisan.avatar,
-                  isVerified: matchedArtisan.verified ?? true,
-                  online: true,
-                  phone: matchedArtisan.phone || '',
-                },
-                lastMessage: `Hello! I am ${matchedArtisan.name}. How can I assist you with your request today?`,
-                lastMessageTime: 'Just now',
-                unreadCount: 0,
-                messages: [
-                  {
-                    id: `msg-${Date.now()}`,
-                    senderId: matchedArtisan.id,
-                    text: `Hello! I am ${matchedArtisan.name}. How can I assist you with your request today?`,
-                    timestamp: 'Just now',
-                    isSeller: true,
-                  },
-                ],
-              };
-            }
+          if (firebaseUid && !chatsLoaded) {
+            return <div className="flex-1 flex items-center justify-center text-sm font-semibold text-slate-500 min-h-full">Loading chat…</div>;
           }
+          return renderUnavailable(
+            'Conversation not found',
+            firebaseUid ? 'It may have been removed.' : 'Please log in to see your messages.'
+          );
         }
-
-        if (!activeConv) {
-          activeConv = conversations[0];
-        }
+        const activeChatDoc = chatDocs.find((c) => c.id === activeConv.id);
+        const amBuyer = activeChatDoc?.buyerId === firebaseUid;
 
         const sellerFirstName = activeConv.otherUser.name.split(' ')[0] || 'Seller';
         const contactPhone = activeConv.otherUser.phone || '';
@@ -11636,10 +11493,7 @@ export default function RootLayout() {
                       <CheckCircle size={12} className="text-emerald-500 fill-emerald-100" />
                     )}
                   </div>
-                  <p className="text-[10px] text-emerald-600 font-bold flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                    Active now • Accra, Ghana
-                  </p>
+                  <p className="text-[10px] text-slate-500 font-semibold">{amBuyer ? 'Seller' : 'Buyer'}</p>
                 </div>
               </div>
               <div>
@@ -11683,14 +11537,14 @@ export default function RootLayout() {
             {/* Chat Feed */}
             <div className="flex-1 p-3.5 overflow-y-auto flex flex-col gap-3 bg-[#F8FAFC]">
               {activeConv.messages.map((m) => {
-                const isOfferAccepted = !!acceptedOffers[m.id] || false;
+                const isOfferAccepted = m.offerStatus === 'accepted' || !!acceptedOffers[m.id];
                 const currentOfferVal = m.offerAmount || offer1Amount;
 
                 return (
                   <React.Fragment key={m.id}>
                     {m.isOffer ? (
                       /* Clean Interactive Offer Card (Image 4 Styled - No text background color, no Cash on Pickup) */
-                      <div className="w-full max-w-[96%] sm:max-w-[88%] self-end my-1 bg-white border-2 border-orange-400 rounded-3xl p-3.5 shadow-sm space-y-2.5 animate-in fade-in zoom-in-95 duration-200">
+                      <div className={`w-full max-w-[96%] sm:max-w-[88%] ${m.senderId === 'me' ? 'self-end' : 'self-start'} my-1 bg-white border-2 border-orange-400 rounded-3xl p-3.5 shadow-sm space-y-2.5 animate-in fade-in zoom-in-95 duration-200`}>
                         {/* Listing Reference Preview */}
                         <div className="flex items-start gap-2.5 pb-2.5 border-b border-slate-100">
                           {activeConv.listingImage && (
@@ -11717,10 +11571,7 @@ export default function RootLayout() {
                               GH₵ {rawPrice.toLocaleString()}
                             </p>
                             <div className="flex items-center gap-1.5 text-[10px] text-slate-500 mt-0.5">
-                              <Eye size={11} className="text-slate-400 shrink-0" />
-                              <span>56 views</span>
-                              <span>•</span>
-                              <span className="font-bold text-orange-600">1 offer GH₵ {currentOfferVal.toLocaleString()}</span>
+                              <span className="font-bold text-orange-600">{m.senderId === 'me' ? 'Your offer' : 'Offer received'}</span>
                             </div>
                           </div>
                         </div>
@@ -11748,8 +11599,11 @@ export default function RootLayout() {
                               <span>Offer Accepted: GH₵ {currentOfferVal.toLocaleString()}</span>
                             </div>
                             <p className="text-[11px] text-emerald-700 leading-snug">
-                              You accepted this offer! Deal locked. Coordinate meetup and cash on pickup below.
+                              {m.senderId === 'me'
+                                ? 'Your offer was accepted! Agree on a safe, busy public meetup point.'
+                                : 'You accepted this offer! Deal locked. Coordinate meetup and cash on pickup below.'}
                             </p>
+                            {m.senderId !== 'me' && (
                             <div className="flex flex-wrap items-center gap-2 pt-0.5">
                               <button
                                 type="button"
@@ -11778,7 +11632,12 @@ export default function RootLayout() {
                                 Share Payment Info
                               </button>
                             </div>
+                            )}
                           </div>
+                        ) : m.senderId === 'me' ? (
+                          <p className="text-[11px] text-slate-500 pt-2 border-t border-slate-100">
+                            Waiting for {activeConv.otherUser.name} to respond…
+                          </p>
                         ) : (
                           <div className="space-y-2 pt-1 border-t border-slate-100">
                             <div className="flex items-center gap-2">
@@ -11809,9 +11668,7 @@ export default function RootLayout() {
 
                         {/* Footer: Location & Time */}
                         <div className="flex items-center justify-between text-[9.5px] text-slate-400 font-medium pt-0.5">
-                          <span className="flex items-center gap-1 text-slate-400">
-                            <MapPin size={10} /> Accra, Ghana
-                          </span>
+                          <span />
                           <span>{m.timestamp}</span>
                         </div>
                       </div>
@@ -11845,7 +11702,7 @@ export default function RootLayout() {
             {/* Quick Action Chips above text field */}
             <div className="px-3.5 py-2 bg-white border-t border-slate-100 flex flex-col gap-1.5 shadow-2xs z-10">
               <div className="flex gap-2 overflow-x-auto no-scrollbar py-0.5">
-                {hasValidPrice && !isServiceOrJob ? (
+                {!amBuyer ? null : hasValidPrice && !isServiceOrJob ? (
                   <>
                     <button
                       type="button"

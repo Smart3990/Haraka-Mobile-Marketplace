@@ -66,6 +66,7 @@ export interface ChatMessage {
   timestamp: string;
   isOffer?: boolean;
   offerAmount?: number;
+  offerStatus?: 'pending' | 'accepted';
   isSeller?: boolean;
 }
 

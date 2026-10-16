@@ -28,6 +28,7 @@ import {
   setDoc,
   where,
   updateDoc,
+  increment,
   writeBatch,
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
@@ -532,4 +533,152 @@ async function compressImage(src: string, maxChars: number): Promise<string> {
     if (result.length <= maxChars) break;
   }
   return result;
+}
+
+
+// ---------------------------------------------------------------------------
+// Chat between a buyer and a seller about one ad (/chats/{chatId}/messages)
+// ---------------------------------------------------------------------------
+
+export interface ChatPerson {
+  name: string;
+  avatar: string;
+  phone: string;
+  isVerified: boolean;
+}
+
+export interface ChatDoc {
+  id: string;
+  listingId: string;
+  listingTitle: string;
+  listingPrice: number;
+  listingCurrency: string;
+  listingImage: string;
+  buyerId: string;
+  sellerId: string;
+  participants: string[];
+  people: Record<string, ChatPerson>;
+  lastMessage: string;
+  lastMessageAtISO: string;
+  lastSenderId: string;
+  unread: Record<string, number>;
+  createdAtISO: string;
+}
+
+export interface ChatMessageDoc {
+  id: string;
+  senderId: string;
+  text: string;
+  createdAtISO: string;
+  isOffer?: boolean;
+  offerAmount?: number;
+  offerStatus?: 'pending' | 'accepted';
+}
+
+/** One conversation per buyer per ad. */
+export function chatIdFor(listingId: string, buyerId: string): string {
+  return `${listingId}__${buyerId}`;
+}
+
+/** Opens the buyer's conversation about an ad, creating it the first time. Returns its id. */
+export async function openChat(input: {
+  listing: { id: string; title: string; price: number; currency: string; image: string; sellerId: string };
+  seller: ChatPerson;
+  me: ChatPerson;
+}): Promise<string> {
+  const uid = auth.currentUser?.uid;
+  if (!uid) throw new Error('Please log in to message the seller.');
+  if (uid === input.listing.sellerId) throw new Error('This is your own ad.');
+  const id = chatIdFor(input.listing.id, uid);
+  const ref = doc(db, 'chats', id);
+  const existing = await getDoc(ref);
+  if (!existing.exists()) {
+    const now = new Date().toISOString();
+    const chat: ChatDoc = {
+      id,
+      listingId: input.listing.id,
+      listingTitle: input.listing.title,
+      listingPrice: input.listing.price,
+      listingCurrency: input.listing.currency,
+      listingImage: input.listing.image,
+      buyerId: uid,
+      sellerId: input.listing.sellerId,
+      participants: [uid, input.listing.sellerId],
+      people: { [uid]: input.me, [input.listing.sellerId]: input.seller },
+      lastMessage: '',
+      lastMessageAtISO: now,
+      lastSenderId: '',
+      unread: { [uid]: 0, [input.listing.sellerId]: 0 },
+      createdAtISO: now,
+    };
+    await setDoc(ref, stripUndefined(chat));
+  }
+  return id;
+}
+
+/** All conversations the user is part of, most recent first. */
+export function watchMyChats(uid: string, callback: (chats: ChatDoc[]) => void): () => void {
+  return onSnapshot(
+    query(collection(db, 'chats'), where('participants', 'array-contains', uid)),
+    (snap) =>
+      callback(
+        snap.docs
+          .map((d) => d.data() as ChatDoc)
+          .sort((a, b) => b.lastMessageAtISO.localeCompare(a.lastMessageAtISO))
+      ),
+    (error) => console.warn('Could not load chats', error)
+  );
+}
+
+export function watchChatMessages(chatId: string, callback: (messages: ChatMessageDoc[]) => void): () => void {
+  return onSnapshot(
+    query(collection(db, 'chats', chatId, 'messages'), orderBy('createdAtISO', 'asc')),
+    (snap) => callback(snap.docs.map((d) => d.data() as ChatMessageDoc)),
+    (error) => console.warn('Could not load messages', error)
+  );
+}
+
+export async function sendChatMessage(chat: ChatDoc, message: { text: string; isOffer?: boolean; offerAmount?: number }) {
+  const uid = auth.currentUser?.uid;
+  if (!uid) throw new Error('Please log in to send messages.');
+  const otherId = chat.participants.find((p) => p !== uid)!;
+  const ref = doc(collection(db, 'chats', chat.id, 'messages'));
+  const now = new Date().toISOString();
+  const batch = writeBatch(db);
+  batch.set(ref, stripUndefined({
+    id: ref.id,
+    senderId: uid,
+    text: message.text.slice(0, 2000),
+    createdAtISO: now,
+    isOffer: Boolean(message.isOffer),
+    offerAmount: message.isOffer ? message.offerAmount : undefined,
+    offerStatus: message.isOffer ? 'pending' : undefined,
+  }));
+  batch.update(doc(db, 'chats', chat.id), {
+    lastMessage: message.isOffer && message.offerAmount
+      ? `Offer: ${chat.listingCurrency} ${message.offerAmount.toLocaleString()}`
+      : message.text.slice(0, 200),
+    lastMessageAtISO: now,
+    lastSenderId: uid,
+    [`unread.${otherId}`]: increment(1),
+  });
+  await batch.commit();
+}
+
+/** The person who received an offer accepts it; a confirmation message is added to the chat. */
+export async function acceptOffer(chat: ChatDoc, messageId: string, amount: number) {
+  const uid = auth.currentUser?.uid;
+  if (!uid) throw new Error('Please log in again.');
+  const batch = writeBatch(db);
+  batch.update(doc(db, 'chats', chat.id, 'messages', messageId), { offerStatus: 'accepted' });
+  await batch.commit();
+  await sendChatMessage(chat, {
+    text: `🎉 Offer of ${chat.listingCurrency} ${amount.toLocaleString()} accepted! Let's agree on a safe public meetup point and time.`,
+  });
+}
+
+export async function markChatRead(chatId: string) {
+  const uid = auth.currentUser?.uid;
+  if (!uid) return;
+  await updateDoc(doc(db, 'chats', chatId), { [`unread.${uid}`]: 0 });
 }
