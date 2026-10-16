@@ -1,98 +1,46 @@
 /**
- * Cloudinary zero-cost image upload helper for Haraka Mobile Marketplace.
- * Uploads photos directly to Cloudinary using an unsigned upload preset.
- * 
- * Setup instructions for the user:
- * 1. Create a free Cloudinary account at https://cloudinary.com (25 monthly credits free).
- * 2. In Settings -> Upload -> Upload presets, create an Unsigned preset (e.g., 'haraka_preset').
- * 3. Set VITE_CLOUDINARY_CLOUD_NAME and VITE_CLOUDINARY_PRESET in your environment.
+ * Cloudinary storage for public media (ad photos, voice notes, avatars, artisan work photos,
+ * booking photos). Uploads use an unsigned preset, so no secret is stored in the app.
+ *
+ * ID documents from partner applications are NOT uploaded here: they stay in Firestore,
+ * where security rules limit them to the applicant and admins.
  */
 
-export interface CloudinaryUploadResult {
-  url: string;
-  secureUrl: string;
-  publicId: string;
-  width: number;
-  height: number;
-  format: string;
-}
+/** Cloudinary account settings (not secret). Fill in from the Cloudinary dashboard. */
+export const CLOUDINARY_CLOUD_NAME = '';
+export const CLOUDINARY_UPLOAD_PRESET = '';
 
-const getStoredCloudName = () => {
-  if (typeof window !== 'undefined') {
-    return localStorage.getItem('haraka_cloudinary_cloud_name') || '';
-  }
-  return '';
-};
-
-const getStoredPreset = () => {
-  if (typeof window !== 'undefined') {
-    return localStorage.getItem('haraka_cloudinary_preset') || '';
-  }
-  return '';
-};
-
-export function setCloudinaryCredentials(cloudName: string, uploadPreset: string) {
-  if (typeof window !== 'undefined') {
-    if (cloudName) localStorage.setItem('haraka_cloudinary_cloud_name', cloudName.trim());
-    if (uploadPreset) localStorage.setItem('haraka_cloudinary_preset', uploadPreset.trim());
-  }
-}
-
-export function getCloudinaryCredentials() {
-  const cloudName = getStoredCloudName() || import.meta.env.VITE_CLOUDINARY_CLOUD_NAME || '';
-  const preset = getStoredPreset() || import.meta.env.VITE_CLOUDINARY_PRESET || '';
-  return { cloudName, preset, isConfigured: Boolean(cloudName && preset) };
-}
-
-export async function uploadImageToCloudinary(
-  file: File | Blob,
-  customCloudName?: string,
-  customPreset?: string
-): Promise<string> {
-  const creds = getCloudinaryCredentials();
-  const cloudName = customCloudName || creds.cloudName;
-  const preset = customPreset || creds.preset;
-
-  // Fallback to local Data URL preview if Cloudinary is not configured yet
-  if (!cloudName || !preset) {
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        resolve(reader.result as string);
-      };
-      reader.readAsDataURL(file);
-    });
-  }
-
-  const formData = new FormData();
-  formData.append('file', file);
-  formData.append('upload_preset', preset);
-
-  // Auto-optimize images on upload with Cloudinary eager transformations:
-  // Convert to WebP, auto quality, and clamp width to 800px to save Ghanaian mobile data
-  const endpoint = `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`;
-
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    body: formData,
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error('Cloudinary upload error:', errorText);
-    throw new Error(`Cloudinary upload failed: ${response.statusText}`);
-  }
-
-  const data: CloudinaryUploadResult = await response.json();
-  
-  // Return the auto-formatted URL
-  return data.secureUrl || data.url;
+export function isCloudinaryConfigured(): boolean {
+  return Boolean(CLOUDINARY_CLOUD_NAME && CLOUDINARY_UPLOAD_PRESET);
 }
 
 /**
- * Generate a data-saver thumbnail URL with Cloudinary transforms
+ * Uploads a photo or voice note (data: URL or Blob) and returns its public https URL.
+ * Images are delivered in an automatic format/quality and at most 1280px wide.
  */
-export function getOptimizedImageUrl(url: string, width = 600): string {
-  if (!url || !url.includes('cloudinary.com')) return url;
-  return url.replace('/upload/', `/upload/c_scale,w_${width},q_auto,f_auto/`);
+export async function uploadMedia(file: string | Blob, folder: string): Promise<string> {
+  if (!isCloudinaryConfigured()) throw new Error('Media storage is not set up yet.');
+  const form = new FormData();
+  form.append('file', file);
+  form.append('upload_preset', CLOUDINARY_UPLOAD_PRESET);
+  form.append('folder', `haraka/${folder}`);
+  // "auto" accepts images and audio (Cloudinary stores audio as a video resource)
+  const response = await fetch(`https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/auto/upload`, {
+    method: 'POST',
+    body: form,
+  });
+  if (!response.ok) {
+    console.warn('Cloudinary upload failed', response.status, await response.text().catch(() => ''));
+    throw new Error('Upload failed. Check your connection and try again.');
+  }
+  const data: { secure_url: string; resource_type: string } = await response.json();
+  return data.resource_type === 'image'
+    ? data.secure_url.replace('/upload/', '/upload/f_auto,q_auto,c_limit,w_1280/')
+    : data.secure_url;
+}
+
+/** Smaller version of a Cloudinary image for lists and thumbnails; other URLs are returned unchanged. */
+export function thumbnailUrl(url: string, width = 480): string {
+  if (!url || !url.includes('res.cloudinary.com')) return url;
+  return url.replace(/\/upload\/(f_auto,q_auto,c_limit,w_\d+\/)?/, `/upload/f_auto,q_auto,c_limit,w_${width}/`);
 }

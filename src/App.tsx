@@ -132,9 +132,13 @@ import {
   POPULAR_GHANA_TOWNS,
 } from './lib/listingData';
 import { auth as firebaseAuth } from './lib/firebase';
+import { thumbnailUrl } from './lib/cloudinary';
 import {
   acceptOffer,
   addAdmin,
+  clearPushToken,
+  getPushToken,
+  savePushToken,
   createBooking,
   createListing,
   decideApplication,
@@ -535,7 +539,15 @@ function createSyntheticVocalBuffer(ctx: AudioContext, durationSeconds: number):
   return buffer;
 }
 
-export default function App({ native = false }: { native?: boolean } = {}) {
+/** Functions the phone app (outside the web view) provides for push notifications. */
+export interface NativeBridge {
+  registerForPush?: () => Promise<string | null>;
+  sendPush?: (messages: { to: string; title: string; body: string; data?: Record<string, string> }[]) => Promise<void>;
+  /** Screen to open after the user tapped a notification */
+  openRoute?: { type: string; id: string; at: number } | null;
+}
+
+export default function App({ native = false, nativeBridge }: { native?: boolean; nativeBridge?: NativeBridge } = {}) {
   // View mode (inside the mobile app only the full-screen 'frameless' view is used)
   const [viewMode, setViewMode] = useState<'preview' | 'frameless' | 'split' | 'code'>(native ? 'frameless' : 'split');
   const [phoneFrame, setPhoneFrame] = useState(true);
@@ -561,7 +573,15 @@ export default function App({ native = false }: { native?: boolean } = {}) {
       )
     );
     acceptOffer(chat, messageId, offerAmount)
-      .then(() => showToast(`🎉 Offer of GH₵ ${offerAmount.toLocaleString()} accepted!`))
+      .then(() => {
+        showToast(`🎉 Offer of GH₵ ${offerAmount.toLocaleString()} accepted!`);
+        notifyUser(
+          chat.participants.find((p) => p !== firebaseUidRef.current),
+          '🎉 Your offer was accepted',
+          `GH₵ ${offerAmount.toLocaleString()} for ${chat.listingTitle}. Agree on a safe meetup point.`,
+          { type: 'chat', id: chat.id }
+        );
+      })
       .catch((err) => {
         console.warn('Could not accept offer', err);
         setAcceptedOffers((prev) => {
@@ -1361,6 +1381,14 @@ export default function App({ native = false }: { native?: boolean } = {}) {
     sendChatMessage(chat, { text, isOffer: resolvedIsOffer, offerAmount: resolvedOfferAmount })
       .then(() => {
         setTimeout(() => chatMessagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 60);
+        notifyUser(
+          chat.participants.find((p) => p !== firebaseUidRef.current),
+          resolvedIsOffer ? `New offer from ${userProfile.name || 'a buyer'}` : userProfile.name || 'New message',
+          resolvedIsOffer && resolvedOfferAmount
+            ? `${chat.listingCurrency} ${resolvedOfferAmount.toLocaleString()} for ${chat.listingTitle}`
+            : text,
+          { type: 'chat', id: chat.id }
+        );
       })
       .catch((err) => {
         console.warn('Could not send message', err);
@@ -1699,7 +1727,9 @@ export default function App({ native = false }: { native?: boolean } = {}) {
   };
 
   const handleSignOut = () => {
-    signOutUser().catch((err) => console.warn('Sign out failed', err));
+    clearPushToken()
+      .catch(() => {})
+      .finally(() => signOutUser().catch((err) => console.warn('Sign out failed', err)));
     setFirebaseUid(null);
     profileLoadedRef.current = false;
     setSavedIds([]);
@@ -1935,6 +1965,33 @@ export default function App({ native = false }: { native?: boolean } = {}) {
       </div>
     );
   };
+
+  // ---------- Push notifications (phone app only) ----------
+  useEffect(() => {
+    if (!firebaseUid || !nativeBridge?.registerForPush) return;
+    nativeBridge
+      .registerForPush()
+      .then((token) => (token ? savePushToken(token) : undefined))
+      .catch((err) => console.warn('Could not register for notifications', err));
+  }, [firebaseUid]);
+
+  /** Sends a push notification to another user (sent by the phone app; no-op on the website). */
+  const notifyUser = (uid: string | undefined, title: string, body: string, data: Record<string, string>) => {
+    if (!uid || uid === firebaseUidRef.current || !nativeBridge?.sendPush) return;
+    getPushToken(uid)
+      .then((to) => (to ? nativeBridge.sendPush!([{ to, title, body: body.slice(0, 180), data }]) : undefined))
+      .catch((err) => console.warn('Could not send notification', err));
+  };
+
+  // Tapped a notification: open the matching screen
+  useEffect(() => {
+    const route = nativeBridge?.openRoute;
+    if (!route || !firebaseUid) return;
+    if (route.type === 'chat' && route.id) navigateTo({ type: 'chat', id: route.id });
+    else if (route.type === 'my-bookings') navigateTo({ type: 'my-bookings' });
+    else if (route.type === 'dashboard') navigateTo({ type: 'tabs', tab: 'dashboard' });
+    else if (route.type === 'application') navigateTo({ type: 'pending-application', applicantId: firebaseUid });
+  }, [nativeBridge?.openRoute?.at, firebaseUid]);
 
   // ---------- Real chat: conversations and messages live from Firestore ----------
   const [chatDocs, setChatDocs] = useState<ChatDoc[]>([]);
@@ -3304,6 +3361,16 @@ export default function App({ native = false }: { native?: boolean } = {}) {
     if ((applicant as any).uid) {
       try {
         await decideApplication(applicant as unknown as StoredApplication, decision, reason);
+        notifyUser(
+          (applicant as any).uid,
+          decision === 'reject' ? 'Application not approved' : 'Your application was approved 🎉',
+          decision === 'reject'
+            ? `Reason: ${reason || 'not given'}. You can update your details and reapply.`
+            : decision === 'verify'
+            ? 'Your account is approved and verified. You can start now.'
+            : 'Your partner account is active. You can start now.',
+          { type: 'application', id: (applicant as any).uid }
+        );
       } catch (err) {
         console.warn('Could not save decision', err);
         showToast(`⚠️ ${err instanceof Error ? err.message : 'Could not save the decision. Try again.'}`);
@@ -3504,7 +3571,18 @@ export default function App({ native = false }: { native?: boolean } = {}) {
     const booking = [...myBookingDocs, ...artisanBookingDocs].find((b) => b.id === bookingId);
     if (!booking) return;
     setBookingStatus(booking, status)
-      .then(() => showToast(successMessage, 'check'))
+      .then(() => {
+        showToast(successMessage, 'check');
+        const iAmArtisan = booking.artisanId === firebaseUidRef.current;
+        notifyUser(
+          iAmArtisan ? booking.customerId : booking.artisanId,
+          `Booking ${status.toLowerCase()}`,
+          iAmArtisan
+            ? `${booking.artisanName} updated "${booking.service}" to ${status}.`
+            : `${booking.customerName} updated "${booking.service}" to ${status}.`,
+          { type: iAmArtisan ? 'my-bookings' : 'dashboard', id: booking.id }
+        );
+      })
       .catch((err) => {
         console.warn('Could not update booking', err);
         showToast('⚠️ Could not update the booking. Check your connection and try again.');
@@ -8510,7 +8588,7 @@ export default function RootLayout() {
                         <div className="relative aspect-4/3 bg-slate-100 overflow-hidden">
                           {item.images?.[0] ? (
                             <img
-                              src={item.images[0]}
+                              src={thumbnailUrl(item.images[0])}
                               alt={item.title}
                               className="w-full h-full object-cover"
                             />
@@ -9365,7 +9443,7 @@ export default function RootLayout() {
                                 <div className="relative w-20 h-20 rounded-xl overflow-hidden shrink-0 bg-slate-100 flex items-center justify-center">
                                   {item.images?.[0] ? (
                                     <img
-                                      src={item.images[0]}
+                                      src={thumbnailUrl(item.images[0])}
                                       alt=""
                                       className="w-full h-full object-cover"
                                     />
@@ -9454,7 +9532,7 @@ export default function RootLayout() {
                           >
                             {item.images?.[0] ? (
                               <img
-                                src={item.images[0]}
+                                src={thumbnailUrl(item.images[0])}
                                 alt=""
                                 className="w-20 h-20 rounded-xl object-cover shrink-0"
                               />
@@ -10798,7 +10876,7 @@ export default function RootLayout() {
                       <div className="h-36 w-full relative bg-slate-100 overflow-hidden">
                         {item.images?.[0] ? (
                           <img
-                            src={item.images[0]}
+                            src={thumbnailUrl(item.images[0])}
                             alt={item.title}
                             className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                           />
@@ -12339,7 +12417,7 @@ export default function RootLayout() {
                           <div className="relative aspect-4/3 w-full bg-slate-100 overflow-hidden">
                             {item.images?.[0] ? (
                               <img
-                                src={item.images[0]}
+                                src={thumbnailUrl(item.images[0])}
                                 alt={item.title}
                                 className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                               />
@@ -12510,7 +12588,7 @@ export default function RootLayout() {
                           <div className="relative aspect-4/3 w-full bg-slate-100 overflow-hidden">
                             {item.images?.[0] ? (
                               <img
-                                src={item.images[0]}
+                                src={thumbnailUrl(item.images[0])}
                                 alt={item.title}
                                 className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                               />
@@ -14523,6 +14601,10 @@ export default function RootLayout() {
                         .then((saved) => {
                           setBookingReferenceCode(saved.referenceCode);
                           setBookingSuccessModal(true);
+                          notifyUser(saved.artisanId, 'New booking request', `${saved.customerName}: ${saved.service} • ${saved.bookingDate}`, {
+                            type: 'dashboard',
+                            id: saved.id,
+                          });
                         })
                         .catch((err) => {
                           console.warn('Could not create booking', err);

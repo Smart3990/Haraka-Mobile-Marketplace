@@ -23,6 +23,7 @@ import {
   doc,
   getDoc,
   onSnapshot,
+  limit,
   orderBy,
   query,
   setDoc,
@@ -32,6 +33,7 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
+import { isCloudinaryConfigured, uploadMedia } from './cloudinary';
 import { auth, db } from './firebase';
 import type { Listing } from './listingData';
 
@@ -253,7 +255,7 @@ export async function loadUserProfile(user: User): Promise<UserProfileDoc> {
 /** Saves the user's own editable profile fields (role and badge are admin-only). */
 export async function saveUserProfile(uid: string, data: Partial<UserProfileDoc>): Promise<void> {
   const { role: _role, verified: _verified, ...editable } = data;
-  if (editable.avatar?.startsWith('data:image')) editable.avatar = await compressImage(editable.avatar, 150_000);
+  if (editable.avatar?.startsWith('data:image')) editable.avatar = await storeMedia(editable.avatar, 'avatars', 150_000);
   await updateDoc(doc(db, 'users', uid), stripUndefined(editable));
 }
 
@@ -403,7 +405,15 @@ export async function decideApplication(app: StoredApplication, decision: Applic
   });
   if (app.role === 'artisan') {
     const profileRef = doc(db, 'artisans', app.uid);
-    if (approved) batch.set(profileRef, publicArtisanProfile(app, decision === 'verify'), { merge: true });
+    if (approved) {
+      const profile = publicArtisanProfile(app, decision === 'verify');
+      profile.avatar = (await storeMedia(profile.avatar, 'avatars', 120_000)) || '';
+      profile.voiceIntroUrl = (await storeMedia(profile.voiceIntroUrl, 'voice', 0)) || '';
+      profile.verifiedWorkPortfolio = await Promise.all(
+        profile.verifiedWorkPortfolio.map(async (w) => ({ ...w, img: (await storeMedia(w.img, 'portfolio', 100_000)) || '' }))
+      );
+      batch.set(profileRef, profile, { merge: true });
+    }
     else batch.delete(profileRef);
   }
   await batch.commit();
@@ -477,7 +487,7 @@ function publicArtisanProfile(app: Record<string, any>, verified: boolean): Arti
     bio: app.sellerBio || '',
     phone: app.phone || '',
     whatsapp: app.allowWhatsApp ? app.whatsapp || app.phone || '' : '',
-    voiceIntroUrl: typeof app.voiceIntroUrl === 'string' && app.voiceIntroUrl.startsWith('data:') ? app.voiceIntroUrl : '',
+    voiceIntroUrl: typeof app.voiceIntroUrl === 'string' ? app.voiceIntroUrl : '',
     verified,
     policeCleared: app.policeClearanceStatus === 'cleared',
     available: true,
@@ -504,7 +514,7 @@ export function updateMyArtisanProfile(
   if (!uid) return Promise.reject(new Error('Please log in again.'));
   const write = async () => {
     const update = { ...data };
-    if (update.avatar?.startsWith('data:image')) update.avatar = await compressImage(update.avatar, 150_000);
+    if (update.avatar?.startsWith('data:image')) update.avatar = await storeMedia(update.avatar, 'avatars', 150_000);
     await updateDoc(doc(db, 'artisans', uid), stripUndefined(update));
   };
   return write();
@@ -548,9 +558,11 @@ export async function createBooking(
   if (!user) throw new Error('Please log in to book an artisan.');
   if (user.uid === input.artisanId) throw new Error('You cannot book yourself.');
   const ref = doc(collection(db, 'bookings'));
-  const voice = input.voiceNoteUrl?.startsWith('data:') ? input.voiceNoteUrl : undefined;
-  const budget = Math.floor((850_000 - (voice?.length || 0)) / Math.max(1, input.workImages.length));
-  const workImages = await Promise.all(input.workImages.map((src) => compressImage(src, Math.max(60_000, budget))));
+  const voice = await storeMedia(input.voiceNoteUrl, 'bookings', 0);
+  const budget = Math.floor((850_000 - (voice?.startsWith('data:') ? voice.length : 0)) / Math.max(1, input.workImages.length));
+  const workImages = (await Promise.all(
+    input.workImages.map((src) => storeMedia(src, 'bookings', Math.max(60_000, budget)))
+  )) as string[];
   const now = new Date().toISOString();
   const booking: BookingDoc = stripUndefined({
     ...input,
@@ -635,6 +647,22 @@ export async function submitReview(booking: BookingDoc, rating: number, text: st
   await setDoc(doc(db, 'reviews', booking.id), review);
 }
 
+/**
+ * Stores a photo (or voice note) taken on the device. With Cloudinary set up it is uploaded and
+ * the public URL is returned; otherwise it stays inline as a shrunk data: URL (the 1 MB Firestore
+ * document limit then applies, so `inlinePhotoBudget` keeps photos small).
+ */
+async function storeMedia(src: string | undefined, folder: string, inlinePhotoBudget: number): Promise<string | undefined> {
+  if (!src) return src;
+  if (src.startsWith('blob:')) src = await blobToDataUrl(await (await fetch(src)).blob());
+  if (!src.startsWith('data:')) return src; // already a URL
+  const isImage = src.startsWith('data:image');
+  if (isCloudinaryConfigured()) {
+    return uploadMedia(isImage ? await compressImage(src, 450_000) : src, folder);
+  }
+  return isImage ? compressImage(src, inlinePhotoBudget) : src;
+}
+
 export type StoredListing = Listing & { sellerId: string; createdAtISO: string };
 
 /** "Just now", "5m ago", "3h ago", "2d ago", or a date for older ads. */
@@ -652,7 +680,8 @@ export function watchListings(
   callback: (listings: StoredListing[]) => void,
   onError?: (error: unknown) => void
 ): () => void {
-  const q = query(collection(db, 'listings'), orderBy('createdAtISO', 'desc'));
+  // Newest 300 ads; older ones are still reachable by direct link
+  const q = query(collection(db, 'listings'), orderBy('createdAtISO', 'desc'), limit(300));
   return onSnapshot(
     q,
     (snap) =>
@@ -681,16 +710,16 @@ export async function createListing(listing: Listing): Promise<StoredListing> {
   const uid = auth.currentUser?.uid;
   if (!uid) throw new Error('You need to be signed in to post an ad.');
 
-  // Voice notes are stored inline as data: URLs so every device can play them.
   let audio = listing.audioDescriptionUrl;
   if (audio?.startsWith('blob:')) audio = await blobToDataUrl(await (await fetch(audio)).blob());
-  if (audio && audio.length > LISTING_MEDIA_BUDGET * 0.55) {
+  if (!isCloudinaryConfigured() && audio && audio.length > LISTING_MEDIA_BUDGET * 0.55) {
     throw new Error('Voice note is too long. Please record a shorter one.');
   }
+  audio = await storeMedia(audio, 'voice', 0);
 
-  // Share what is left between the photos, shrinking further until they fit.
-  const photoBudget = Math.floor((LISTING_MEDIA_BUDGET - (audio?.length || 0)) / Math.max(1, listing.images.length));
-  const images = await Promise.all(listing.images.map((src) => compressImage(src, photoBudget)));
+  // Without Cloudinary, photos share what is left of the 1 MB document
+  const photoBudget = Math.floor((LISTING_MEDIA_BUDGET - (audio?.startsWith('data:') ? audio.length : 0)) / Math.max(1, listing.images.length));
+  const images = (await Promise.all(listing.images.map((src) => storeMedia(src, 'listings', photoBudget)))) as string[];
 
   const stored: StoredListing = stripUndefined({
     ...listing,
@@ -919,4 +948,26 @@ export async function markChatRead(chatId: string) {
   const uid = auth.currentUser?.uid;
   if (!uid) return;
   await updateDoc(doc(db, 'chats', chatId), { [`unread.${uid}`]: 0 });
+}
+
+// ---------------------------------------------------------------------------
+// Push notification tokens (/pushTokens/{uid}): one phone per account, the latest login wins
+// ---------------------------------------------------------------------------
+
+export async function savePushToken(token: string): Promise<void> {
+  const uid = auth.currentUser?.uid;
+  if (!uid) return;
+  await setDoc(doc(db, 'pushTokens', uid), { token, updatedAtISO: new Date().toISOString() });
+}
+
+/** Stops notifications to this phone (called when signing out). */
+export async function clearPushToken(): Promise<void> {
+  const uid = auth.currentUser?.uid;
+  if (!uid) return;
+  await deleteDoc(doc(db, 'pushTokens', uid));
+}
+
+export async function getPushToken(uid: string): Promise<string | null> {
+  const snap = await getDoc(doc(db, 'pushTokens', uid));
+  return snap.exists() ? (snap.data().token as string) : null;
 }

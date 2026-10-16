@@ -107,6 +107,15 @@ service cloud.firestore {
       );
     }
 
+    // Push tokens: any signed-in user may look one up to notify that person; only the owner sets it
+    match /pushTokens/{userId} {
+      allow get: if isSignedIn();
+      allow create, update: if isOwner(userId)
+        && request.resource.data.keys().hasOnly(['token', 'updatedAtISO'])
+        && request.resource.data.token is string && request.resource.data.token.size() < 200;
+      allow delete: if isOwner(userId) || isAdmin();
+    }
+
     // Chats: one per buyer per ad, readable and writable only by the buyer and the ad's seller
     match /chats/{chatId} {
       allow get: if isSignedIn() && (resource == null || request.auth.uid in resource.data.participants);
