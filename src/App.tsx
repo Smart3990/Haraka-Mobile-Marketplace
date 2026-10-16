@@ -12921,7 +12921,7 @@ export default function RootLayout() {
                     {/* Location indicator (Available for Callouts removed as requested) */}
                     <div className="flex items-center gap-1 mb-1 text-[11px] text-slate-500 font-medium truncate">
                       <Navigation size={11} className="text-slate-400 rotate-45 shrink-0" />
-                      <span>{artisan.location}, Accra</span>
+                      <span>{artisan.location}</span>
                     </div>
 
                     <div className="flex items-center gap-1.5">
@@ -12970,10 +12970,10 @@ export default function RootLayout() {
                   <div className="px-1">
                     <div className="flex items-center justify-center gap-1 text-amber-500 font-black text-xs">
                       <Star size={11} className="fill-amber-500 text-amber-500" />
-                      <span>{artisan.rating}</span>
+                      <span>{artisan.rating || 'New'}</span>
                     </div>
                     <span className="text-[9.5px] text-slate-400 font-medium block mt-0.5">
-                      128 reviews
+                      {(() => { const n = artisanReviews.filter((r) => r.artisanId === artisan.id).length; return `${n} review${n === 1 ? '' : 's'}`; })()}
                     </span>
                   </div>
                   <div className="px-1">
@@ -13220,11 +13220,11 @@ export default function RootLayout() {
               <div>
                 <div className="flex items-center justify-between mb-2.5 px-1">
                   <h3 className="text-sm font-black text-slate-900 tracking-tight">
-                    Client Reviews <span className="text-slate-400 font-medium text-xs">(128)</span>
+                    Client Reviews <span className="text-slate-400 font-medium text-xs">({artisanReviews.filter((r) => r.artisanId === artisan.id).length})</span>
                   </h3>
                   <span className="text-xs font-bold text-amber-500 flex items-center gap-1">
                     <Star size={12} className="fill-amber-500 text-amber-500" />
-                    {artisan.rating} <span className="text-slate-400 font-medium">/ 5.0</span>
+                    {artisan.rating ? <>{artisan.rating} <span className="text-slate-400 font-medium">/ 5.0</span></> : <span className="text-slate-400 font-medium">No ratings yet</span>}
                   </span>
                 </div>
 
@@ -13451,7 +13451,7 @@ export default function RootLayout() {
                     <div className="flex items-center justify-between gap-1 mb-1">
                       <span className="text-[11px] text-slate-500 font-medium flex items-center gap-1 truncate">
                         <Navigation size={11} className="text-slate-400 rotate-45 shrink-0" />
-                        {artisan.location}, Accra
+                        {artisan.location}
                       </span>
                     </div>
 
@@ -13525,10 +13525,10 @@ export default function RootLayout() {
                   <div className="px-1">
                     <div className="flex items-center justify-center gap-1 text-amber-500 font-black text-xs">
                       <Star size={11} className="fill-amber-500 text-amber-500" />
-                      <span>{artisan.rating}</span>
+                      <span>{artisan.rating || 'New'}</span>
                     </div>
                     <span className="text-[9.5px] text-slate-400 font-medium block mt-0.5">
-                      128 reviews
+                      {(() => { const n = artisanReviews.filter((r) => r.artisanId === artisan.id).length; return `${n} review${n === 1 ? '' : 's'}`; })()}
                     </span>
                   </div>
                   <div className="px-1">
@@ -14119,7 +14119,7 @@ export default function RootLayout() {
                           </h2>
                           <div className="flex items-center gap-1 text-xs font-bold text-slate-700 shrink-0">
                             <Star size={13} className="fill-amber-400 text-amber-400" />
-                            <span>{artisan.rating}</span>
+                            <span>{artisan.rating || 'New'}</span>
                             <span className="text-slate-400 font-normal">(64)</span>
                           </div>
                         </div>
