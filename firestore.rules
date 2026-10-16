@@ -116,7 +116,13 @@ service cloud.firestore {
         && request.resource.data.sellerId != request.auth.uid
         && request.resource.data.participants == [request.auth.uid, request.resource.data.sellerId]
         && chatId == request.resource.data.listingId + '__' + request.auth.uid
-        && get(/databases/$(database)/documents/listings/$(request.resource.data.listingId)).data.sellerId == request.resource.data.sellerId;
+        && (
+          // About an artisan's services ...
+          (request.resource.data.listingId == 'artisan-' + request.resource.data.sellerId
+            && exists(/databases/$(database)/documents/artisans/$(request.resource.data.sellerId)))
+          // ... or about an ad, with its real seller
+          || get(/databases/$(database)/documents/listings/$(request.resource.data.listingId)).data.sellerId == request.resource.data.sellerId
+        );
       allow update: if isSignedIn() && request.auth.uid in resource.data.participants
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastMessage', 'lastMessageAtISO', 'lastSenderId', 'unread']);
 
@@ -143,20 +149,66 @@ service cloud.firestore {
       allow get, list, update, delete: if isAdmin();
     }
 
-    // Artisan Bookings
+    // Public artisan profiles, created by an admin when an artisan application is approved
+    match /artisans/{artisanId} {
+      allow get, list: if true;
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin()
+        // The artisan edits their own public details
+        || (isOwner(artisanId)
+          && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['available', 'inspectionFee', 'bio', 'phone', 'whatsapp', 'avatar', 'responseTime']))
+        // Completing a booking adds exactly one job, once per booking
+        || (isOwner(artisanId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['jobsCompleted', 'lastCompletedBookingId'])
+          && request.resource.data.jobsCompleted == resource.data.jobsCompleted + 1
+          && request.resource.data.lastCompletedBookingId != resource.data.lastCompletedBookingId
+          && get(/databases/$(database)/documents/bookings/$(request.resource.data.lastCompletedBookingId)).data.status != 'Completed'
+          && getAfter(/databases/$(database)/documents/bookings/$(request.resource.data.lastCompletedBookingId)).data.status == 'Completed'
+          && getAfter(/databases/$(database)/documents/bookings/$(request.resource.data.lastCompletedBookingId)).data.artisanId == artisanId);
+    }
+
+    // Artisan bookings: visible to the customer, the artisan and admins only
     match /bookings/{bookingId} {
-      allow get: if isSignedIn() && isValidId(bookingId) && (
-        resource.data.customerId == request.auth.uid ||
-        resource.data.artisanId == request.auth.uid ||
-        isAdmin()
-      );
-      allow list: if isSignedIn();
-      allow create: if isSignedIn() && isValidId(bookingId);
-      allow update: if isSignedIn() && isValidId(bookingId) && (
-        resource.data.customerId == request.auth.uid ||
-        resource.data.artisanId == request.auth.uid ||
-        isAdmin()
-      );
+      function isBookingParty() {
+        return isSignedIn() && (
+          resource.data.customerId == request.auth.uid ||
+          resource.data.artisanId == request.auth.uid ||
+          isAdmin()
+        );
+      }
+      allow get, list: if isBookingParty();
+      allow create: if isSignedIn() && isValidId(bookingId)
+        && request.resource.data.customerId == request.auth.uid
+        && request.resource.data.artisanId != request.auth.uid
+        && request.resource.data.status == 'Pending'
+        && exists(/databases/$(database)/documents/artisans/$(request.resource.data.artisanId));
+      allow update: if isSignedIn()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAtISO'])
+        && (
+          isAdmin()
+          // The artisan accepts, declines, starts and completes
+          || (resource.data.artisanId == request.auth.uid
+            && request.resource.data.status in ['Confirmed', 'In Progress', 'Completed', 'Declined'])
+          // The customer cancels (unless done) or asks again after cancelling
+          || (resource.data.customerId == request.auth.uid && (
+            (request.resource.data.status == 'Cancelled' && resource.data.status != 'Completed')
+            || (request.resource.data.status == 'Pending' && resource.data.status == 'Cancelled')))
+        );
+      allow delete: if isAdmin();
+    }
+
+    // Reviews: one per completed booking, written by that booking's customer; public to read
+    match /reviews/{bookingId} {
+      allow get, list: if true;
+      allow create: if isSignedIn()
+        && request.resource.data.customerId == request.auth.uid
+        && request.resource.data.bookingId == bookingId
+        && request.resource.data.rating is int
+        && request.resource.data.rating >= 1 && request.resource.data.rating <= 5
+        && get(/databases/$(database)/documents/bookings/$(bookingId)).data.customerId == request.auth.uid
+        && get(/databases/$(database)/documents/bookings/$(bookingId)).data.status == 'Completed'
+        && get(/databases/$(database)/documents/bookings/$(bookingId)).data.artisanId == request.resource.data.artisanId;
       allow delete: if isAdmin();
     }
   }

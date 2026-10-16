@@ -303,7 +303,7 @@ export interface ArtisanItem {
   rate: string;
   avatar: string;
   verified: boolean;
-  category: 'carpenters' | 'electricians' | 'plumbers' | 'painters' | 'tailoring' | 'catering' | 'electronics';
+  category: 'carpenters' | 'electricians' | 'plumbers' | 'painters' | 'tailoring' | 'catering' | 'electronics' | 'other';
   badges: string[];
   audioIntro?: string;
   portfolioCount?: number;

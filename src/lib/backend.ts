@@ -333,7 +333,8 @@ export async function submitApplication(record: Record<string, any>): Promise<St
     JSON.stringify(record, (_key, value) => (typeof value === 'string' && value.startsWith('blob:') ? undefined : value))
   );
   const photos = findPhotos(app);
-  const budget = Math.floor(850_000 / Math.max(1, photos.length));
+  const voiceIntroSize = typeof app.voiceIntroUrl === 'string' ? app.voiceIntroUrl.length : 0;
+  const budget = Math.floor(Math.max(200_000, 850_000 - voiceIntroSize) / Math.max(1, photos.length));
   await Promise.all(photos.map(async ({ holder, key }) => (holder[key] = await compressImage(holder[key], budget))));
 
   const stored: StoredApplication = {
@@ -400,7 +401,238 @@ export async function decideApplication(app: StoredApplication, decision: Applic
     ...(approved && app.phone ? { phone: app.phone } : {}),
     ...(approved && app.location ? { location: app.location } : {}),
   });
+  if (app.role === 'artisan') {
+    const profileRef = doc(db, 'artisans', app.uid);
+    if (approved) batch.set(profileRef, publicArtisanProfile(app, decision === 'verify'), { merge: true });
+    else batch.delete(profileRef);
+  }
   await batch.commit();
+}
+
+// ---------------------------------------------------------------------------
+// Artisans: public profiles (/artisans/{uid}), bookings and reviews
+// ---------------------------------------------------------------------------
+
+export type ArtisanCategory =
+  | 'carpenters' | 'electricians' | 'plumbers' | 'painters' | 'tailoring' | 'catering' | 'electronics' | 'other';
+
+/** Directory category from the trade the artisan entered. */
+export function artisanCategoryFor(trade: string): ArtisanCategory {
+  const t = trade.toLowerCase();
+  if (/carpent|wood|furniture|joiner/.test(t)) return 'carpenters';
+  if (/electric|solar|wiring|inverter/.test(t)) return 'electricians';
+  if (/plumb|drain|pipe|water/.test(t)) return 'plumbers';
+  if (/paint|decor|plaster/.test(t)) return 'painters';
+  if (/tailor|sew|fashion|dress/.test(t)) return 'tailoring';
+  if (/cater|cook|food|chef|bak/.test(t)) return 'catering';
+  if (/phone|laptop|electronic|computer|repair|tech/.test(t)) return 'electronics';
+  return 'other';
+}
+
+export interface ArtisanProfileDoc {
+  id: string;
+  name: string;
+  avatar: string;
+  headline: string;
+  tradeSkill: string;
+  category: ArtisanCategory;
+  location: string;
+  serviceCoverageAreas: string[];
+  languagesSpoken: string[];
+  servicesAndPricing: Array<{ title: string; desc: string; price: string }>;
+  verifiedWorkPortfolio: Array<{ title: string; tag: string; sub: string; img: string }>;
+  inspectionFee: number;
+  responseTime: string;
+  experienceYears: string;
+  bio: string;
+  phone: string;
+  whatsapp: string;
+  voiceIntroUrl: string;
+  verified: boolean;
+  policeCleared: boolean;
+  available: boolean;
+  jobsCompleted: number;
+  lastCompletedBookingId: string;
+  approvedAtISO: string;
+}
+
+/** Only the public parts of an artisan application (never ID numbers or ID photos). */
+function publicArtisanProfile(app: Record<string, any>, verified: boolean): ArtisanProfileDoc {
+  const trade = app.tradeSkill || app.tradeCategory || '';
+  return {
+    id: app.uid,
+    name: app.name || app.legalName || '',
+    avatar: app.avatar || '',
+    headline: app.headline || '',
+    tradeSkill: trade,
+    category: artisanCategoryFor(trade),
+    location: app.location || '',
+    serviceCoverageAreas: app.serviceCoverageAreas || [],
+    languagesSpoken: app.languagesSpoken || [],
+    servicesAndPricing: (app.servicesAndPricing || []).map((s: any) => ({ title: s.title || '', desc: s.desc || '', price: s.price || '' })),
+    verifiedWorkPortfolio: (app.verifiedWorkPortfolio || []).map((w: any) => ({ title: w.title || '', tag: w.tag || '', sub: w.sub || '', img: w.img || '' })),
+    inspectionFee: Number(app.inspectionFee) || 0,
+    responseTime: app.responseTime || '',
+    experienceYears: app.experienceYears || '',
+    bio: app.sellerBio || '',
+    phone: app.phone || '',
+    whatsapp: app.allowWhatsApp ? app.whatsapp || app.phone || '' : '',
+    voiceIntroUrl: typeof app.voiceIntroUrl === 'string' && app.voiceIntroUrl.startsWith('data:') ? app.voiceIntroUrl : '',
+    verified,
+    policeCleared: app.policeClearanceStatus === 'cleared',
+    available: true,
+    jobsCompleted: 0,
+    lastCompletedBookingId: '',
+    approvedAtISO: new Date().toISOString(),
+  };
+}
+
+/** All approved artisans (public). */
+export function watchArtisans(callback: (artisans: ArtisanProfileDoc[]) => void): () => void {
+  return onSnapshot(
+    collection(db, 'artisans'),
+    (snap) => callback(snap.docs.map((d) => d.data() as ArtisanProfileDoc)),
+    (error) => console.warn('Could not load artisans', error)
+  );
+}
+
+/** An artisan updates the parts of their public profile they control. */
+export function updateMyArtisanProfile(
+  data: Partial<Pick<ArtisanProfileDoc, 'available' | 'inspectionFee' | 'bio' | 'phone' | 'whatsapp' | 'avatar' | 'responseTime'>>
+): Promise<void> {
+  const uid = auth.currentUser?.uid;
+  if (!uid) return Promise.reject(new Error('Please log in again.'));
+  const write = async () => {
+    const update = { ...data };
+    if (update.avatar?.startsWith('data:image')) update.avatar = await compressImage(update.avatar, 150_000);
+    await updateDoc(doc(db, 'artisans', uid), stripUndefined(update));
+  };
+  return write();
+}
+
+export type BookingStatus = 'Pending' | 'Confirmed' | 'In Progress' | 'Completed' | 'Cancelled' | 'Declined';
+
+export interface BookingDoc {
+  id: string;
+  referenceCode: string;
+  artisanId: string;
+  artisanName: string;
+  artisanAvatar: string;
+  artisanPhone: string;
+  trade: string;
+  service: string;
+  bookingDate: string;
+  bookingWindow: string;
+  location: string;
+  inspectionFee: string;
+  notes: string;
+  propertyType?: string;
+  urgency?: 'Immediate' | 'High' | 'Normal';
+  workImages: string[];
+  voiceNoteUrl?: string;
+  voiceNoteDuration?: number;
+  customerId: string;
+  customerName: string;
+  customerPhone: string;
+  customerAvatar: string;
+  status: BookingStatus;
+  createdAtISO: string;
+  updatedAtISO: string;
+}
+
+/** A customer books an artisan. The request stays Pending until the artisan accepts it. */
+export async function createBooking(
+  input: Omit<BookingDoc, 'id' | 'referenceCode' | 'customerId' | 'status' | 'createdAtISO' | 'updatedAtISO'>
+): Promise<BookingDoc> {
+  const user = auth.currentUser;
+  if (!user) throw new Error('Please log in to book an artisan.');
+  if (user.uid === input.artisanId) throw new Error('You cannot book yourself.');
+  const ref = doc(collection(db, 'bookings'));
+  const voice = input.voiceNoteUrl?.startsWith('data:') ? input.voiceNoteUrl : undefined;
+  const budget = Math.floor((850_000 - (voice?.length || 0)) / Math.max(1, input.workImages.length));
+  const workImages = await Promise.all(input.workImages.map((src) => compressImage(src, Math.max(60_000, budget))));
+  const now = new Date().toISOString();
+  const booking: BookingDoc = stripUndefined({
+    ...input,
+    workImages,
+    voiceNoteUrl: voice,
+    voiceNoteDuration: voice ? input.voiceNoteDuration : undefined,
+    id: ref.id,
+    referenceCode: `HRK-${ref.id.slice(0, 6).toUpperCase()}`,
+    customerId: user.uid,
+    status: 'Pending',
+    createdAtISO: now,
+    updatedAtISO: now,
+  });
+  await setDoc(ref, booking);
+  return booking;
+}
+
+function watchBookingsWhere(field: 'customerId' | 'artisanId', uid: string, callback: (bookings: BookingDoc[]) => void) {
+  return onSnapshot(
+    query(collection(db, 'bookings'), where(field, '==', uid)),
+    (snap) =>
+      callback(snap.docs.map((d) => d.data() as BookingDoc).sort((a, b) => b.createdAtISO.localeCompare(a.createdAtISO))),
+    (error) => console.warn('Could not load bookings', error)
+  );
+}
+
+/** Bookings the user made as a customer. */
+export const watchMyBookings = (uid: string, cb: (b: BookingDoc[]) => void) => watchBookingsWhere('customerId', uid, cb);
+/** Bookings customers made with this artisan. */
+export const watchArtisanBookings = (uid: string, cb: (b: BookingDoc[]) => void) => watchBookingsWhere('artisanId', uid, cb);
+
+/**
+ * Changes a booking's status. The artisan accepts, declines, starts and completes;
+ * the customer can cancel or ask again. Completing a job adds one to the artisan's job count.
+ */
+export async function setBookingStatus(booking: BookingDoc, status: BookingStatus): Promise<void> {
+  const batch = writeBatch(db);
+  batch.update(doc(db, 'bookings', booking.id), { status, updatedAtISO: new Date().toISOString() });
+  if (status === 'Completed') {
+    batch.update(doc(db, 'artisans', booking.artisanId), {
+      jobsCompleted: increment(1),
+      lastCompletedBookingId: booking.id,
+    });
+  }
+  await batch.commit();
+}
+
+export interface ReviewDoc {
+  id: string;
+  bookingId: string;
+  artisanId: string;
+  customerId: string;
+  customerName: string;
+  rating: number;
+  text: string;
+  createdAtISO: string;
+}
+
+/** All reviews (public), used for artisan ratings. */
+export function watchReviews(callback: (reviews: ReviewDoc[]) => void): () => void {
+  return onSnapshot(
+    collection(db, 'reviews'),
+    (snap) => callback(snap.docs.map((d) => d.data() as ReviewDoc)),
+    (error) => console.warn('Could not load reviews', error)
+  );
+}
+
+/** The customer reviews a completed booking (one review per booking). */
+export async function submitReview(booking: BookingDoc, rating: number, text: string, customerName: string) {
+  const user = auth.currentUser;
+  if (!user) throw new Error('Please log in to leave a review.');
+  const review: ReviewDoc = {
+    id: booking.id,
+    bookingId: booking.id,
+    artisanId: booking.artisanId,
+    customerId: user.uid,
+    customerName,
+    rating: Math.min(5, Math.max(1, Math.round(rating))),
+    text: text.trim().slice(0, 1000),
+    createdAtISO: new Date().toISOString(),
+  };
+  await setDoc(doc(db, 'reviews', booking.id), review);
 }
 
 export type StoredListing = Listing & { sellerId: string; createdAtISO: string };
@@ -594,7 +826,7 @@ export async function openChat(input: {
 }): Promise<string> {
   const uid = auth.currentUser?.uid;
   if (!uid) throw new Error('Please log in to message the seller.');
-  if (uid === input.listing.sellerId) throw new Error('This is your own ad.');
+  if (uid === input.listing.sellerId) throw new Error('This is your own profile or ad.');
   const id = chatIdFor(input.listing.id, uid);
   const ref = doc(db, 'chats', id);
   const existing = await getDoc(ref);

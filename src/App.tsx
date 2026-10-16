@@ -121,8 +121,6 @@ import {
 import {
   CATEGORIES,
   SERVICES_CATEGORIES,
-  FEATURED_ARTISANS,
-  ARTISANS_DIRECTORY,
   ArtisanItem,
   INITIAL_LISTINGS,
   INITIAL_CONVERSATIONS,
@@ -137,6 +135,7 @@ import { auth as firebaseAuth } from './lib/firebase';
 import {
   acceptOffer,
   addAdmin,
+  createBooking,
   createListing,
   decideApplication,
   deleteListing as deleteRemoteListing,
@@ -147,18 +146,28 @@ import {
   openChat,
   saveUserProfile,
   sendChatMessage,
+  setBookingStatus,
+  submitReview,
+  updateMyArtisanProfile,
   signOutUser,
   submitApplication,
   submitReport,
   watchAllApplications,
   watchAdminAccess,
+  watchArtisanBookings,
+  watchArtisans,
   watchChatMessages,
   watchMyApplication,
+  watchMyBookings,
   watchMyChats,
+  watchReviews,
   type AdminAccess,
   type ApplicationDecision,
+  type ArtisanProfileDoc,
+  type BookingDoc,
   type ChatDoc,
   type ChatMessageDoc,
+  type ReviewDoc,
   type PlatformStats,
   type StoredApplication,
   updateListing as updateRemoteListing,
@@ -172,7 +181,8 @@ import OnboardingScreen from './components/OnboardingScreen';
 import SignUpScreen from './components/SignUpScreen';
 import SignInScreen from './components/SignInScreen';
 import ForgotPasswordScreen from './components/ForgotPasswordScreen';
-import { getArtisanProfileData } from './lib/artisanProfileData';
+import type { ArtisanProfileDetails } from './lib/artisanProfileData';
+import { playVoice, startVoiceRecording, type VoiceRecording } from './lib/voice';
 
 type TabKey = 'home' | 'categories' | 'post' | 'messages' | 'saved' | 'profile' | 'dashboard';
 
@@ -206,6 +216,7 @@ type ScreenRoute =
 
 export interface BookingRecord {
   id: string;
+  voiceNoteUrl?: string;
   referenceCode: string;
   artisanId: string;
   artisanName: string;
@@ -980,6 +991,69 @@ export default function App({ native = false }: { native?: boolean } = {}) {
 
   // Domain data (starts completely empty for new accounts: no saved, no notifications or messages)
   const [listings, setListings] = useState<Listing[]>(INITIAL_LISTINGS);
+
+  // Approved artisans (public profiles) and their reviews, live from Firestore
+  const [artisanProfiles, setArtisanProfiles] = useState<ArtisanProfileDoc[]>([]);
+  const [artisanReviews, setArtisanReviews] = useState<ReviewDoc[]>([]);
+  useEffect(() => watchArtisans(setArtisanProfiles), []);
+  useEffect(() => watchReviews(setArtisanReviews), []);
+  const ARTISANS_DIRECTORY: ArtisanItem[] = useMemo(
+    () =>
+      artisanProfiles.map((a) => {
+        const own = artisanReviews.filter((r) => r.artisanId === a.id);
+        const rating = own.length ? Math.round((own.reduce((sum, r) => sum + r.rating, 0) / own.length) * 10) / 10 : 0;
+        return {
+          id: a.id,
+          name: a.name,
+          role: a.headline || a.tradeSkill,
+          location: a.location,
+          rating,
+          jobsCompleted: a.jobsCompleted || 0,
+          rate: a.inspectionFee > 0 ? `GH₵ ${a.inspectionFee}` : 'FREE INSPECTION',
+          avatar: a.avatar,
+          verified: a.verified,
+          category: a.category,
+          badges: [...(a.verified ? ['Ghana Card Verified'] : []), ...(a.policeCleared ? ['Police Cleared'] : [])],
+          audioIntro: a.voiceIntroUrl || undefined,
+          portfolioCount: a.verifiedWorkPortfolio.length,
+          phone: a.phone,
+        };
+      }),
+    [artisanProfiles, artisanReviews]
+  );
+  const FEATURED_ARTISANS = useMemo(() => ARTISANS_DIRECTORY.filter((a) => a.verified).slice(0, 6), [ARTISANS_DIRECTORY]);
+
+  /** Profile page details, all taken from the artisan's approved application and real reviews. */
+  const getArtisanProfileData = (art: ArtisanItem): ArtisanProfileDetails => {
+    const p = artisanProfiles.find((x) => x.id === art.id);
+    const own = artisanReviews
+      .filter((r) => r.artisanId === art.id)
+      .sort((a, b) => b.createdAtISO.localeCompare(a.createdAtISO));
+    return {
+      subrole: p?.headline || p?.tradeSkill || art.role,
+      voiceLang: (p?.languagesSpoken || []).join(' & '),
+      languages: p?.languagesSpoken?.length ? `Speaks: ${p.languagesSpoken.join(', ')}` : '',
+      guaranteeLocation: (p?.serviceCoverageAreas || []).join(', ') || p?.location || '',
+      services: (p?.servicesAndPricing || []).map((svc) => ({ ...svc, icon: <Wrench size={18} /> })),
+      portfolio: p?.verifiedWorkPortfolio || [],
+      reviews: own.map((r) => ({
+        initials: r.customerName
+          .split(' ')
+          .map((part) => part[0] || '')
+          .join('')
+          .slice(0, 2)
+          .toUpperCase(),
+        bg: 'bg-orange-100 text-orange-800',
+        name: r.customerName,
+        loc: '★'.repeat(r.rating),
+        text: r.text,
+        time: formatChatTime(r.createdAtISO),
+      })),
+      calloutLabel: 'Inspection fee',
+      calloutPrice: p && p.inspectionFee > 0 ? `GH₵ ${p.inspectionFee}` : 'FREE',
+      arrivalNote: p?.responseTime ? `Usually responds ${p.responseTime}` : '',
+    };
+  };
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [savedIds, setSavedIds] = useState<string[]>([]);
@@ -1010,6 +1084,42 @@ export default function App({ native = false }: { native?: boolean } = {}) {
     if (!firebaseUidRef.current) {
       showToast('Please log in to message the seller.');
       navigateTo({ type: 'login' });
+      return;
+    }
+    const artisanProfile = artisanProfiles.find((a) => a.id === seller?.id || a.id === listing?.id);
+    if (artisanProfile) {
+      openChat({
+        listing: {
+          id: `artisan-${artisanProfile.id}`,
+          title: `${artisanProfile.name} - ${artisanProfile.headline || artisanProfile.tradeSkill}`,
+          price: artisanProfile.inspectionFee || 0,
+          currency: 'GH₵',
+          image: artisanProfile.avatar,
+          sellerId: artisanProfile.id,
+        },
+        seller: {
+          name: artisanProfile.name,
+          avatar: artisanProfile.avatar,
+          phone: artisanProfile.phone,
+          isVerified: artisanProfile.verified,
+        },
+        me: {
+          name: userProfile.name || 'Customer',
+          avatar: userProfile.avatar || '',
+          phone: userProfile.phone || '',
+          isVerified: Boolean(userProfile.isVerified),
+        },
+      })
+        .then(async (chatId) => {
+          navigateTo({ type: 'chat', id: chatId });
+          if (initialMessageText) {
+            await sendChatMessage(
+              { id: chatId, participants: [firebaseUidRef.current!, artisanProfile.id], listingCurrency: 'GH₵' } as ChatDoc,
+              { text: initialMessageText }
+            );
+          }
+        })
+        .catch((err) => showToast(`⚠️ ${err instanceof Error ? err.message : 'Could not open the chat.'}`));
       return;
     }
     const stored = listing?.id
@@ -1180,20 +1290,21 @@ export default function App({ native = false }: { native?: boolean } = {}) {
   // Service Booking State
   const [bookingArtisanId, setBookingArtisanId] = useState<string>('artisan-kofi');
   const [bookingStep, setBookingStep] = useState<1 | 2>(1);
-  const [bookingService, setBookingService] = useState<string>('Custom Wardrobe');
-  const [bookingDescription, setBookingDescription] = useState<string>(
-    'Need custom floor-to-ceiling wardrobe with sliding mirror doors and inner drawers. Measurements approx 2.8m width, 2.4m height.'
-  );
+  const [bookingService, setBookingService] = useState<string>('');
+  const [bookingDescription, setBookingDescription] = useState<string>('');
   const [isRecordingAudio, setIsRecordingAudio] = useState<boolean>(false);
-  const [audioRecordDuration, setAudioRecordDuration] = useState<number>(18);
-  const [hasRecordedAudio, setHasRecordedAudio] = useState<boolean>(true);
+  const [audioRecordDuration, setAudioRecordDuration] = useState<number>(0);
+  const [hasRecordedAudio, setHasRecordedAudio] = useState<boolean>(false);
   const [bookingPhotos, setBookingPhotos] = useState<Array<{ url: string; label: string }>>([]);
-  const [bookingDate, setBookingDate] = useState<string>('TODAY 26 Feb');
+  const [bookingDate, setBookingDate] = useState<string>(
+    () => `TODAY ${new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}`
+  );
   const [bookingWindow, setBookingWindow] = useState<string>('Morning');
   const [bookingLocation, setBookingLocation] = useState<string>('');
   const [bookingClientName, setBookingClientName] = useState<string>('');
   const [bookingClientPhone, setBookingClientPhone] = useState<string>('');
   const [bookingSuccessModal, setBookingSuccessModal] = useState<boolean>(false);
+  const [isSubmittingBooking, setIsSubmittingBooking] = useState(false);
   const [bookingReferenceCode, setBookingReferenceCode] = useState<string>('');
   const bookingPhotoInputRef = useRef<HTMLInputElement>(null);
   const handleBookingPhotosSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1212,9 +1323,9 @@ export default function App({ native = false }: { native?: boolean } = {}) {
     }
   };
   const [showDatePickerModal, setShowDatePickerModal] = useState<boolean>(false);
-  const [calendarYear, setCalendarYear] = useState<number>(2026);
-  const [calendarMonth, setCalendarMonth] = useState<number>(1); // 1 = Feb (0-indexed)
-  const [calendarSelectedDay, setCalendarSelectedDay] = useState<number>(26);
+  const [calendarYear, setCalendarYear] = useState<number>(() => new Date().getFullYear());
+  const [calendarMonth, setCalendarMonth] = useState<number>(() => new Date().getMonth()); // 0-indexed
+  const [calendarSelectedDay, setCalendarSelectedDay] = useState<number>(() => new Date().getDate());
   const [isCustomService, setIsCustomService] = useState<boolean>(false);
   const [customServiceName, setCustomServiceName] = useState<string>('');
   const [customServicesList, setCustomServicesList] = useState<string[]>([]);
@@ -1309,324 +1420,97 @@ export default function App({ native = false }: { native?: boolean } = {}) {
     };
   }, []);
 
-  // Real Audio Recording Implementation with Web Audio decoding & guaranteed audible playback
+  // Booking voice note: real recording, stored with the booking so the artisan can play it
+  const bookingRecordingRef = useRef<VoiceRecording | null>(null);
+  const voicePlaybackStopRef = useRef<(() => void) | null>(null);
   const startAudioRecording = async () => {
+    voicePlaybackStopRef.current?.();
     try {
-      if (activeSourceNodeRef.current) {
-        try {
-          activeSourceNodeRef.current.stop();
-        } catch (_) {}
-        activeSourceNodeRef.current = null;
-      }
-      if (playbackIntervalRef.current) {
-        clearInterval(playbackIntervalRef.current);
-        playbackIntervalRef.current = null;
-      }
-      setIsPlayingBookingAudio(false);
-      setPlaybackProgress(0);
-
-      // Pre-warm the AudioContext on user interaction
-      const ctx = getSharedAudioContext();
-      if (ctx.state === 'suspended') {
-        await ctx.resume();
-      }
-
-      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        audioStreamRef.current = stream;
-        audioChunksRef.current = [];
-
-        let options: MediaRecorderOptions = {};
-        if (typeof MediaRecorder !== 'undefined') {
-          if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
-            options = { mimeType: 'audio/webm;codecs=opus' };
-          } else if (MediaRecorder.isTypeSupported('audio/webm')) {
-            options = { mimeType: 'audio/webm' };
-          } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
-            options = { mimeType: 'audio/mp4' };
-          } else if (MediaRecorder.isTypeSupported('audio/ogg')) {
-            options = { mimeType: 'audio/ogg' };
-          }
-        }
-
-        const recorder = new MediaRecorder(stream, options);
-        mediaRecorderRef.current = recorder;
-
-        recorder.ondataavailable = (event) => {
-          if (event.data && event.data.size > 0) {
-            audioChunksRef.current.push(event.data);
-          }
-        };
-
-        recorder.start(100);
-        setIsRecordingAudio(true);
-        showToast('Microphone active: recording...');
-      } else {
-        setIsRecordingAudio(true);
-        showToast('Recording voice note... speak now');
-      }
-    } catch (err: any) {
-      console.warn('Microphone access note:', err);
+      bookingRecordingRef.current = await startVoiceRecording(() => {
+        showToast('Maximum voice note length reached');
+        stopAudioRecording(true);
+      });
       setIsRecordingAudio(true);
-      showToast('Recording voice note... speak now');
+      showToast('Recording… tap again to finish');
+    } catch (err) {
+      showToast(`⚠️ ${err instanceof Error ? err.message : 'Could not start recording.'}`);
     }
   };
 
   const stopAudioRecording = async (save = true) => {
     setIsRecordingAudio(false);
-
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.onstop = async () => {
-        if (save && audioChunksRef.current.length > 0) {
-          const mime = mediaRecorderRef.current?.mimeType || 'audio/webm';
-          const blob = new Blob(audioChunksRef.current, { type: mime });
-          const url = URL.createObjectURL(blob);
-          if (recordedAudioUrl) {
-            URL.revokeObjectURL(recordedAudioUrl);
-          }
-          setRecordedAudioUrl(url);
-
-          try {
-            const ctx = getSharedAudioContext();
-            const arrayBuf = await blob.arrayBuffer();
-            const decoded = await ctx.decodeAudioData(arrayBuf);
-            recordedAudioBufferRef.current = decoded;
-            const duration = Math.max(1, Math.round(decoded.duration));
-            setAudioRecordDuration(duration);
-            setHasRecordedAudio(true);
-            showToast(`Voice note recorded & ready (${duration}s)`);
-          } catch (decodeErr) {
-            console.warn('Direct decode fallback:', decodeErr);
-            const ctx = getSharedAudioContext();
-            const duration = Math.max(1, liveRecordingSeconds || 8);
-            recordedAudioBufferRef.current = createSyntheticVocalBuffer(ctx, duration);
-            setAudioRecordDuration(duration);
-            setHasRecordedAudio(true);
-            showToast(`Voice note attached (${duration}s)`);
-          }
-        } else if (save) {
-          const ctx = getSharedAudioContext();
-          const duration = Math.max(1, liveRecordingSeconds || 8);
-          recordedAudioBufferRef.current = createSyntheticVocalBuffer(ctx, duration);
-          setAudioRecordDuration(duration);
-          setHasRecordedAudio(true);
-          showToast(`Voice note attached (${duration}s)`);
-        }
-        if (audioStreamRef.current) {
-          audioStreamRef.current.getTracks().forEach((track) => track.stop());
-          audioStreamRef.current = null;
-        }
-      };
-      mediaRecorderRef.current.stop();
-    } else {
-      if (save) {
-        const ctx = getSharedAudioContext();
-        const duration = Math.max(1, liveRecordingSeconds || 8);
-        recordedAudioBufferRef.current = createSyntheticVocalBuffer(ctx, duration);
-        setAudioRecordDuration(duration);
-        setHasRecordedAudio(true);
-        showToast(`Voice note attached (${duration}s)`);
+    const recording = bookingRecordingRef.current;
+    bookingRecordingRef.current = null;
+    if (!recording) return;
+    try {
+      const result = await recording.stop(save);
+      if (!result) {
+        if (save) showToast('⚠️ Nothing was recorded. Please try again.');
+        return;
       }
-      if (audioStreamRef.current) {
-        audioStreamRef.current.getTracks().forEach((track) => track.stop());
-        audioStreamRef.current = null;
-      }
+      setRecordedAudioUrl(result.dataUrl);
+      setAudioRecordDuration(result.seconds);
+      setHasRecordedAudio(true);
+      showToast(`Voice note recorded (${formatAudioTime(result.seconds)})`);
+    } catch {
+      showToast('⚠️ Could not save the recording. Please try again.');
     }
   };
 
   const togglePlayAudio = async () => {
     if (isPlayingBookingAudio) {
-      if (activeSourceNodeRef.current) {
-        try {
-          activeSourceNodeRef.current.stop();
-        } catch (_) {}
-        activeSourceNodeRef.current = null;
-      }
-      if (playbackIntervalRef.current) {
-        clearInterval(playbackIntervalRef.current);
-        playbackIntervalRef.current = null;
-      }
-      setIsPlayingBookingAudio(false);
-      showToast('Paused voice note');
+      voicePlaybackStopRef.current?.();
       return;
     }
-
-    try {
-      const ctx = getSharedAudioContext();
-      if (ctx.state === 'suspended') {
-        await ctx.resume();
-      }
-
-      // If we don't have a buffer yet, synthesize a vocal note
-      let buffer = recordedAudioBufferRef.current;
-      if (!buffer) {
-        buffer = createSyntheticVocalBuffer(ctx, audioRecordDuration || 18);
-        recordedAudioBufferRef.current = buffer;
-      }
-
-      if (activeSourceNodeRef.current) {
-        try {
-          activeSourceNodeRef.current.stop();
-        } catch (_) {}
-        activeSourceNodeRef.current = null;
-      }
-      if (playbackIntervalRef.current) {
-        clearInterval(playbackIntervalRef.current);
-        playbackIntervalRef.current = null;
-      }
-
-      const source = ctx.createBufferSource();
-      source.buffer = buffer;
-
-      const gainNode = ctx.createGain();
-      gainNode.gain.setValueAtTime(1.0, ctx.currentTime);
-
-      source.connect(gainNode);
-      gainNode.connect(ctx.destination);
-
-      activeSourceNodeRef.current = source;
-      setIsPlayingBookingAudio(true);
-      showToast('Playing voice note');
-
-      const totalDuration = buffer.duration || audioRecordDuration || 18;
-      const startTime = ctx.currentTime;
-
-      playbackIntervalRef.current = setInterval(() => {
-        const elapsed = ctx.currentTime - startTime;
-        const prog = Math.min(1, elapsed / totalDuration);
-        setPlaybackProgress(prog);
-        if (prog >= 1) {
-          if (playbackIntervalRef.current) {
-            clearInterval(playbackIntervalRef.current);
-            playbackIntervalRef.current = null;
-          }
-          setIsPlayingBookingAudio(false);
-          setPlaybackProgress(0);
-          activeSourceNodeRef.current = null;
-        }
-      }, 50);
-
-      source.onended = () => {
-        if (playbackIntervalRef.current) {
-          clearInterval(playbackIntervalRef.current);
-          playbackIntervalRef.current = null;
-        }
+    if (!recordedAudioUrl) {
+      showToast('⚠️ No voice note recorded yet.');
+      return;
+    }
+    setIsPlayingBookingAudio(true);
+    voicePlaybackStopRef.current = playVoice(recordedAudioUrl, {
+      onProgress: (fraction) => setPlaybackProgress(fraction),
+      onEnd: () => {
         setIsPlayingBookingAudio(false);
         setPlaybackProgress(0);
-        activeSourceNodeRef.current = null;
-      };
-
-      source.start(0);
-    } catch (err) {
-      console.warn('Audio playback error:', err);
-      showToast('Playing voice note');
-    }
+        voicePlaybackStopRef.current = null;
+      },
+      onError: () => showToast('⚠️ This voice note could not be played'),
+    });
   };
 
   const deleteAudioNote = () => {
-    if (activeSourceNodeRef.current) {
-      try {
-        activeSourceNodeRef.current.stop();
-      } catch (_) {}
-      activeSourceNodeRef.current = null;
-    }
-    if (playbackIntervalRef.current) {
-      clearInterval(playbackIntervalRef.current);
-      playbackIntervalRef.current = null;
-    }
-    if (recordedAudioUrl) {
-      URL.revokeObjectURL(recordedAudioUrl);
-      setRecordedAudioUrl(null);
-    }
-    recordedAudioBufferRef.current = null;
+    voicePlaybackStopRef.current?.();
+    setRecordedAudioUrl(null);
     setHasRecordedAudio(false);
-    setIsPlayingBookingAudio(false);
-    setPlaybackProgress(0);
+    setAudioRecordDuration(0);
     showToast('Voice note removed');
   };
 
-  const togglePlayArtisanBookingAudio = async (booking: { id: string; clientName?: string; artisanName?: string; voiceNoteDuration?: number }) => {
-    const displayName = booking.clientName || booking.artisanName || 'voice';
+  /** Plays the voice note attached to a booking (customer's or artisan's view). */
+  const togglePlayArtisanBookingAudio = async (booking: { id: string; clientName?: string; artisanName?: string; voiceNoteDuration?: number; voiceNoteUrl?: string }) => {
     if (isPlayingArtisanBookingAudio && activeAudioBookingId === booking.id) {
-      if (activeSourceNodeRef.current) {
-        try {
-          activeSourceNodeRef.current.stop();
-        } catch (_) {}
-        activeSourceNodeRef.current = null;
-      }
-      if (artisanAudioIntervalRef.current) {
-        clearInterval(artisanAudioIntervalRef.current);
-        artisanAudioIntervalRef.current = null;
-      }
-      setIsPlayingArtisanBookingAudio(false);
-      showToast(`Paused ${displayName}'s voice note`);
+      voicePlaybackStopRef.current?.();
       return;
     }
-
-    try {
-      const ctx = getSharedAudioContext();
-      if (ctx.state === 'suspended') {
-        await ctx.resume();
-      }
-
-      if (activeSourceNodeRef.current) {
-        try {
-          activeSourceNodeRef.current.stop();
-        } catch (_) {}
-        activeSourceNodeRef.current = null;
-      }
-      if (artisanAudioIntervalRef.current) {
-        clearInterval(artisanAudioIntervalRef.current);
-        artisanAudioIntervalRef.current = null;
-      }
-
-      const duration = booking.voiceNoteDuration || 18;
-      const buffer = createSyntheticVocalBuffer(ctx, duration);
-
-      const source = ctx.createBufferSource();
-      source.buffer = buffer;
-
-      const gainNode = ctx.createGain();
-      gainNode.gain.setValueAtTime(1.0, ctx.currentTime);
-
-      source.connect(gainNode);
-      gainNode.connect(ctx.destination);
-
-      activeSourceNodeRef.current = source;
-      setActiveAudioBookingId(booking.id);
-      setIsPlayingArtisanBookingAudio(true);
-      setArtisanAudioProgress(0);
-      showToast(`Playing ${displayName}'s voice note`);
-
-      const startTime = ctx.currentTime;
-      artisanAudioIntervalRef.current = setInterval(() => {
-        const elapsed = ctx.currentTime - startTime;
-        const prog = Math.min(1, elapsed / duration);
-        setArtisanAudioProgress(prog);
-        if (prog >= 1) {
-          clearInterval(artisanAudioIntervalRef.current);
-          artisanAudioIntervalRef.current = null;
-          setIsPlayingArtisanBookingAudio(false);
-          setActiveAudioBookingId(null);
-          setArtisanAudioProgress(0);
-        }
-      }, 80);
-
-      source.onended = () => {
-        if (artisanAudioIntervalRef.current) {
-          clearInterval(artisanAudioIntervalRef.current);
-          artisanAudioIntervalRef.current = null;
-        }
-        setIsPlayingArtisanBookingAudio(false);
-        setActiveAudioBookingId(null);
-        setArtisanAudioProgress(0);
-      };
-
-      source.start(0);
-    } catch (err) {
-      console.warn('Artisan audio error:', err);
-      showToast('Playing voice note');
+    voicePlaybackStopRef.current?.();
+    const url =
+      booking.voiceNoteUrl ||
+      [...myBookings, ...artisanBookings].find((b) => b.id === booking.id)?.voiceNoteUrl;
+    if (!url) {
+      showToast('⚠️ This voice note is not available');
+      return;
     }
+    setActiveAudioBookingId(booking.id);
+    setIsPlayingArtisanBookingAudio(true);
+    voicePlaybackStopRef.current = playVoice(url, {
+      onProgress: (fraction) => setArtisanAudioProgress(fraction),
+      onEnd: () => {
+        setIsPlayingArtisanBookingAudio(false);
+        setArtisanAudioProgress(0);
+        voicePlaybackStopRef.current = null;
+      },
+      onError: () => showToast('⚠️ This voice note could not be played'),
+    });
   };
 
   // Real photos from the phone's camera or gallery, shrunk right away to save memory and storage
@@ -2240,12 +2124,12 @@ export default function App({ native = false }: { native?: boolean } = {}) {
     tradeSkill: '',
     inspectionFee: 0,
     dealsCompleted: 0,
-    rating: 5.0,
+    rating: 0,
     reviewsCount: 0,
-    responseTime: '< 5 mins',
-    responseRate: '100%',
+    responseTime: '',
+    responseRate: '',
     completedJobs: 0,
-    repeatHireRate: '100%',
+    repeatHireRate: '',
     dealsBought: 0,
     inquiriesCount: 0,
     buyerRating: 5.0,
@@ -2767,116 +2651,69 @@ export default function App({ native = false }: { native?: boolean } = {}) {
     };
   }, [isRecordingArtisanAudio]);
 
+  const artisanRecordingRef = useRef<VoiceRecording | null>(null);
+  const artisanIntroStopRef = useRef<(() => void) | null>(null);
   const startArtisanRecording = async () => {
+    artisanIntroStopRef.current?.();
+    setArtisanLiveRecordingSeconds(0);
     try {
-      if (isPlayingArtisanAudio) {
-        setIsPlayingArtisanAudio(false);
-      }
-      if (artisanAudioPlaybackIntervalRef.current) {
-        clearInterval(artisanAudioPlaybackIntervalRef.current);
-        artisanAudioPlaybackIntervalRef.current = null;
-      }
-      setArtisanRegAudioProgress(0);
-      setArtisanLiveRecordingSeconds(0);
-
-      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-        try {
-          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-          artisanAudioStreamRef.current = stream;
-          artisanAudioChunksRef.current = [];
-          const recorder = new MediaRecorder(stream);
-          artisanAudioMediaRecorderRef.current = recorder;
-          recorder.ondataavailable = (e) => {
-            if (e.data && e.data.size > 0) {
-              artisanAudioChunksRef.current.push(e.data);
-            }
-          };
-          recorder.start(100);
-        } catch (micErr) {
-          console.warn('Microphone permission fallback:', micErr);
-        }
-      }
+      artisanRecordingRef.current = await startVoiceRecording(() => {
+        showToast('Maximum voice note length reached');
+        stopArtisanRecording(true);
+      });
       setIsRecordingArtisanAudio(true);
-      showToast('Recording artisan voice greeting (max 30s)...');
-    } catch (e) {
-      setIsRecordingArtisanAudio(true);
-      showToast('Recording voice note...');
+      showToast('Recording your voice greeting… tap again to finish');
+    } catch (err) {
+      showToast(`⚠️ ${err instanceof Error ? err.message : 'Could not start recording.'}`);
     }
   };
 
-  const stopArtisanRecording = (save = true) => {
+  const stopArtisanRecording = async (save = true) => {
     setIsRecordingArtisanAudio(false);
-    if (artisanAudioMediaRecorderRef.current && artisanAudioMediaRecorderRef.current.state !== 'inactive') {
-      artisanAudioMediaRecorderRef.current.onstop = () => {
-        if (save && artisanAudioChunksRef.current.length > 0) {
-          const blob = new Blob(artisanAudioChunksRef.current, { type: 'audio/webm' });
-          const url = URL.createObjectURL(blob);
-          setArtisanAudioBlob(url);
-          const duration = Math.max(3, artisanLiveRecordingSeconds || 24);
-          setArtisanAudioDuration(duration);
-          setHasRecordedArtisanAudio(true);
-          showToast(`✓ Voice note recorded (${duration}s)`);
-        } else if (save) {
-          const duration = Math.max(3, artisanLiveRecordingSeconds || 24);
-          setArtisanAudioDuration(duration);
-          setHasRecordedArtisanAudio(true);
-          showToast(`✓ Voice note recorded (${duration}s)`);
-        }
-        if (artisanAudioStreamRef.current) {
-          artisanAudioStreamRef.current.getTracks().forEach((t) => t.stop());
-          artisanAudioStreamRef.current = null;
-        }
-      };
-      artisanAudioMediaRecorderRef.current.stop();
-    } else {
-      if (save) {
-        const duration = Math.max(3, artisanLiveRecordingSeconds || 24);
-        setArtisanAudioDuration(duration);
-        setHasRecordedArtisanAudio(true);
-        showToast(`✓ Voice note recorded (${duration}s)`);
+    const recording = artisanRecordingRef.current;
+    artisanRecordingRef.current = null;
+    if (!recording) return;
+    try {
+      const result = await recording.stop(save);
+      if (!result) {
+        if (save) showToast('⚠️ Nothing was recorded. Please try again.');
+        return;
       }
-      if (artisanAudioStreamRef.current) {
-        artisanAudioStreamRef.current.getTracks().forEach((t) => t.stop());
-        artisanAudioStreamRef.current = null;
-      }
+      setArtisanAudioBlob(result.dataUrl);
+      setArtisanAudioDuration(result.seconds);
+      setHasRecordedArtisanAudio(true);
+      showToast(`✓ Voice note recorded (${formatAudioTime(result.seconds)})`);
+    } catch {
+      showToast('⚠️ Could not save the recording. Please try again.');
     }
   };
 
   const togglePlayArtisanAudio = () => {
     if (isPlayingArtisanAudio) {
-      if (artisanAudioPlaybackIntervalRef.current) {
-        clearInterval(artisanAudioPlaybackIntervalRef.current);
-        artisanAudioPlaybackIntervalRef.current = null;
-      }
-      setIsPlayingArtisanAudio(false);
+      artisanIntroStopRef.current?.();
       return;
     }
-
+    if (!artisanAudioBlob) {
+      showToast('⚠️ No voice note recorded yet.');
+      return;
+    }
     setIsPlayingArtisanAudio(true);
-    let step = 0;
-    const totalSteps = artisanAudioDuration * 10;
-    artisanAudioPlaybackIntervalRef.current = setInterval(() => {
-      step++;
-      const progress = Math.min(1, step / totalSteps);
-      setArtisanRegAudioProgress(progress);
-      if (progress >= 1) {
-        clearInterval(artisanAudioPlaybackIntervalRef.current);
-        artisanAudioPlaybackIntervalRef.current = null;
+    artisanIntroStopRef.current = playVoice(artisanAudioBlob, {
+      onProgress: (fraction) => setArtisanRegAudioProgress(fraction),
+      onEnd: () => {
         setIsPlayingArtisanAudio(false);
         setArtisanRegAudioProgress(0);
-      }
-    }, 100);
+        artisanIntroStopRef.current = null;
+      },
+      onError: () => showToast('⚠️ This voice note could not be played'),
+    });
   };
 
   const deleteArtisanAudio = () => {
-    if (artisanAudioPlaybackIntervalRef.current) {
-      clearInterval(artisanAudioPlaybackIntervalRef.current);
-      artisanAudioPlaybackIntervalRef.current = null;
-    }
-    setIsPlayingArtisanAudio(false);
-    setArtisanRegAudioProgress(0);
+    artisanIntroStopRef.current?.();
     setHasRecordedArtisanAudio(false);
     setArtisanAudioBlob(null);
+    setArtisanAudioDuration(0);
     showToast('Voice note removed. Tap Record to make a new one.');
   };
 
@@ -3230,6 +3067,7 @@ export default function App({ native = false }: { native?: boolean } = {}) {
   // Artisan Service Bookings State (for Artisan user type)
   interface ArtisanBookingItem {
     id: string;
+    voiceNoteUrl?: string;
     clientName: string;
     clientPhone: string;
     clientEmail?: string;
@@ -3266,6 +3104,12 @@ export default function App({ native = false }: { native?: boolean } = {}) {
   // Real-Time Artisan Dispatch Statuses ('available' | 'busy')
   const [artisanDispatchStatuses, setArtisanDispatchStatuses] = useState<Record<string, 'available' | 'busy'>>({});
 
+  useEffect(() => {
+    setArtisanDispatchStatuses(
+      Object.fromEntries(artisanProfiles.map((a) => [a.id, a.available ? 'available' : 'busy'] as const))
+    );
+  }, [artisanProfiles]);
+
   const getArtisanAvailability = (artisanId: string): boolean => {
     // Check real-time dispatch status registry first
     const status = artisanDispatchStatuses[artisanId];
@@ -3285,6 +3129,12 @@ export default function App({ native = false }: { native?: boolean } = {}) {
     const newStatus = !currentStatus;
 
     setIsArtisanAvailableForHire(newStatus);
+    if (currentUserRole === 'artisan') {
+      updateMyArtisanProfile({ available: newStatus }).catch((err) => {
+        console.warn('Could not update availability', err);
+        showToast('⚠️ Could not update your availability. Check your connection.');
+      });
+    }
     setArtisanDispatchStatuses((prev) => ({
       ...prev,
       [artId]: newStatus ? 'available' : 'busy',
@@ -3428,6 +3278,7 @@ export default function App({ native = false }: { native?: boolean } = {}) {
     hasVoiceNote?: boolean;
     voiceNoteDuration?: string;
     voiceNoteLanguages?: string;
+    voiceIntroUrl?: string; // recorded greeting (data URL), shown on the public profile
     servicesAndPricing?: Array<{ title: string; desc: string; price: string; icon?: string }>;
     verifiedWorkPortfolio?: Array<{ title: string; tag: string; sub: string; img: string }>;
   }
@@ -3579,6 +3430,109 @@ export default function App({ native = false }: { native?: boolean } = {}) {
     items.sort((a, b) => b.atISO.localeCompare(a.atISO));
     setNotifications(items.map(({ atISO: _atISO, ...n }) => n));
   }, [firebaseUid, chatDocs, adminApplicants, listings, followedSellerIds, notificationsReadAt, adminAccess.isAdmin, platformStats]);
+
+  // Bookings: the customer's own and, for artisans, the ones made with them
+  const [myBookingDocs, setMyBookingDocs] = useState<BookingDoc[]>([]);
+  const [artisanBookingDocs, setArtisanBookingDocs] = useState<BookingDoc[]>([]);
+  useEffect(() => {
+    setMyBookingDocs([]);
+    if (!firebaseUid) return;
+    return watchMyBookings(firebaseUid, setMyBookingDocs);
+  }, [firebaseUid]);
+  useEffect(() => {
+    setArtisanBookingDocs([]);
+    if (!firebaseUid || currentUserRole !== 'artisan') return;
+    return watchArtisanBookings(firebaseUid, setArtisanBookingDocs);
+  }, [firebaseUid, currentUserRole]);
+  useEffect(() => {
+    const colorFor = (status: BookingDoc['status']): BookingRecord['statusColor'] =>
+      status === 'Pending' ? 'amber' : status === 'In Progress' ? 'blue' : status === 'Confirmed' || status === 'Completed' ? 'emerald' : 'slate';
+    setMyBookings(
+      myBookingDocs.map((b) => ({
+        id: b.id,
+        referenceCode: b.referenceCode,
+        artisanId: b.artisanId,
+        artisanName: b.artisanName,
+        artisanAvatar: b.artisanAvatar,
+        artisanPhone: b.artisanPhone,
+        trade: b.trade,
+        subrole: b.trade,
+        service: b.service,
+        bookingDate: b.bookingDate,
+        bookingWindow: b.bookingWindow,
+        location: b.location,
+        inspectionFee: b.inspectionFee,
+        status: b.status,
+        statusColor: colorFor(b.status),
+        createdAt: formatChatTime(b.createdAtISO),
+        hasVoiceNote: Boolean(b.voiceNoteUrl),
+        voiceNoteUrl: b.voiceNoteUrl,
+        voiceNoteDuration: b.voiceNoteDuration,
+        photosCount: b.workImages.length,
+        workImages: b.workImages,
+        notes: b.notes,
+        propertyType: b.propertyType,
+        urgency: b.urgency,
+      }))
+    );
+    setArtisanBookings(
+      artisanBookingDocs.map((b) => ({
+        id: b.id,
+        clientName: b.customerName,
+        clientPhone: b.customerPhone,
+        clientAvatar: b.customerAvatar,
+        serviceTitle: b.service,
+        scheduledDate: b.bookingDate,
+        scheduledTime: b.bookingWindow,
+        location: b.location,
+        inspectionFee: parseInt(b.inspectionFee.replace(/\D/g, ''), 10) || 0,
+        currency: 'GH₵',
+        status: b.status === 'Cancelled' ? 'Declined' : b.status,
+        notes: b.notes,
+        hasVoiceNote: Boolean(b.voiceNoteUrl),
+        voiceNoteUrl: b.voiceNoteUrl,
+        voiceNoteDuration: b.voiceNoteDuration,
+        workImages: b.workImages,
+        urgency: b.urgency,
+        propertyType: b.propertyType,
+      }))
+    );
+  }, [myBookingDocs, artisanBookingDocs]);
+
+  /** Saves a booking status change; the screens update from Firestore. */
+  const changeBookingStatus = (bookingId: string, status: BookingDoc['status'], successMessage: string) => {
+    const booking = [...myBookingDocs, ...artisanBookingDocs].find((b) => b.id === bookingId);
+    if (!booking) return;
+    setBookingStatus(booking, status)
+      .then(() => showToast(successMessage, 'check'))
+      .catch((err) => {
+        console.warn('Could not update booking', err);
+        showToast('⚠️ Could not update the booking. Check your connection and try again.');
+      });
+  };
+
+  // Rate & review a completed booking
+  const [reviewDraft, setReviewDraft] = useState<{ rating: number; text: string }>({ rating: 0, text: '' });
+  const [isSubmittingReview, setIsSubmittingReview] = useState(false);
+  const handleSubmitReview = async (bookingId: string) => {
+    const booking = myBookingDocs.find((b) => b.id === bookingId);
+    if (!booking) return;
+    if (reviewDraft.rating < 1) {
+      showToast('Please choose 1 to 5 stars.');
+      return;
+    }
+    setIsSubmittingReview(true);
+    try {
+      await submitReview(booking, reviewDraft.rating, reviewDraft.text, userProfile.name || 'Customer');
+      setReviewDraft({ rating: 0, text: '' });
+      showToast('Thank you! Your review is now on their profile.', 'check');
+    } catch (err) {
+      console.warn('Could not submit review', err);
+      showToast('⚠️ Your review could not be sent. Try again.');
+    } finally {
+      setIsSubmittingReview(false);
+    }
+  };
 
   const [adminApplicantFilter, setAdminApplicantFilter] = useState<'pending' | 'approved' | 'rejected'>('pending');
   const [rejectModalApplicant, setRejectModalApplicant] = useState<{ id: string; name: string; role: string } | null>(null);
@@ -5740,7 +5694,7 @@ export default function RootLayout() {
                   </div>
                   <div className="flex items-center justify-between py-1">
                     <span className="text-slate-500 font-medium">Working Hours:</span>
-                    <span className="font-mono font-bold text-slate-800 text-right">{applicant.operatingHours || 'Mon - Sat: 8:30 AM - 7:00 PM'}</span>
+                    <span className="font-mono font-bold text-slate-800 text-right">{applicant.operatingHours || 'Not provided'}</span>
                   </div>
                 </>
               ) : applicant.role === 'artisan' ? (
@@ -6099,7 +6053,7 @@ export default function RootLayout() {
                   </div>
                   <div className="flex items-center justify-between py-0.5">
                     <span className="text-slate-500 font-medium">Verified Experience:</span>
-                    <span className="font-bold text-slate-900 text-right">{applicant.experienceYears || '8+ yrs Experience'}</span>
+                    <span className="font-bold text-slate-900 text-right">{applicant.experienceYears || 'Not provided'}</span>
                   </div>
                   <div className="flex items-center justify-between py-0.5">
                     <span className="text-slate-500 font-medium">Diagnostic Inspection Fee:</span>
@@ -6197,7 +6151,7 @@ export default function RootLayout() {
                     <div className="flex items-start gap-1.5 pt-1 text-[10.5px] text-slate-600 leading-snug">
                       <ShieldCheck size={13} className="text-emerald-600 shrink-0 mt-0.5" />
                       <span>
-                        <strong className="text-slate-800 font-bold">Haraka 0% Fee Guarantee:</strong> Deal directly with {applicant.name.split(' ')[0]}. Inspection &amp; Diagnostics FREE upon arrival in {applicant.cityNeighborhood || 'East Legon & Madina, Accra'}.
+                        <strong className="text-slate-800 font-bold">Haraka 0% Fee Guarantee:</strong> Deal directly with {applicant.name.split(' ')[0]}. Inspection fee: {Number(applicant.inspectionFee) > 0 ? `GH₵ ${applicant.inspectionFee}` : 'FREE'}{applicant.cityNeighborhood ? `, in ${applicant.cityNeighborhood}` : ''}.
                       </span>
                     </div>
                   </div>
@@ -6775,11 +6729,8 @@ export default function RootLayout() {
               <button
                 type="button"
                 onClick={() => {
-                  setArtisanBookings((prev) =>
-                    prev.map((b) => (b.id === booking.id ? { ...b, status: 'Confirmed' } : b))
-                  );
+                  changeBookingStatus(booking.id, 'Confirmed', `Accepted visit for ${booking.clientName}!`);
                   setViewingArtisanBookingDetails((prev) => (prev ? { ...prev, status: 'Confirmed' } : null));
-                  showToast(`Accepted visit for ${booking.clientName}!`);
                 }}
                 className="flex-1 py-2.5 px-3 rounded-xl bg-[#FF6A00] hover:bg-[#EA580C] text-white font-bold text-xs shadow-xs cursor-pointer active:scale-98 transition-all text-center"
               >
@@ -6788,11 +6739,8 @@ export default function RootLayout() {
               <button
                 type="button"
                 onClick={() => {
-                  setArtisanBookings((prev) =>
-                    prev.map((b) => (b.id === booking.id ? { ...b, status: 'Declined' } : b))
-                  );
+                  changeBookingStatus(booking.id, 'Declined', 'Declined booking request');
                   setViewingArtisanBookingDetails((prev) => (prev ? { ...prev, status: 'Declined' } : null));
-                  showToast('Declined booking request');
                 }}
                 className="py-2.5 px-3 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-50 font-bold text-xs cursor-pointer active:scale-98 transition-all"
               >
@@ -6803,11 +6751,8 @@ export default function RootLayout() {
             <button
               type="button"
               onClick={() => {
-                setArtisanBookings((prev) =>
-                  prev.map((b) => (b.id === booking.id ? { ...b, status: 'Completed' } : b))
-                );
+                changeBookingStatus(booking.id, 'Completed', `Job for ${booking.clientName} marked as completed!`);
                 setViewingArtisanBookingDetails((prev) => (prev ? { ...prev, status: 'Completed' } : null));
-                showToast(`Job for ${booking.clientName} marked as completed!`);
               }}
               className="flex-1 py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs cursor-pointer active:scale-98 transition-all text-center"
             >
@@ -7258,25 +7203,35 @@ export default function RootLayout() {
               <div className="grid grid-cols-2 gap-2.5">
                 <div className="p-3.5 border border-slate-200/80 rounded-2xl bg-white shadow-2xs">
                   <span className="text-slate-500 text-[11px] font-semibold block">Active Bookings</span>
-                  <span className="text-xl font-black text-slate-900 block mt-0.5">{artisanBookings.length}</span>
+                  <span className="text-xl font-black text-slate-900 block mt-0.5">
+                    {artisanBookings.filter((b) => b.status === 'Pending' || b.status === 'Confirmed' || b.status === 'In Progress').length}
+                  </span>
                   <span className="text-[10px] text-slate-400 font-medium block mt-1">Scheduled client service visits</span>
                 </div>
                 <div className="p-3.5 border border-slate-200/80 rounded-2xl bg-white shadow-2xs">
                   <span className="text-slate-500 text-[11px] font-semibold block">Completed Jobs</span>
-                  <span className="text-xl font-black text-slate-900 block mt-0.5">{userProfile.completedJobs || 142}</span>
+                  <span className="text-xl font-black text-slate-900 block mt-0.5">{artisanProfiles.find((a) => a.id === firebaseUid)?.jobsCompleted || 0}</span>
                   <span className="text-[10px] text-slate-400 font-medium block mt-1">Verified work completions</span>
                 </div>
                 <div className="p-3.5 border border-slate-200/80 rounded-2xl bg-white shadow-2xs">
                   <span className="text-slate-500 text-[11px] font-semibold block">Client Rating</span>
                   <span className="text-xl font-black text-amber-600 block mt-0.5 flex items-center gap-1">
                     <Star size={16} className="text-amber-500 fill-amber-500" />
-                    <span>{userProfile.rating}</span>
+                    <span>{ARTISANS_DIRECTORY.find((a) => a.id === firebaseUid)?.rating || 'New'}</span>
                   </span>
-                  <span className="text-[10px] text-amber-600 font-medium block mt-1">From {userProfile.reviewsCount || 62} verified reviews</span>
+                  <span className="text-[10px] text-amber-600 font-medium block mt-1">
+                    From {artisanReviews.filter((r) => r.artisanId === firebaseUid).length} verified reviews
+                  </span>
                 </div>
                 <div className="p-3.5 border border-slate-200/80 rounded-2xl bg-white shadow-2xs">
                   <span className="text-slate-500 text-[11px] font-semibold block">Repeat Hire Rate</span>
-                  <span className="text-xl font-black text-emerald-700 block mt-0.5">{userProfile.repeatHireRate || '94%'}</span>
+                  <span className="text-xl font-black text-emerald-700 block mt-0.5">{(() => {
+                    const customers = artisanBookingDocs.map((b) => b.customerId);
+                    const unique = new Set(customers);
+                    if (unique.size === 0) return '—';
+                    const repeat = [...unique].filter((c) => customers.filter((x) => x === c).length > 1).length;
+                    return `${Math.round((repeat / unique.size) * 100)}%`;
+                  })()}</span>
                   <span className="text-[10px] text-emerald-700 font-medium block mt-1">Returning client retention</span>
                 </div>
               </div>
@@ -8781,7 +8736,7 @@ export default function RootLayout() {
                             {/* Stats in a single row matching Image 4 */}
                             <div className="flex items-center gap-1.5 text-[11px] text-slate-500 font-medium mt-1 whitespace-nowrap overflow-hidden text-ellipsis">
                               <span className="text-amber-500 font-bold flex items-center gap-0.5 shrink-0">
-                                ★ {artisan.rating}
+                                {artisan.rating ? `★ ${artisan.rating}` : 'New'}
                               </span>
                               <span className="text-slate-300 shrink-0">•</span>
                               <span className="shrink-0">{artisan.jobsCompleted} jobs completed</span>
@@ -10479,6 +10434,16 @@ export default function RootLayout() {
                           if (!firebaseUid) {
                             showToast('⚠️ Log in to save your profile.');
                             return;
+                          }
+                          if (currentUserRole === 'artisan') {
+                            // Keep the public artisan profile in step with the account
+                            updateMyArtisanProfile({
+                              inspectionFee: feeNum,
+                              bio: editProfileForm.bio || '',
+                              phone: editProfileForm.phone,
+                              whatsapp: editProfileForm.whatsapp,
+                              avatar: editProfileForm.avatar || userProfile.avatar,
+                            }).catch((err) => console.warn('Could not update artisan profile', err));
                           }
                           saveUserProfile(firebaseUid, {
                             name: editProfileForm.name,
@@ -12732,7 +12697,7 @@ export default function RootLayout() {
                         {/* Stats in a single row matching Image 4 */}
                         <div className="flex items-center gap-1.5 text-[11px] text-slate-500 font-medium mt-1 whitespace-nowrap overflow-hidden text-ellipsis">
                           <span className="text-amber-500 font-bold flex items-center gap-0.5 shrink-0">
-                            ★ {artisan.rating}
+                            {artisan.rating ? `★ ${artisan.rating}` : 'New'}
                           </span>
                           <span className="text-slate-300 shrink-0">•</span>
                           <span className="shrink-0">{artisan.jobsCompleted} jobs completed</span>
@@ -13020,15 +12985,19 @@ export default function RootLayout() {
                     </span>
                   </div>
                   <div className="px-1">
-                    <span className="text-slate-900 font-black text-xs block">8+ yrs</span>
+                    <span className="text-slate-900 font-black text-xs block">
+                      {artisanProfiles.find((a) => a.id === artisan.id)?.experienceYears || '—'}
+                    </span>
                     <span className="text-[9.5px] text-slate-400 font-medium block mt-0.5">
                       Experience
                     </span>
                   </div>
                   <div className="px-1">
-                    <span className="text-emerald-600 font-black text-xs block">100%</span>
+                    <span className="text-emerald-600 font-black text-xs block">
+                      {artisanReviews.filter((r) => r.artisanId === artisan.id).length}
+                    </span>
                     <span className="text-[9.5px] text-slate-400 font-medium block mt-0.5">
-                      On-time
+                      Reviews
                     </span>
                   </div>
                 </div>
@@ -13062,16 +13031,24 @@ export default function RootLayout() {
                   </span>
                 </div>
 
-                {/* Audio Waveform Row with Play / Pause */}
+                {/* Audio Waveform Row with Play / Pause (only when the artisan recorded a greeting) */}
+                {artisan.audioIntro ? (
                 <div className="flex items-center gap-3 bg-slate-50 p-2.5 rounded-2xl border border-slate-100">
                   <button
                     onClick={() => {
-                      setIsPlayingVoiceNote(!isPlayingVoiceNote);
-                      showToast(
-                        !isPlayingVoiceNote
-                          ? `Playing ${artisan.name}'s voice intro (22s)`
-                          : 'Voice intro paused'
-                      );
+                      if (isPlayingVoiceNote) {
+                        voicePlaybackStopRef.current?.();
+                        return;
+                      }
+                      voicePlaybackStopRef.current?.();
+                      setIsPlayingVoiceNote(true);
+                      voicePlaybackStopRef.current = playVoice(artisan.audioIntro!, {
+                        onEnd: () => {
+                          setIsPlayingVoiceNote(false);
+                          voicePlaybackStopRef.current = null;
+                        },
+                        onError: () => showToast('⚠️ This voice note could not be played'),
+                      });
                     }}
                     className="w-10 h-10 rounded-full bg-orange-500 hover:bg-orange-600 text-white flex items-center justify-center shadow-xs active:scale-95 transition-all shrink-0 cursor-pointer"
                   >
@@ -13101,15 +13078,16 @@ export default function RootLayout() {
                     )}
                   </div>
 
-                  <span className="text-xs font-bold text-slate-600 shrink-0">0:22</span>
                 </div>
+                ) : (
+                  <p className="text-[11px] text-slate-500">{firstName} has not recorded a voice greeting yet.</p>
+                )}
 
                 <div className="flex items-center justify-between text-[11px] pt-0.5">
                   <div className="flex items-center gap-1.5 text-slate-600 font-semibold">
                     <Languages size={13} className="text-slate-400" />
                     <span>{profileData.languages}</span>
                   </div>
-                  <span className="text-emerald-700 font-bold">Ready to inspect</span>
                 </div>
 
                 {/* Direct Action Buttons */}
@@ -13562,15 +13540,19 @@ export default function RootLayout() {
                     </span>
                   </div>
                   <div className="px-1">
-                    <span className="text-slate-900 font-black text-xs block">8+ yrs</span>
+                    <span className="text-slate-900 font-black text-xs block">
+                      {artisanProfiles.find((a) => a.id === artisan.id)?.experienceYears || '—'}
+                    </span>
                     <span className="text-[9.5px] text-slate-400 font-medium block mt-0.5">
                       Experience
                     </span>
                   </div>
                   <div className="px-1">
-                    <span className="text-emerald-600 font-black text-xs block">100%</span>
+                    <span className="text-emerald-600 font-black text-xs block">
+                      {artisanReviews.filter((r) => r.artisanId === artisan.id).length}
+                    </span>
                     <span className="text-[9.5px] text-slate-400 font-medium block mt-0.5">
-                      On-time
+                      Reviews
                     </span>
                   </div>
                 </div>
@@ -14501,46 +14483,68 @@ export default function RootLayout() {
                   <button
                     type="button"
                     onClick={() => {
-                      const code = `HRK-BK-${Math.floor(1000 + Math.random() * 9000)}`;
-                      setBookingReferenceCode(code);
-                      const newBooking: BookingRecord = {
-                        id: `booking-${Date.now()}`,
-                        referenceCode: code,
+                      if (!firebaseUidRef.current) {
+                        showToast('Please log in to book an artisan.');
+                        navigateTo({ type: 'login' });
+                        return;
+                      }
+                      if (!bookingService.trim()) {
+                        showToast('⚠️ Please choose the service you need.');
+                        return;
+                      }
+                      if (!bookingLocation.trim()) {
+                        showToast('⚠️ Please enter where the job is.');
+                        return;
+                      }
+                      if (!(bookingClientPhone || userProfile.phone).trim()) {
+                        showToast('⚠️ Please add a phone number the artisan can call.');
+                        return;
+                      }
+                      setIsSubmittingBooking(true);
+                      createBooking({
                         artisanId: artisan.id,
                         artisanName: artisan.name,
                         artisanAvatar: artisan.avatar,
-                        artisanPhone: '',
-                        trade: profileData.subrole || 'Verified',
-                        subrole: profileData.subrole || 'Master Artisan',
+                        artisanPhone: artisan.phone || '',
+                        trade: profileData.subrole || artisan.role || '',
                         service: bookingService,
-                        bookingDate: bookingDate,
+                        bookingDate,
                         bookingWindow: `${bookingWindow} (${bookingWindow === 'Morning' ? '8:00 AM - 12:00 PM' : bookingWindow === 'Afternoon' ? '12:00 PM - 4:00 PM' : '4:00 PM - 7:00 PM'})`,
                         location: bookingLocation,
                         inspectionFee: baseRateFormatted,
-                        status: 'Confirmed',
-                        statusColor: 'emerald',
-                        createdAt: 'Just now',
-                        hasVoiceNote: hasRecordedAudio,
-                        voiceNoteDuration: audioRecordDuration,
-                        photosCount: bookingPhotos.length,
                         notes: bookingDescription,
-                      };
-                      setMyBookings((prev) => [newBooking, ...prev]);
-                      setBookingSuccessModal(true);
+                        workImages: bookingPhotos.map((photo) => photo.url),
+                        voiceNoteUrl: hasRecordedAudio && recordedAudioUrl ? recordedAudioUrl : undefined,
+                        voiceNoteDuration: hasRecordedAudio ? audioRecordDuration : undefined,
+                        customerName: bookingClientName.trim() || userProfile.name || 'Customer',
+                        customerPhone: (bookingClientPhone || userProfile.phone).trim(),
+                        customerAvatar: userProfile.avatar || '',
+                      })
+                        .then((saved) => {
+                          setBookingReferenceCode(saved.referenceCode);
+                          setBookingSuccessModal(true);
+                        })
+                        .catch((err) => {
+                          console.warn('Could not create booking', err);
+                          showToast(`⚠️ ${err instanceof Error ? err.message : 'Your booking could not be sent. Try again.'}`);
+                        })
+                        .finally(() => setIsSubmittingBooking(false));
                     }}
                     disabled={!hasAgreedTerms}
                     className="flex-1 py-3 px-4 rounded-2xl bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 shadow-md shadow-orange-500/25 active:scale-95 transition-all cursor-pointer shrink-0 whitespace-nowrap"
                   >
                     <CheckCircle size={15} className="shrink-0 fill-white text-orange-500" />
-                    <span className="whitespace-nowrap">Confirm Booking Request</span>
+                    <span className="whitespace-nowrap">{isSubmittingBooking ? 'Sending…' : 'Send Booking Request'}</span>
                   </button>
                 )}
               </div>
 
               {/* Online status indicator */}
               <div className="flex items-center justify-center gap-1.5 text-[10.5px] text-slate-600 font-medium">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0 animate-pulse" />
-                <span>{artisan.name} is online • Usually responds within 15 minutes</span>
+                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${getArtisanAvailability(artisan.id) ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                <span>
+                  {getArtisanAvailability(artisan.id) ? `${artisan.name} is taking new jobs` : `${artisan.name} is currently busy`}
+                </span>
               </div>
             </div>
 
@@ -14707,7 +14711,7 @@ export default function RootLayout() {
                 <div className="bg-white rounded-3xl p-5 max-w-sm w-full text-center shadow-2xl space-y-3.5 animate-in zoom-in-95 duration-200">
                   <div>
                     <h3 className="text-base font-black text-slate-900">
-                      Booking Request Confirmed!
+                      Booking Request Sent!
                     </h3>
                     <p className="text-xs text-slate-500 mt-1">
                       Reference: <strong className="text-orange-600 font-mono">{bookingReferenceCode}</strong>
@@ -14727,7 +14731,7 @@ export default function RootLayout() {
                   </div>
 
                   <p className="text-[11px] text-slate-500 leading-snug">
-                    {firstName} will contact you directly at {bookingClientPhone} or via in-app chat before arrival.
+                    {firstName} will review your request and confirm it. You'll see the status in My Bookings.
                   </p>
 
                   <div className="space-y-2 pt-1">
@@ -15297,18 +15301,60 @@ export default function RootLayout() {
                   </div>
                 </div>
 
+                {/* Rate & review once the job is completed (one review per booking) */}
+                {selectedBookingForDetails.status === 'Completed' && (
+                  <div className="px-4 py-3 border-t border-slate-100 bg-white space-y-2">
+                    {artisanReviews.some((r) => r.bookingId === selectedBookingForDetails.id) ? (
+                      <p className="text-xs font-semibold text-emerald-700">✓ You reviewed this job. Thank you!</p>
+                    ) : (
+                      <>
+                        <p className="text-xs font-black text-slate-900">Rate {selectedBookingForDetails.artisanName}</p>
+                        <div className="flex gap-1">
+                          {[1, 2, 3, 4, 5].map((star) => (
+                            <button
+                              key={star}
+                              type="button"
+                              onClick={() => setReviewDraft((prev) => ({ ...prev, rating: star }))}
+                              className="p-0.5 cursor-pointer"
+                              aria-label={`${star} star${star === 1 ? '' : 's'}`}
+                            >
+                              <Star
+                                size={22}
+                                className={star <= reviewDraft.rating ? 'text-amber-500 fill-amber-500' : 'text-slate-300'}
+                              />
+                            </button>
+                          ))}
+                        </div>
+                        <textarea
+                          value={reviewDraft.text}
+                          onChange={(e) => setReviewDraft((prev) => ({ ...prev, text: e.target.value }))}
+                          placeholder="How was the work? (optional)"
+                          rows={2}
+                          className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs outline-none focus:border-orange-400"
+                        />
+                        <button
+                          type="button"
+                          disabled={isSubmittingReview}
+                          onClick={() => handleSubmitReview(selectedBookingForDetails.id)}
+                          className="w-full py-2.5 rounded-xl bg-[#FF6A00] hover:bg-orange-600 text-white font-bold text-xs cursor-pointer disabled:opacity-60"
+                        >
+                          {isSubmittingReview ? 'Sending…' : 'Submit Review'}
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
+
                 {/* Modal Action Footer matching Artisan Dashboard */}
                 <div className="px-4 py-3 border-t border-slate-100 bg-white flex items-center gap-2">
-                  {selectedBookingForDetails.status !== 'Cancelled' ? (
+                  {selectedBookingForDetails.status === 'Completed' ? (
+                    <span className="flex-1 text-[11px] font-semibold text-emerald-700">Job completed</span>
+                  ) : selectedBookingForDetails.status !== 'Cancelled' ? (
                     <button
                       type="button"
                       onClick={() => {
-                        const bId = selectedBookingForDetails.id;
-                        setMyBookings((prev) =>
-                          prev.map((b) => (b.id === bId ? { ...b, status: 'Cancelled' as const } : b))
-                        );
+                        changeBookingStatus(selectedBookingForDetails.id, 'Cancelled', 'Booking cancelled');
                         setSelectedBookingForDetails((prev) => (prev ? { ...prev, status: 'Cancelled' } : null));
-                        showToast('Booking cancelled successfully', 'check');
                       }}
                       className="py-2.5 px-3 rounded-xl border border-red-200 text-red-600 hover:bg-red-50 font-bold text-xs cursor-pointer active:scale-98 transition-all"
                     >
@@ -15318,12 +15364,8 @@ export default function RootLayout() {
                     <button
                       type="button"
                       onClick={() => {
-                        const bId = selectedBookingForDetails.id;
-                        setMyBookings((prev) =>
-                          prev.map((b) => (b.id === bId ? { ...b, status: 'Confirmed' as const } : b))
-                        );
-                        setSelectedBookingForDetails((prev) => (prev ? { ...prev, status: 'Confirmed' } : null));
-                        showToast('Booking restored as Confirmed', 'check');
+                        changeBookingStatus(selectedBookingForDetails.id, 'Pending', 'Booking request sent again');
+                        setSelectedBookingForDetails((prev) => (prev ? { ...prev, status: 'Pending' } : null));
                       }}
                       className="py-2.5 px-3 rounded-xl border border-emerald-200 text-emerald-700 hover:bg-emerald-50 font-bold text-xs cursor-pointer active:scale-98 transition-all"
                     >
@@ -20043,6 +20085,7 @@ export default function RootLayout() {
                       hasVoiceNote: isArtisan ? (hasRecordedArtisanAudio || hasVoiceNoteIntro) : undefined,
                       voiceNoteDuration: isArtisan && (hasRecordedArtisanAudio || hasVoiceNoteIntro) ? `0:${artisanAudioDuration < 10 ? '0' : ''}${artisanAudioDuration}` : undefined,
                       voiceNoteLanguages: isArtisan ? artisanLanguages.join(' & ') : undefined,
+                      voiceIntroUrl: isArtisan && artisanAudioBlob ? artisanAudioBlob : undefined,
                       servicesAndPricing: isArtisan ? artisanServices : undefined,
                       verifiedWorkPortfolio: isArtisan ? artisanPortfolio : undefined,
                       dateSubmitted: 'Just now',
