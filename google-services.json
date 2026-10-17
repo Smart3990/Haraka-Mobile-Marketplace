@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "361334383677",
+    "project_id": "ga4-viewer-kiyumart-platform",
+    "storage_bucket": "ga4-viewer-kiyumart-platform.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:361334383677:android:ef26b36e03ed01c1cdf654",
+        "android_client_info": {
+          "package_name": "com.haraka.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "361334383677-pj3s2u54ai3ibfblcmi5hicdcvcfh0co.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB9vlthOqTQmdVS2hrANlWfcwXdZ1dg7os"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "361334383677-pj3s2u54ai3ibfblcmi5hicdcvcfh0co.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
