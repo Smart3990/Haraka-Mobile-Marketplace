@@ -207,6 +207,35 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // In-app voice calls: only the caller and the person called can see or change a call
+    match /calls/{callId} {
+      function isCallParty() {
+        return request.auth.uid == resource.data.callerId || request.auth.uid == resource.data.calleeId;
+      }
+      allow get, list: if isSignedIn() && isCallParty();
+      allow create: if isSignedIn()
+        && request.resource.data.callerId == request.auth.uid
+        && request.resource.data.calleeId is string
+        && request.resource.data.calleeId != request.auth.uid
+        && request.resource.data.participants == [request.auth.uid, request.resource.data.calleeId]
+        && request.resource.data.status == 'ringing';
+      allow update: if isSignedIn() && isCallParty()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'answer', 'answeredAtISO', 'endedAtISO'])
+        && request.resource.data.status in ['accepted', 'declined', 'ended', 'missed']
+        // Only the person called can pick up
+        && (request.resource.data.status != 'accepted' || request.auth.uid == resource.data.calleeId);
+      // Either person may remove a finished call
+      allow delete: if isAdmin()
+        || (isSignedIn() && isCallParty() && resource.data.status in ['declined', 'ended', 'missed']);
+
+      // Network details each phone shares to connect the audio
+      match /{side}/{candidateId} {
+        allow read, create, delete: if isSignedIn()
+          && side in ['callerCandidates', 'calleeCandidates']
+          && request.auth.uid in get(/databases/$(database)/documents/calls/$(callId)).data.participants;
+      }
+    }
+
     // Reviews: one per completed booking, written by that booking's customer; public to read
     match /reviews/{bookingId} {
       allow get, list: if true;

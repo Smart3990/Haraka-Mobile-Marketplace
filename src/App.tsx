@@ -93,6 +93,7 @@ import {
   GraduationCap,
   Store,
   Mic,
+  MicOff,
   Languages,
   Navigation,
   DoorClosed,
@@ -187,6 +188,15 @@ import SignInScreen from './components/SignInScreen';
 import ForgotPasswordScreen from './components/ForgotPasswordScreen';
 import type { ArtisanProfileDetails } from './lib/artisanProfileData';
 import { playVoice, startVoiceRecording, type VoiceRecording } from './lib/voice';
+import {
+  answerVoiceCall,
+  declineVoiceCall,
+  startVoiceCall,
+  watchIncomingCalls,
+  type CallDoc,
+  type CallPhase,
+  type CallSession,
+} from './lib/calls';
 
 type TabKey = 'home' | 'categories' | 'post' | 'messages' | 'saved' | 'profile' | 'dashboard';
 
@@ -593,18 +603,32 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
       });
   };
 
-  // Call Modal State matching User's 3rd Image
+  // In-app call screen (outgoing or incoming voice call)
   const [activeCallUser, setActiveCallUser] = useState<{
     name: string;
     avatar: string;
     phone?: string;
+    uid?: string;
+    callId?: string;
+    direction: 'outgoing' | 'incoming';
+    phase: CallPhase | 'incoming';
+    message?: string;
+    connectedAt?: number;
+    muted?: boolean;
   } | null>(null);
+  const callSessionRef = useRef<CallSession | null>(null);
+  /** The user ended the call before it finished setting up */
+  const callCancelledRef = useRef(false);
+  const [incomingCalls, setIncomingCalls] = useState<CallDoc[]>([]);
+  const [callClock, setCallClock] = useState(0);
 
   // Call Options Dropdown State (Option 1: In-App Call, Option 2: Phone Call dialer)
   const [callDropdownUser, setCallDropdownUser] = useState<{
     name: string;
     avatar: string;
     phone: string;
+    /** Account of the person, needed for in-app calls */
+    uid?: string;
   } | null>(null);
   const [showChatCallDropdown, setShowChatCallDropdown] = useState(false);
 
@@ -632,22 +656,12 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
   }, [callDropdownUser]);
 
   // When user clicks ANY call button: show little dropdown with two options (in-app call and phone call)
-  // Calls go through the phone's own dialer (there is no in-app voice calling)
-  const startCall = (_name?: string, _avatar?: string, phone?: string) => {
-    const cleanNumber = (phone || '').replace(/[^+\d]/g, '');
-    if (!cleanNumber) {
-      showToast('This person has not shared a phone number. Send them a message instead.');
-      return;
-    }
-    window.location.href = `tel:${cleanNumber}`;
-  };
-
-  const startInAppCall = (name?: string, avatar?: string, phone?: string) => {
-    setCallDropdownUser(null);
-    setActiveCallUser({
-      name: name || 'Seller',
+  const startCall = (name?: string, avatar?: string, phone?: string, uid?: string) => {
+    setCallDropdownUser({
+      name: name || 'Haraka user',
       avatar: avatar || '',
       phone: phone || '',
+      uid,
     });
   };
 
@@ -1727,6 +1741,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
   };
 
   const handleSignOut = () => {
+    callSessionRef.current?.hangUp();
     clearPushToken()
       .catch(() => {})
       .finally(() => signOutUser().catch((err) => console.warn('Sign out failed', err)));
@@ -1982,6 +1997,160 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
       .then((to) => (to ? nativeBridge.sendPush!([{ to, title, body: body.slice(0, 180), data }]) : undefined))
       .catch((err) => console.warn('Could not send notification', err));
   };
+
+  // ---------- In-app voice calls ----------
+  /** Updates the call screen as the call progresses; closes it shortly after the call ends. */
+  const handleCallPhase = (phase: CallPhase, message?: string) => {
+    setActiveCallUser((prev) =>
+      prev && {
+        ...prev,
+        phase,
+        message,
+        connectedAt: phase === 'connected' ? prev.connectedAt || Date.now() : prev.connectedAt,
+      }
+    );
+    if (phase === 'ended') {
+      callSessionRef.current = null;
+      setTimeout(() => setActiveCallUser((prev) => (prev && prev.phase === 'ended' ? null : prev)), 1800);
+    }
+  };
+
+  const startInAppCall = (name?: string, avatar?: string, phone?: string, uid?: string) => {
+    setCallDropdownUser(null);
+    if (!firebaseUidRef.current) {
+      showToast('Please log in to make in-app calls.');
+      navigateTo({ type: 'login' });
+      return;
+    }
+    if (!uid || uid === firebaseUidRef.current) {
+      showToast('In-app calling is not available for this person. Use Dialer Call instead.');
+      return;
+    }
+    if (callSessionRef.current || activeCallUser) return;
+    callCancelledRef.current = false;
+    const calleeName = name || 'Haraka user';
+    setActiveCallUser({ name: calleeName, avatar: avatar || '', phone: phone || '', uid, direction: 'outgoing', phase: 'connecting' });
+    const myName = userProfile.name || 'Someone';
+    startVoiceCall({ id: uid, name: calleeName, avatar: avatar || '' }, { name: userProfile.name, avatar: userProfile.avatar }, {
+      onPhase: (phase, message) => {
+        handleCallPhase(phase, message);
+        if (phase === 'ended' && message === 'No answer') {
+          notifyUser(uid, '📞 Missed call', `You missed a call from ${myName}.`, { type: 'call', id: '' });
+        }
+      },
+    })
+      .then((session) => {
+        if (callCancelledRef.current) return session.hangUp();
+        callSessionRef.current = session;
+        setActiveCallUser((prev) => prev && { ...prev, callId: session.callId });
+        notifyUser(uid, '📞 Incoming call', `${myName} is calling you on Haraka`, { type: 'call', id: session.callId });
+      })
+      .catch((err) => {
+        setActiveCallUser(null);
+        showToast(`⚠️ ${err instanceof Error ? err.message : 'Could not start the call.'}`);
+      });
+  };
+
+  const acceptIncomingCall = () => {
+    const call = incomingCalls.find((c) => c.id === activeCallUser?.callId);
+    if (!call) return setActiveCallUser(null);
+    callCancelledRef.current = false;
+    setActiveCallUser((prev) => prev && { ...prev, phase: 'connecting' });
+    answerVoiceCall(call, { onPhase: handleCallPhase })
+      .then((session) => {
+        if (callCancelledRef.current) return session.hangUp();
+        callSessionRef.current = session;
+      })
+      .catch((err) => {
+        setActiveCallUser(null);
+        showToast(`⚠️ ${err instanceof Error ? err.message : 'Could not answer the call.'}`);
+      });
+  };
+
+  /** Hang up, cancel or decline, depending on where the call is. */
+  const endActiveCall = () => {
+    if (!activeCallUser) return;
+    if (activeCallUser.phase === 'incoming') {
+      if (activeCallUser.callId) declineVoiceCall(activeCallUser.callId).catch(() => {});
+      setActiveCallUser(null);
+    } else if (activeCallUser.phase === 'ended') {
+      setActiveCallUser(null);
+    } else if (callSessionRef.current) {
+      callSessionRef.current.hangUp();
+    } else {
+      callCancelledRef.current = true;
+      setActiveCallUser(null);
+    }
+  };
+
+  const toggleCallMute = () => {
+    if (!activeCallUser || !callSessionRef.current) return;
+    const muted = !activeCallUser.muted;
+    callSessionRef.current.setMuted(muted);
+    setActiveCallUser({ ...activeCallUser, muted });
+  };
+
+  // Ring when someone calls this user
+  useEffect(() => {
+    setIncomingCalls([]);
+    if (!firebaseUid) return;
+    return watchIncomingCalls(firebaseUid, setIncomingCalls);
+  }, [firebaseUid]);
+
+  useEffect(() => {
+    const call = incomingCalls[0];
+    if (call && !activeCallUser && !callSessionRef.current) {
+      setActiveCallUser({
+        name: call.caller.name,
+        avatar: call.caller.avatar,
+        uid: call.callerId,
+        callId: call.id,
+        direction: 'incoming',
+        phase: 'incoming',
+      });
+    } else if (activeCallUser?.phase === 'incoming' && !incomingCalls.some((c) => c.id === activeCallUser.callId)) {
+      // The caller hung up before it was answered
+      setActiveCallUser({ ...activeCallUser, phase: 'ended', message: 'Missed call' });
+      setTimeout(() => setActiveCallUser((prev) => (prev && prev.phase === 'ended' ? null : prev)), 1800);
+    }
+  }, [incomingCalls]);
+
+  // Ringtone (incoming) and ringback tone (outgoing)
+  const callPhase = activeCallUser?.phase;
+  useEffect(() => {
+    if (callPhase !== 'incoming' && callPhase !== 'ringing') return;
+    let ctx: AudioContext | null = null;
+    try {
+      ctx = new AudioContext();
+    } catch {
+      ctx = null;
+    }
+    const ring = () => {
+      if (callPhase === 'incoming') navigator.vibrate?.([500, 300, 500]);
+      if (!ctx) return;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.frequency.value = callPhase === 'incoming' ? 660 : 425;
+      gain.gain.value = callPhase === 'incoming' ? 0.18 : 0.06;
+      osc.connect(gain).connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.9);
+    };
+    ring();
+    const timer = setInterval(ring, 2600);
+    return () => {
+      clearInterval(timer);
+      navigator.vibrate?.(0);
+      ctx?.close().catch(() => {});
+    };
+  }, [callPhase]);
+
+  // Call duration clock
+  useEffect(() => {
+    if (callPhase !== 'connected') return;
+    const timer = setInterval(() => setCallClock(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [callPhase]);
 
   // Tapped a notification: open the matching screen
   useEffect(() => {
@@ -3125,6 +3294,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
   interface ArtisanBookingItem {
     id: string;
     voiceNoteUrl?: string;
+    clientId?: string;
     clientName: string;
     clientPhone: string;
     clientEmail?: string;
@@ -3545,6 +3715,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     setArtisanBookings(
       artisanBookingDocs.map((b) => ({
         id: b.id,
+        clientId: b.customerId,
         clientName: b.customerName,
         clientPhone: b.customerPhone,
         clientAvatar: b.customerAvatar,
@@ -4978,68 +5149,105 @@ export default function RootLayout() {
     );
   };
 
-  // Call Modal Component matching User's 3rd Image
+  // Call screen: outgoing, incoming and connected in-app voice calls
   const renderCallModal = () => {
     if (!activeCallUser) return null;
+    const { phase } = activeCallUser;
+    const seconds = activeCallUser.connectedAt ? Math.max(0, Math.floor(((callClock || Date.now()) - activeCallUser.connectedAt) / 1000)) : 0;
+    const statusText =
+      phase === 'incoming'
+        ? 'Incoming Haraka call...'
+        : phase === 'connecting'
+        ? 'Connecting...'
+        : phase === 'ringing'
+        ? 'Ringing...'
+        : phase === 'connected'
+        ? `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
+        : activeCallUser.message || 'Call ended';
+    const pulsing = phase === 'incoming' || phase === 'ringing' ? 'animate-pulse' : '';
 
     return (
-      <div
-        className="absolute inset-0 z-50 bg-black/65 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
-        onClick={() => setActiveCallUser(null)}
-      >
-        <div
-          className="relative bg-white rounded-3xl p-6 sm:p-7 max-w-[275px] w-full text-center shadow-2xl animate-in zoom-in-95 duration-200 border border-slate-100"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {/* Close 'X' in top right matching 3rd image */}
+      <div className="absolute inset-0 z-50 bg-black/65 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
+        <div className="relative bg-white rounded-3xl p-6 sm:p-7 max-w-[275px] w-full text-center shadow-2xl animate-in zoom-in-95 duration-200 border border-slate-100">
+          {/* Close 'X' in top right */}
           <button
             type="button"
-            onClick={() => setActiveCallUser(null)}
+            onClick={endActiveCall}
             className="absolute top-4 right-4 text-slate-700 hover:text-slate-900 p-1 cursor-pointer transition-colors"
-            title="Close"
+            title={phase === 'incoming' ? 'Decline' : 'Close'}
           >
             <X size={18} />
           </button>
 
-          {/* Centered Circular Avatar matching 3rd image */}
+          {/* Centered Circular Avatar */}
           <div className="mx-auto mt-2 flex justify-center">
             {activeCallUser.avatar ? (
               <img
                 src={activeCallUser.avatar}
                 alt={activeCallUser.name}
-                className="w-20 h-20 rounded-full object-cover border border-slate-100 shadow-xs"
+                className={`w-20 h-20 rounded-full object-cover border border-slate-100 shadow-xs ${pulsing}`}
               />
             ) : (
-              <div className="w-20 h-20 rounded-full bg-slate-100 border border-slate-100 flex items-center justify-center text-slate-400">
+              <div className={`w-20 h-20 rounded-full bg-slate-100 border border-slate-100 flex items-center justify-center text-slate-400 ${pulsing}`}>
                 <User size={32} />
               </div>
             )}
           </div>
 
-          {/* User Name matching 3rd image */}
-          <h3 className="text-base sm:text-lg font-bold text-slate-900 mt-3 text-center">
-            {activeCallUser.name}
-          </h3>
+          <h3 className="text-base sm:text-lg font-bold text-slate-900 mt-3 text-center">{activeCallUser.name}</h3>
 
-          {/* Phone number display on Call Modal as requested */}
-          <p className="text-xs font-mono font-bold text-slate-600 mt-0.5 text-center tracking-tight">
-            {activeCallUser.phone || 'Phone number not provided'}
+          <p className="text-[11px] font-bold text-slate-500 mt-0.5 text-center tracking-tight">Haraka voice call</p>
+
+          {/* Call status in warm brownish-tan tone */}
+          <p className={`text-xs font-medium mt-1 text-center ${phase === 'connected' ? 'text-emerald-600 font-mono font-bold' : 'text-[#A88876]'}`}>
+            {statusText}
           </p>
 
-          {/* Calling status in warm brownish-tan tone matching 3rd image */}
-          <p className="text-xs text-[#A88876] font-medium mt-1 text-center">
-            Calling...
-          </p>
-
-          {/* Red End Call button matching 3rd image */}
-          <button
-            type="button"
-            onClick={() => setActiveCallUser(null)}
-            className="w-13 h-13 rounded-full bg-[#D31010] hover:bg-red-700 text-white flex items-center justify-center mx-auto mt-6 shadow-lg shadow-red-500/25 active:scale-95 transition-all cursor-pointer"
-            title="End call"
-          >
-            <Phone size={22} className="rotate-[135deg]" />
-          </button>
+          {phase === 'incoming' ? (
+            <div className="flex items-center justify-center gap-10 mt-6">
+              <button
+                type="button"
+                onClick={endActiveCall}
+                className="w-13 h-13 rounded-full bg-[#D31010] hover:bg-red-700 text-white flex items-center justify-center shadow-lg shadow-red-500/25 active:scale-95 transition-all cursor-pointer"
+                title="Decline"
+              >
+                <Phone size={22} className="rotate-[135deg]" />
+              </button>
+              <button
+                type="button"
+                onClick={acceptIncomingCall}
+                className="w-13 h-13 rounded-full bg-emerald-500 hover:bg-emerald-600 text-white flex items-center justify-center shadow-lg shadow-emerald-500/25 active:scale-95 transition-all cursor-pointer animate-pulse"
+                title="Answer"
+              >
+                <Phone size={22} />
+              </button>
+            </div>
+          ) : phase !== 'ended' ? (
+            <div className="flex items-center justify-center gap-8 mt-6">
+              <button
+                type="button"
+                onClick={toggleCallMute}
+                disabled={!callSessionRef.current}
+                className={`w-11 h-11 rounded-full flex items-center justify-center border transition-all cursor-pointer active:scale-95 disabled:opacity-40 ${
+                  activeCallUser.muted ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-700 border-slate-200'
+                }`}
+                title={activeCallUser.muted ? 'Unmute' : 'Mute'}
+              >
+                {activeCallUser.muted ? <MicOff size={18} /> : <Mic size={18} />}
+              </button>
+              {/* Red End Call button */}
+              <button
+                type="button"
+                onClick={endActiveCall}
+                className="w-13 h-13 rounded-full bg-[#D31010] hover:bg-red-700 text-white flex items-center justify-center shadow-lg shadow-red-500/25 active:scale-95 transition-all cursor-pointer"
+                title="End call"
+              >
+                <Phone size={22} className="rotate-[135deg]" />
+              </button>
+            </div>
+          ) : (
+            <div className="h-13 mt-6" />
+          )}
         </div>
       </div>
     );
@@ -5240,7 +5448,7 @@ export default function RootLayout() {
             )}
             <div className="min-w-0 flex-1">
               <p className="font-extrabold text-slate-900 truncate text-[11px]">{callDropdownUser.name}</p>
-              <p className="text-[10px] text-slate-500 font-mono truncate">{rawPhone}</p>
+              <p className="text-[10px] text-slate-500 font-mono truncate">{rawPhone || 'No phone number shared'}</p>
             </div>
           </div>
 
@@ -5252,7 +5460,8 @@ export default function RootLayout() {
                 startInAppCall(
                   callDropdownUser.name,
                   callDropdownUser.avatar,
-                  callDropdownUser.phone
+                  callDropdownUser.phone,
+                  callDropdownUser.uid
                 )
               }
               className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-slate-800 hover:bg-orange-50 hover:text-orange-600 transition-colors text-left cursor-pointer font-bold"
@@ -5266,8 +5475,13 @@ export default function RootLayout() {
             {/* Option 2: Dialer Call */}
             <a
               href={`tel:${cleanNumber}`}
-              onClick={() => {
+              onClick={(e) => {
                 setCallDropdownUser(null);
+                if (!cleanNumber) {
+                  e.preventDefault();
+                  showToast('This person has not shared a phone number. Try In-App Call or send a message.');
+                  return;
+                }
                 showToast(`Opening phone dialer for ${rawPhone}...`, 'check');
               }}
               className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-slate-800 hover:bg-emerald-50 hover:text-emerald-700 transition-colors text-left cursor-pointer font-bold no-underline"
@@ -6545,7 +6759,7 @@ export default function RootLayout() {
             <button
               type="button"
               onClick={() => {
-                startCall(viewingClientProfile.clientName, viewingClientProfile.clientAvatar, viewingClientProfile.clientPhone);
+                startCall(viewingClientProfile.clientName, viewingClientProfile.clientAvatar, viewingClientProfile.clientPhone, viewingClientProfile.clientId);
                 setViewingClientProfile(null);
               }}
               className="py-2.5 px-4 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-800 font-bold text-xs cursor-pointer shadow-2xs active:scale-98 transition-all flex items-center justify-center gap-1.5"
@@ -6863,7 +7077,7 @@ export default function RootLayout() {
           {/* Call Client */}
           <button
             type="button"
-            onClick={() => startCall(booking.clientName, booking.clientAvatar, booking.clientPhone)}
+            onClick={() => startCall(booking.clientName, booking.clientAvatar, booking.clientPhone, booking.clientId)}
             className="p-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-800 font-bold text-xs flex items-center justify-center cursor-pointer active:scale-95 transition-transform"
             title="Call Client"
           >
@@ -7529,7 +7743,7 @@ export default function RootLayout() {
                             <button
                               type="button"
                               onClick={() => {
-                                startCall(booking.clientName, booking.clientAvatar, booking.clientPhone);
+                                startCall(booking.clientName, booking.clientAvatar, booking.clientPhone, booking.clientId);
                               }}
                               className="py-2 px-3.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-800 font-bold text-xs cursor-pointer shadow-2xs active:scale-98 transition-all flex items-center justify-center gap-1.5"
                             >
@@ -9579,7 +9793,7 @@ export default function RootLayout() {
                                 <button
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    startCall(item.seller.name, item.seller.avatar, item.seller.phone);
+                                    startCall(item.seller.name, item.seller.avatar, item.seller.phone, item.seller.id);
                                   }}
                                   className="flex-1 bg-orange-500 text-white text-[10.5px] font-bold py-1.5 rounded-lg hover:bg-orange-600 cursor-pointer"
                                 >
@@ -11599,7 +11813,7 @@ export default function RootLayout() {
                   <button
                     type="button"
                     onClick={() =>
-                      startCall(item.seller.name, item.seller.avatar, item.seller.phone)
+                      startCall(item.seller.name, item.seller.avatar, item.seller.phone, item.seller.id)
                     }
                     className="call-seller-btn w-full bg-[#FF6A00] hover:bg-[#EA580C] text-white text-xs font-bold py-3.5 rounded-2xl flex items-center justify-center gap-2 shadow-md shadow-orange-500/25 active:scale-95 transition-all cursor-pointer"
                   >
@@ -11686,7 +11900,7 @@ export default function RootLayout() {
               <div>
                 <button
                   type="button"
-                  onClick={() => startCall(activeConv.otherUser.name, activeConv.otherUser.avatar, contactPhone)}
+                  onClick={() => startCall(activeConv.otherUser.name, activeConv.otherUser.avatar, contactPhone, activeConv.otherUser.id)}
                   className="w-8.5 h-8.5 rounded-full bg-[#FF6A00] hover:bg-orange-600 text-white flex items-center justify-center active:scale-95 transition-all cursor-pointer shadow-xs"
                   title="Call"
                 >
@@ -15111,7 +15325,7 @@ export default function RootLayout() {
                       {/* Call Button (white card with phone icon) */}
                       <button
                         type="button"
-                        onClick={() => startCall(b.artisanName, b.artisanAvatar, b.artisanPhone)}
+                        onClick={() => startCall(b.artisanName, b.artisanAvatar, b.artisanPhone, b.artisanId)}
                         className="py-2 px-3.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-800 font-bold text-xs cursor-pointer shadow-2xs active:scale-98 transition-all flex items-center justify-center gap-1.5"
                       >
                         <Phone size={13} className="text-slate-600" />
@@ -15488,7 +15702,7 @@ export default function RootLayout() {
                   {/* Call Artisan (shows popup with In-App & Dialer call) */}
                   <button
                     type="button"
-                    onClick={() => startCall(selectedBookingForDetails.artisanName, selectedBookingForDetails.artisanAvatar, selectedBookingForDetails.artisanPhone)}
+                    onClick={() => startCall(selectedBookingForDetails.artisanName, selectedBookingForDetails.artisanAvatar, selectedBookingForDetails.artisanPhone, selectedBookingForDetails.artisanId)}
                     className="p-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-800 font-bold text-xs flex items-center justify-center cursor-pointer active:scale-95 transition-transform"
                     title="Call Artisan"
                   >
