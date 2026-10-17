@@ -2218,10 +2218,34 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
   };
 
   /** Opens the Privacy Policy or Terms of Use (in the phone's browser when in the app). */
-  const openPublicPage = (page: 'privacy' | 'terms') => {
-    const url = `${PUBLIC_WEB_URL}/${page}.html`;
-    if (native) window.location.href = url;
-    else window.open(url, '_blank', 'noopener');
+  // Privacy Policy / Terms: shown inside the app (with a back button) so the user never leaves it
+  const [policyPage, setPolicyPage] = useState<'privacy' | 'terms' | null>(null);
+  const openPublicPage = (page: 'privacy' | 'terms') => setPolicyPage(page);
+
+  const renderPolicyViewer = () => {
+    if (!policyPage) return null;
+    return (
+      <div className="fixed inset-0 z-[90] bg-white flex flex-col">
+        <div className="shrink-0 flex items-center gap-2 px-3 py-2.5 border-b border-slate-200 bg-white">
+          <button
+            type="button"
+            onClick={() => setPolicyPage(null)}
+            className="w-9 h-9 rounded-xl flex items-center justify-center text-slate-800 hover:bg-slate-100 cursor-pointer"
+            aria-label="Back"
+            title="Back"
+          >
+            <ChevronLeft size={22} />
+          </button>
+          <h2 className="text-sm font-black text-slate-900">{policyPage === 'privacy' ? 'Privacy Policy' : 'Terms of Use'}</h2>
+        </div>
+        <iframe
+          key={policyPage}
+          src={`${PUBLIC_WEB_URL}/${policyPage}.html?embed=1`}
+          title={policyPage === 'privacy' ? 'Privacy Policy' : 'Terms of Use'}
+          className="flex-1 w-full border-0 bg-white"
+        />
+      </div>
+    );
   };
 
   // ---------- Confirm email before using the app ----------
@@ -8670,6 +8694,14 @@ export default function RootLayout() {
   );
 
   // Render current mobile screen
+  const markOnboardingSeen = () => {
+    try {
+      localStorage.setItem('haraka.onboardingSeen', '1');
+    } catch {
+      // storage unavailable: onboarding simply shows again next time
+    }
+  };
+
   const renderCurrentScreen = () => {
     // Signed in but email not confirmed yet: only the confirmation screen (and sign-in screens) are available
     if (needsEmailVerification && !['splash', 'onboarding', 'welcome', 'sign-up', 'login', 'forgot-password'].includes(currentRoute.type)) {
@@ -8691,7 +8723,23 @@ export default function RootLayout() {
                 );
                 return;
               }
-              setCurrentRoute(firebaseUidRef.current ? { type: 'tabs', tab: 'home' } : { type: 'onboarding' });
+              // Wait until the saved login has loaded, so signed-in users go straight Home
+              const decide = () => {
+                let seenOnboarding = false;
+                try {
+                  seenOnboarding = localStorage.getItem('haraka.onboardingSeen') === '1';
+                } catch {
+                  seenOnboarding = false;
+                }
+                setCurrentRoute(
+                  firebaseAuth.currentUser || firebaseUidRef.current
+                    ? { type: 'tabs', tab: 'home' }
+                    : seenOnboarding
+                    ? { type: 'welcome' }
+                    : { type: 'onboarding' }
+                );
+              };
+              Promise.race([firebaseAuth.authStateReady(), new Promise((resolve) => setTimeout(resolve, 4000))]).then(decide, decide);
             }}
             autoDismissMs={3000}
             showDismissButton={false}
@@ -8702,8 +8750,14 @@ export default function RootLayout() {
       case 'onboarding': {
         return (
           <OnboardingScreen
-            onFinish={() => navigateTo({ type: 'welcome' })}
-            onSkip={() => navigateTo({ type: 'welcome' })}
+            onFinish={() => {
+              markOnboardingSeen();
+              navigateTo({ type: 'welcome' });
+            }}
+            onSkip={() => {
+              markOnboardingSeen();
+              navigateTo({ type: 'welcome' });
+            }}
           />
         );
       }
@@ -22973,6 +23027,7 @@ export default function RootLayout() {
                 {renderCallDropdown()}
                 {renderCallModal()}
                 {renderDeleteAccountModal()}
+                {renderPolicyViewer()}
               </div>
 
               {/* Bottom Tab Bar matching user screenshot */}

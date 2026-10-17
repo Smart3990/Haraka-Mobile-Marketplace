@@ -6,9 +6,8 @@ import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
 import HarakaApp from '../src/HarakaApp.dom';
 
-/** Links opened outside the app: phone calls, SMS, email, WhatsApp, and the Privacy Policy / Terms pages. */
-const EXTERNAL_LINK =
-  /^(tel|sms|mailto|whatsapp|intent):|^https?:\/\/(wa\.me|api\.whatsapp\.com)\/|^https:\/\/(harakaapp|ga4-viewer-kiyumart-platform)\.web\.app\/(privacy|terms)\.html/i;
+/** Links the web view can't open itself: phone calls, SMS, email, WhatsApp. */
+const EXTERNAL_LINK = /^(tel|sms|mailto|whatsapp|intent):|^https?:\/\/(wa\.me|api\.whatsapp\.com)\//i;
 
 // Show notifications even while the app is open
 Notifications.setNotificationHandler({
@@ -106,6 +105,8 @@ export default function Index() {
           showsVerticalScrollIndicator: false,
           showsHorizontalScrollIndicator: false,
           onShouldStartLoadWithRequest: (request) => {
+            // Pages shown inside the app (Privacy Policy, Terms) load in a frame: allow them
+            if (request.isTopFrame === false) return true;
             if (EXTERNAL_LINK.test(request.url)) {
               Linking.openURL(request.url).catch(() => {});
               return false;

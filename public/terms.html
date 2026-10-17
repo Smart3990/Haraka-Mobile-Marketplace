@@ -21,6 +21,10 @@
     .card { background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; margin: 14px 0; }
     a { color: var(--brand); }
     footer { margin-top: 40px; font-size: 13px; color: var(--muted); }
+
+    /* Shown inside the Haraka app: no site header/footer */
+    html.embed header, html.embed footer { display: none; }
+    html.embed main { padding-top: 8px; }
   </style>
 </head>
 <body>
@@ -99,5 +103,11 @@
     © 2026 Haraka App
   </footer>
 </main>
+<script>
+  if (/[?&]embed=1/.test(location.search)) {
+    document.documentElement.classList.add('embed');
+    document.querySelectorAll('a[href$=".html"]').forEach(function (a) { a.href = a.getAttribute('href') + '?embed=1'; });
+  }
+</script>
 </body>
 </html>
