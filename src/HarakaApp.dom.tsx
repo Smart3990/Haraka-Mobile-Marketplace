@@ -25,12 +25,21 @@ function setUpPhoneScreen() {
   viewport.content = 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover';
 
   if (document.getElementById('haraka-phone-screen')) return;
+
+  // Open the connection to the photo server straight away so the first photos arrive sooner
+  const preconnect = document.createElement('link');
+  preconnect.rel = 'preconnect';
+  preconnect.href = 'https://res.cloudinary.com';
+  document.head.appendChild(preconnect);
   const style = document.createElement('style');
   style.id = 'haraka-phone-screen';
   style.textContent = `
     html, body { height: 100%; width: 100%; margin: 0; padding: 0; overflow: hidden; overscroll-behavior: none;
       -webkit-text-size-adjust: 100%; text-size-adjust: 100%; -webkit-tap-highlight-color: transparent; }
     body > div, #root { height: 100%; width: 100%; overflow: hidden; }
+    /* Expo makes #root a flex row, which shrinks each screen to its content width; fill the phone instead */
+    #root { display: block !important; }
+    #root > * { width: 100%; height: 100%; }
   `;
   document.head.appendChild(style);
 }

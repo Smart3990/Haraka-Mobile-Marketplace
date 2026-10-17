@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
+import { BRAND_LOGO } from '../lib/images';
 
 interface SplashScreenProps {
   onFinish?: () => void;
@@ -6,8 +7,7 @@ interface SplashScreenProps {
   showDismissButton?: boolean;
 }
 
-export const HARAKA_SPLASH_LOGO_URL =
-  'https://lh3.googleusercontent.com/aida-public/AB6AXuAlPoI2sgJT9wRJX7VurGMk86ppfPRa3Uxhr16UVZ-f-uJAkjisNaduCBQQ6BqPpKcitzm4lOGnI3d_-1uEYHn3aAGsHmbSiifD0sDxGinSkJpK1YmigO4B3Spvu0OWc3Tal69GDv-QJZvA7rfMN7ouTJfBecH9z32cvieS71MvxQIm-dgNd33EHFFT3WPRMJiHAiZ5FLhxs-V0Lv32HX5FWrK4rGyaj5VHS58PgiHkPKhEN1EHV9KK0l2qScmk89Ma-Q';
+export const HARAKA_SPLASH_LOGO_URL = BRAND_LOGO;
 
 export default function SplashScreen({
   onFinish,
@@ -55,9 +55,6 @@ export default function SplashScreen({
           <img
             src={HARAKA_SPLASH_LOGO_URL}
             alt="Haraka"
-            onError={(e) => {
-              (e.currentTarget as HTMLImageElement).src = '/logo_haraka.png';
-            }}
             onMouseDown={() => setIsPressed(true)}
             onMouseUp={() => setIsPressed(false)}
             onTouchStart={() => setIsPressed(true)}

@@ -43,7 +43,8 @@ export async function uploadMedia(file: string | Blob, folder: string): Promise<
 }
 
 /** Smaller version of a Cloudinary image for lists and thumbnails; other URLs are returned unchanged. */
-export function thumbnailUrl(url: string, width = 480): string {
-  if (!url || !url.includes('res.cloudinary.com')) return url;
+export function thumbnailUrl(url: string | null | undefined, width = 480): string | undefined {
+  if (!url) return undefined;
+  if (!url.includes('res.cloudinary.com')) return url;
   return url.replace(/\/upload\/(f_auto,q_auto,c_limit,w_\d+\/)?/, `/upload/f_auto,q_auto,c_limit,w_${width}/`);
 }

@@ -1,5 +1,5 @@
 import React from 'react';
-import welcomeHeroImg from '../assets/images/welcome_hero_marketplace_1791991095551.jpg';
+import { WELCOME_HERO } from '../lib/images';
 
 interface WelcomeScreenProps {
   onSignIn: () => void;
@@ -8,7 +8,7 @@ interface WelcomeScreenProps {
   onRegisterPartner?: () => void;
 }
 
-export const WELCOME_HERO_IMAGE = welcomeHeroImg || '/welcome_hero.png';
+export const WELCOME_HERO_IMAGE = WELCOME_HERO;
 
 export default function WelcomeScreen({
   onSignIn,
@@ -26,11 +26,7 @@ export default function WelcomeScreen({
           <img
             alt="Welcome to Haraka - Buy and sell items locally"
             className="max-h-full max-w-full w-auto h-auto object-contain pointer-events-none select-none"
-            src={welcomeHeroImg}
-            onError={(e) => {
-              const target = e.currentTarget as HTMLImageElement;
-              target.src = '/welcome_hero.png';
-            }}
+            src={WELCOME_HERO}
           />
         </div>
 

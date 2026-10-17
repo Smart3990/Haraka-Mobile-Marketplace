@@ -1,4 +1,5 @@
 import React from 'react';
+import { HARAKA_LOGO } from '../lib/images';
 
 interface HarakaLogoProps {
   className?: string;
@@ -22,7 +23,7 @@ export default function HarakaLogo({
 
   return (
     <img
-      src="/logo_haraka.png"
+      src={HARAKA_LOGO}
       alt="Haraka"
       className={`object-contain ${appliedClass}`}
     />

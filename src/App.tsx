@@ -190,6 +190,7 @@ import {
   watchListings,
 } from './lib/backend';
 import { HarakaLogo } from './components/HarakaLogo';
+import { HARAKA_MARK, WELCOME_HERO_TRANS } from './lib/images';
 import SplashScreen from './components/SplashScreen';
 import WelcomeScreen from './components/WelcomeScreen';
 import OnboardingScreen from './components/OnboardingScreen';
@@ -5620,7 +5621,7 @@ export default function RootLayout() {
               >
                 {thumb?.img && (
                   <img
-                    src={thumb.img}
+                    src={thumbnailUrl(thumb.img, 240)}
                     alt=""
                     className="w-full h-full object-cover"
                   />
@@ -5667,7 +5668,7 @@ export default function RootLayout() {
           <div className="mx-auto mt-2 flex justify-center">
             {activeCallUser.avatar ? (
               <img
-                src={activeCallUser.avatar}
+                src={thumbnailUrl(activeCallUser.avatar, 240)}
                 alt={activeCallUser.name}
                 className={`w-20 h-20 rounded-full object-cover border border-slate-100 shadow-xs ${pulsing}`}
               />
@@ -5792,7 +5793,7 @@ export default function RootLayout() {
           <div className="bg-slate-50 rounded-xl p-2.5 border border-slate-100 flex items-center gap-2.5">
             {reportListingTarget.images?.[0] ? (
               <img
-                src={reportListingTarget.images[0]}
+                src={thumbnailUrl(reportListingTarget.images[0], 240)}
                 alt=""
                 className="w-10 h-10 rounded-lg object-cover border border-slate-200 shrink-0"
               />
@@ -5921,7 +5922,7 @@ export default function RootLayout() {
           <div className="px-2.5 py-1.5 pb-2 border-b border-slate-100 flex items-center gap-2">
             {callDropdownUser.avatar ? (
               <img
-                src={callDropdownUser.avatar}
+                src={thumbnailUrl(callDropdownUser.avatar, 240)}
                 alt={callDropdownUser.name}
                 className="w-7 h-7 rounded-full object-cover border border-slate-200 shrink-0"
               />
@@ -6292,7 +6293,7 @@ export default function RootLayout() {
                 title="Click to view full photo"
               >
                 <img
-                  src={applicant.avatar}
+                  src={thumbnailUrl(applicant.avatar, 240)}
                   alt={applicant.name}
                   className="w-14 h-14 rounded-xl object-cover border border-slate-200 group-hover:opacity-90 transition-opacity"
                 />
@@ -7145,7 +7146,7 @@ export default function RootLayout() {
             <div className="relative">
               {viewingClientProfile.clientAvatar ? (
                 <img
-                  src={viewingClientProfile.clientAvatar}
+                  src={thumbnailUrl(viewingClientProfile.clientAvatar, 240)}
                   alt={viewingClientProfile.clientName}
                   className="w-20 h-20 rounded-full object-cover border-2 border-white shadow-md"
                 />
@@ -7297,7 +7298,7 @@ export default function RootLayout() {
           <div className="flex items-start gap-3.5 bg-slate-50 p-3.5 rounded-2xl border border-slate-200/90 shadow-2xs">
             {booking.clientAvatar ? (
               <img
-                src={booking.clientAvatar}
+                src={thumbnailUrl(booking.clientAvatar, 240)}
                 alt={booking.clientName}
                 className="w-14 h-14 rounded-2xl object-cover shrink-0 border border-slate-200 shadow-2xs"
               />
@@ -7893,7 +7894,7 @@ export default function RootLayout() {
               >
                 {userProfile.avatar ? (
                   <img
-                    src={userProfile.avatar}
+                    src={thumbnailUrl(userProfile.avatar, 240)}
                     alt={userProfile.name}
                     className="w-full h-full object-cover"
                   />
@@ -8085,7 +8086,7 @@ export default function RootLayout() {
                               <div className="relative shrink-0">
                                 {booking.clientAvatar ? (
                                   <img
-                                    src={booking.clientAvatar}
+                                    src={thumbnailUrl(booking.clientAvatar, 240)}
                                     alt={booking.clientName}
                                     className="w-11 h-11 rounded-full object-cover border border-slate-200 shadow-2xs"
                                   />
@@ -8391,7 +8392,7 @@ export default function RootLayout() {
                             {/* Profile Image */}
                             {applicant.avatar ? (
                               <img
-                                src={applicant.avatar}
+                                src={thumbnailUrl(applicant.avatar, 240)}
                                 alt={applicant.name}
                                 className="w-12 h-12 rounded-xl object-cover border border-slate-100 shrink-0"
                               />
@@ -8609,7 +8610,7 @@ export default function RootLayout() {
                     <div className="relative shrink-0">
                       {item.image ? (
                         <img
-                          src={item.image}
+                          src={thumbnailUrl(item.image, 240)}
                           alt={item.title}
                           className="w-16 h-16 rounded-xl object-cover border border-slate-100 group-hover:opacity-90 transition-opacity"
                         />
@@ -8896,7 +8897,7 @@ export default function RootLayout() {
                       <div className="relative w-7 h-7 rounded-full overflow-hidden ring-1.5 ring-slate-200 hover:ring-orange-500 transition-all bg-slate-100 flex items-center justify-center">
                         {userProfile.avatar ? (
                           <img
-                            src={userProfile.avatar}
+                            src={thumbnailUrl(userProfile.avatar, 240)}
                             alt="Profile"
                             className="w-full h-full object-cover"
                           />
@@ -9026,7 +9027,7 @@ export default function RootLayout() {
                         btnText: 'Post an Ad Now',
                         bgGradient: 'from-[#FF5722] via-[#FF6D00] to-[#F57C00]',
                         action: () => navigateTo({ type: 'post-ad-step1' }),
-                        image: '/welcome_hero_trans.png',
+                        image: WELCOME_HERO_TRANS,
                       },
                       {
                         id: 'seller-inquiries',
@@ -9035,7 +9036,7 @@ export default function RootLayout() {
                         btnText: 'Check Messages',
                         bgGradient: 'from-[#1D4ED8] via-[#2563EB] to-[#3B82F6]',
                         action: () => navigateTo({ type: 'tabs', tab: 'messages' }),
-                        image: '/welcome_hero_trans.png',
+                        image: WELCOME_HERO_TRANS,
                       },
                       {
                         id: 'seller-artisans',
@@ -9044,7 +9045,7 @@ export default function RootLayout() {
                         btnText: 'Explore Artisans',
                         bgGradient: 'from-[#047857] via-[#059669] to-[#10B981]',
                         action: () => navigateTo({ type: 'artisans' }),
-                        image: '/welcome_hero_trans.png',
+                        image: WELCOME_HERO_TRANS,
                       },
                     ];
                   } else if (currentUserRole === 'artisan') {
@@ -9156,7 +9157,7 @@ export default function RootLayout() {
                         btnText: 'Explore Deals',
                         bgGradient: 'from-[#006C45] via-[#059669] to-[#10B981]',
                         action: () => navigateTo({ type: 'search' }),
-                        image: '/welcome_hero_trans.png',
+                        image: WELCOME_HERO_TRANS,
                       },
                       {
                         id: 'buyer-partner',
@@ -9165,7 +9166,7 @@ export default function RootLayout() {
                         btnText: 'Register Today',
                         bgGradient: 'from-[#FF5722] via-[#FF6D00] to-[#F57C00]',
                         action: () => navigateTo({ type: 'register-partner' }),
-                        image: '/welcome_hero_trans.png',
+                        image: WELCOME_HERO_TRANS,
                       },
                       {
                         id: 'buyer-verified-merchants',
@@ -9174,7 +9175,7 @@ export default function RootLayout() {
                         btnText: 'Shop Tech & Home',
                         bgGradient: 'from-[#1E293B] via-[#334155] to-[#0F172A]',
                         action: () => navigateTo({ type: 'category', slug: 'phones' }),
-                        image: '/welcome_hero_trans.png',
+                        image: WELCOME_HERO_TRANS,
                       },
                       {
                         id: 'buyer-artisans',
@@ -9183,7 +9184,7 @@ export default function RootLayout() {
                         btnText: 'Explore Artisans',
                         bgGradient: 'from-[#047857] via-[#059669] to-[#10B981]',
                         action: () => navigateTo({ type: 'artisans' }),
-                        image: '/welcome_hero_trans.png',
+                        image: WELCOME_HERO_TRANS,
                       },
                       {
                         id: 'buyer-deals',
@@ -9192,7 +9193,7 @@ export default function RootLayout() {
                         btnText: 'Browse Deals',
                         bgGradient: 'from-[#6D28D9] via-[#7C3AED] to-[#8B5CF6]',
                         action: () => navigateTo({ type: 'category', slug: 'phones' }),
-                        image: '/welcome_hero_trans.png',
+                        image: WELCOME_HERO_TRANS,
                       },
                     ];
                   }
@@ -9207,7 +9208,7 @@ export default function RootLayout() {
                     >
                       {/* Clean 3D marketplace illustration with visible grounded shadow */}
                       <img
-                        src={currentSlide.image || '/welcome_hero_trans.png'}
+                        src={currentSlide.image || WELCOME_HERO_TRANS}
                         alt={currentSlide.title || 'Haraka Marketplace'}
                         className="absolute right-0 bottom-0.5 w-36 h-36 object-contain pointer-events-none z-0"
                       />
@@ -9330,6 +9331,8 @@ export default function RootLayout() {
                           {item.images?.[0] ? (
                             <img
                               src={thumbnailUrl(item.images[0])}
+                              loading="lazy"
+                              decoding="async"
                               alt={item.title}
                               className="w-full h-full object-cover"
                             />
@@ -9521,7 +9524,7 @@ export default function RootLayout() {
                         >
                           {artisan.avatar ? (
                             <img
-                              src={artisan.avatar}
+                              src={thumbnailUrl(artisan.avatar, 240)}
                               alt={artisan.name}
                               className="w-13 h-13 rounded-2xl object-cover shrink-0 border border-slate-100 shadow-2xs"
                             />
@@ -9799,7 +9802,7 @@ export default function RootLayout() {
                     <div className="relative">
                       {conv.otherUser.avatar ? (
                         <img
-                          src={conv.otherUser.avatar}
+                          src={thumbnailUrl(conv.otherUser.avatar, 240)}
                           alt={conv.otherUser.name}
                           className="w-12 h-12 rounded-full object-cover"
                         />
@@ -9838,7 +9841,7 @@ export default function RootLayout() {
                     </div>
                     {Boolean(conv.listingImage) && (
                       <img
-                        src={conv.listingImage}
+                        src={thumbnailUrl(conv.listingImage, 240)}
                         alt=""
                         className="w-10 h-10 rounded-lg object-cover border border-slate-100 shrink-0"
                       />
@@ -10185,6 +10188,8 @@ export default function RootLayout() {
                                   {item.images?.[0] ? (
                                     <img
                                       src={thumbnailUrl(item.images[0])}
+                                      loading="lazy"
+                                      decoding="async"
                                       alt=""
                                       className="w-full h-full object-cover"
                                     />
@@ -10274,6 +10279,8 @@ export default function RootLayout() {
                             {item.images?.[0] ? (
                               <img
                                 src={thumbnailUrl(item.images[0])}
+                                loading="lazy"
+                                decoding="async"
                                 alt=""
                                 className="w-20 h-20 rounded-xl object-cover shrink-0"
                               />
@@ -10450,7 +10457,7 @@ export default function RootLayout() {
                     >
                       {userProfile.avatar ? (
                         <img
-                          src={userProfile.avatar}
+                          src={thumbnailUrl(userProfile.avatar, 240)}
                           alt={cleanProfileName}
                           className="w-14 h-14 rounded-2xl object-cover border border-slate-200 shadow-xs group-hover:ring-2 group-hover:ring-orange-500 transition-all"
                         />
@@ -11678,6 +11685,8 @@ export default function RootLayout() {
                         {item.images?.[0] ? (
                           <img
                             src={thumbnailUrl(item.images[0])}
+                            loading="lazy"
+                            decoding="async"
                             alt={item.title}
                             className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                           />
@@ -13219,6 +13228,8 @@ export default function RootLayout() {
                             {item.images?.[0] ? (
                               <img
                                 src={thumbnailUrl(item.images[0])}
+                                loading="lazy"
+                                decoding="async"
                                 alt={item.title}
                                 className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                               />
@@ -13390,6 +13401,8 @@ export default function RootLayout() {
                             {item.images?.[0] ? (
                               <img
                                 src={thumbnailUrl(item.images[0])}
+                                loading="lazy"
+                                decoding="async"
                                 alt={item.title}
                                 className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                               />
@@ -13542,7 +13555,7 @@ export default function RootLayout() {
                     >
                       {artisan.avatar ? (
                         <img
-                          src={artisan.avatar}
+                          src={thumbnailUrl(artisan.avatar, 240)}
                           alt={artisan.name}
                           className="w-13 h-13 rounded-2xl object-cover shrink-0 border border-slate-100 shadow-2xs"
                         />
@@ -13759,7 +13772,7 @@ export default function RootLayout() {
                 >
                   {userProfile.avatar ? (
                     <img
-                      src={userProfile.avatar}
+                      src={thumbnailUrl(userProfile.avatar, 240)}
                       alt="User"
                       className="w-full h-full object-cover"
                     />
@@ -13779,7 +13792,7 @@ export default function RootLayout() {
                   <div className="relative shrink-0">
                     {artisan.avatar ? (
                       <img
-                        src={artisan.avatar}
+                        src={thumbnailUrl(artisan.avatar, 240)}
                         alt={artisan.name}
                         className="w-20 h-20 rounded-full object-cover border-2 border-white shadow-sm ring-1 ring-slate-100"
                       />
@@ -14251,7 +14264,7 @@ export default function RootLayout() {
               <div className="w-8 h-8 rounded-full overflow-hidden border border-slate-200">
                 {artisan.avatar ? (
                   <img
-                    src={artisan.avatar}
+                    src={thumbnailUrl(artisan.avatar, 240)}
                     alt={artisan.name}
                     className="w-full h-full object-cover"
                   />
@@ -14311,7 +14324,7 @@ export default function RootLayout() {
                   <div className="relative shrink-0">
                     {artisan.avatar ? (
                       <img
-                        src={artisan.avatar}
+                        src={thumbnailUrl(artisan.avatar, 240)}
                         alt={artisan.name}
                         className="w-20 h-20 rounded-full object-cover border-2 border-white shadow-sm ring-1 ring-slate-100"
                       />
@@ -14977,7 +14990,7 @@ export default function RootLayout() {
                       <div className="relative shrink-0">
                         {artisan.avatar ? (
                           <img
-                            src={artisan.avatar}
+                            src={thumbnailUrl(artisan.avatar, 240)}
                             alt={artisan.name}
                             className="w-16 h-16 rounded-full object-cover border-2 border-white shadow-xs"
                           />
@@ -15791,7 +15804,7 @@ export default function RootLayout() {
                         <div className="relative shrink-0">
                           {b.artisanAvatar ? (
                             <img
-                              src={b.artisanAvatar}
+                              src={thumbnailUrl(b.artisanAvatar, 240)}
                               alt={b.artisanName}
                               className="w-11 h-11 rounded-full object-cover border border-slate-200 shadow-2xs"
                             />
@@ -15968,7 +15981,7 @@ export default function RootLayout() {
                   <div className="flex items-start gap-3.5 bg-slate-50 p-3.5 rounded-2xl border border-slate-200/90 shadow-2xs">
                     {selectedBookingForDetails.artisanAvatar ? (
                       <img
-                        src={selectedBookingForDetails.artisanAvatar}
+                        src={thumbnailUrl(selectedBookingForDetails.artisanAvatar, 240)}
                         alt={selectedBookingForDetails.artisanName}
                         className="w-14 h-14 rounded-2xl object-cover shrink-0 border border-slate-200 shadow-2xs"
                       />
@@ -16372,7 +16385,7 @@ export default function RootLayout() {
                 >
                   <Share2 size={18} />
                 </button>
-                <img src="/logo_haraka_trans.png" alt="Haraka" className="w-5 h-5 object-contain" />
+                <img src={HARAKA_MARK} alt="Haraka" className="w-5 h-5 object-contain" />
               </div>
             </div>
 
@@ -16382,7 +16395,7 @@ export default function RootLayout() {
               <div className="text-center pt-2 pb-1 space-y-2">
                 <div className="flex justify-center">
                   <img
-                    src="/logo_haraka_trans.png"
+                    src={HARAKA_MARK}
                     alt="Haraka Logo"
                     className="h-12 w-auto object-contain"
                   />
@@ -16606,7 +16619,7 @@ export default function RootLayout() {
                 {sellerRegStep === 2 ? (
                   userProfile.avatar ? (
                     <img
-                      src={userProfile.avatar}
+                      src={thumbnailUrl(userProfile.avatar, 240)}
                       alt="User"
                       className="w-8 h-8 rounded-full object-cover border border-slate-200 shadow-2xs"
                     />
@@ -16618,7 +16631,7 @@ export default function RootLayout() {
                 ) : (
                   <div className="w-8 h-8 flex items-center justify-center shrink-0">
                     <img
-                      src="/logo_haraka_trans.png"
+                      src={HARAKA_MARK}
                       alt="Haraka Logo"
                       className="w-full h-full object-contain"
                     />
@@ -17103,7 +17116,7 @@ export default function RootLayout() {
                           <div className="relative shrink-0">
                             {userProfile.avatar ? (
                               <img
-                                src={userProfile.avatar}
+                                src={thumbnailUrl(userProfile.avatar, 240)}
                                 alt="Store Avatar"
                                 className="w-16 h-16 rounded-full object-cover border-2 border-[#FF6A00]/80 shadow-xs"
                               />
@@ -19889,7 +19902,7 @@ export default function RootLayout() {
                           >
                             {sellerAvatarPhoto ? (
                               <img
-                                src={sellerAvatarPhoto}
+                                src={thumbnailUrl(sellerAvatarPhoto, 240)}
                                 alt="Artisan Avatar"
                                 className="w-16 h-16 rounded-2xl object-cover border-2 border-white shadow-xs group-hover:ring-2 group-hover:ring-orange-400"
                               />
@@ -20597,7 +20610,7 @@ export default function RootLayout() {
                       >
                         {sellerAvatarPhoto ? (
                           <img
-                            src={sellerAvatarPhoto}
+                            src={thumbnailUrl(sellerAvatarPhoto, 240)}
                             alt="Seller"
                             className="w-14 h-14 rounded-full object-cover border-2 border-white shadow-xs group-hover:opacity-90 group-hover:ring-2 group-hover:ring-[#FF6A00] transition-all"
                           />
@@ -22823,7 +22836,7 @@ export default function RootLayout() {
               <>
                 {userProfile.avatar ? (
                   <img
-                    src={userProfile.avatar}
+                    src={thumbnailUrl(userProfile.avatar, 240)}
                     alt={userProfile.name || 'User'}
                     className="w-4 h-4 rounded-full object-cover"
                   />

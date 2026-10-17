@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { GoogleAuthProvider, signInWithPopup, OAuthProvider } from 'firebase/auth';
 import { auth } from '../lib/firebase';
 import { friendlyAuthError, signInWithEmail } from '../lib/backend';
+import { BRAND_LOGO } from '../lib/images';
 
 interface SignInScreenProps {
   onSuccess: (userData: { email: string; name?: string }) => void;
@@ -12,8 +13,7 @@ interface SignInScreenProps {
   showSocialLogins?: boolean;
 }
 
-const HARAKA_LOGO_URL =
-  'https://lh3.googleusercontent.com/aida-public/AB6AXuA12bpNfB52rGIYXjAyHoWwuoJD9XE6hrcvhWNcsi3-CuFdpe3gbT57Xuy7LzKe0jDRSPTkZ0Vl9q0Rhj7jHFX_yXGx7ixvwLGJkXwAuyfpsuI2GvR4dfMqg5JcXoOytzZ3L_nJ46_E7UgIGmTNye4FA45uDAYP5nQwQICFiKboI-I1w3l1W5fALNzFBwtQjXPU6VFSjuPAhpF9Yf_8ve93o1KykxLn2W8MIe7vR8-FfHHahEcZNfXRKvcTv3bxYYDzpA';
+const HARAKA_LOGO_URL = BRAND_LOGO;
 
 export default function SignInScreen({
   onSuccess,
@@ -144,9 +144,6 @@ export default function SignInScreen({
               src={HARAKA_LOGO_URL}
               alt="Haraka"
               className="h-12 w-auto object-contain mx-auto mb-2"
-              onError={(e) => {
-                (e.currentTarget as HTMLImageElement).src = '/logo_haraka.png';
-              }}
             />
           </div>
           {/* END: TopBar */}

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Lock, Eye, EyeOff, CheckCircle2, RefreshCw, KeyRound, ExternalLink } from 'lucide-react';
 import { friendlyAuthError, sendPasswordReset } from '../lib/backend';
+import { BRAND_LOGO } from '../lib/images';
 
 interface ForgotPasswordScreenProps {
   initialEmail?: string;
@@ -10,8 +11,7 @@ interface ForgotPasswordScreenProps {
   onSuccess?: () => void;
 }
 
-const HARAKA_LOGO_URL =
-  'https://lh3.googleusercontent.com/aida-public/AB6AXuA12bpNfB52rGIYXjAyHoWwuoJD9XE6hrcvhWNcsi3-CuFdpe3gbT57Xuy7LzKe0jDRSPTkZ0Vl9q0Rhj7jHFX_yXGx7ixvwLGJkXwAuyfpsuI2GvR4dfMqg5JcXoOytzZ3L_nJ46_E7UgIGmTNye4FA45uDAYP5nQwQICFiKboI-I1w3l1W5fALNzFBwtQjXPU6VFSjuPAhpF9Yf_8ve93o1KykxLn2W8MIe7vR8-FfHHahEcZNfXRKvcTv3bxYYDzpA';
+const HARAKA_LOGO_URL = BRAND_LOGO;
 
 const DEFAULT_KNOWN_EMAILS = [
   'user@gmail.com',
@@ -115,9 +115,6 @@ export default function ForgotPasswordScreen({
               src={HARAKA_LOGO_URL}
               alt="Haraka"
               className="h-12 w-auto object-contain mx-auto mb-2"
-              onError={(e) => {
-                (e.currentTarget as HTMLImageElement).src = '/logo_haraka.png';
-              }}
             />
           </div>
           {/* END: TopBar */}
