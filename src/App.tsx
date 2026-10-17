@@ -2190,6 +2190,13 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     );
   };
 
+  /** Opens the Privacy Policy or Terms of Use (in the phone's browser when in the app). */
+  const openPublicPage = (page: 'privacy' | 'terms') => {
+    const url = `${PUBLIC_WEB_URL}/${page}.html`;
+    if (native) window.location.href = url;
+    else window.open(url, '_blank', 'noopener');
+  };
+
   // ---------- Delete my account ----------
   const [showDeleteAccountModal, setShowDeleteAccountModal] = useState(false);
   const [deleteAccountPassword, setDeleteAccountPassword] = useState('');
@@ -10606,6 +10613,26 @@ export default function RootLayout() {
                     {/* Support & Sign Out */}
                     <div className="bg-white rounded-2xl p-2 border border-slate-200/80 shadow-2xs">
                       <button
+                        onClick={() => openPublicPage('privacy')}
+                        className="w-full p-2.5 flex items-center justify-between text-xs font-semibold text-slate-700 hover:bg-slate-50 rounded-xl cursor-pointer"
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <ShieldCheck size={16} className="text-slate-500" />
+                          <span>Privacy Policy</span>
+                        </div>
+                        <ChevronRight size={15} className="text-slate-300" />
+                      </button>
+                      <button
+                        onClick={() => openPublicPage('terms')}
+                        className="w-full p-2.5 flex items-center justify-between text-xs font-semibold text-slate-700 hover:bg-slate-50 rounded-xl cursor-pointer"
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <FileText size={16} className="text-slate-500" />
+                          <span>Terms of Use</span>
+                        </div>
+                        <ChevronRight size={15} className="text-slate-300" />
+                      </button>
+                      <button
                         onClick={handleSignOut}
                         className="w-full p-2.5 flex items-center justify-between text-xs font-semibold text-red-600 hover:bg-red-50/50 rounded-xl cursor-pointer"
                       >
@@ -10727,6 +10754,26 @@ export default function RootLayout() {
 
                     {/* Support & Sign Out */}
                     <div className="bg-white rounded-2xl p-2 border border-slate-200/80 shadow-2xs">
+                      <button
+                        onClick={() => openPublicPage('privacy')}
+                        className="w-full p-2.5 flex items-center justify-between text-xs font-semibold text-slate-700 hover:bg-slate-50 rounded-xl cursor-pointer"
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <ShieldCheck size={16} className="text-slate-500" />
+                          <span>Privacy Policy</span>
+                        </div>
+                        <ChevronRight size={15} className="text-slate-300" />
+                      </button>
+                      <button
+                        onClick={() => openPublicPage('terms')}
+                        className="w-full p-2.5 flex items-center justify-between text-xs font-semibold text-slate-700 hover:bg-slate-50 rounded-xl cursor-pointer"
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <FileText size={16} className="text-slate-500" />
+                          <span>Terms of Use</span>
+                        </div>
+                        <ChevronRight size={15} className="text-slate-300" />
+                      </button>
                       <button
                         onClick={handleSignOut}
                         className="w-full p-2.5 flex items-center justify-between text-xs font-semibold text-red-600 hover:bg-red-50/50 rounded-xl cursor-pointer"
