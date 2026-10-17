@@ -9,6 +9,13 @@ import HarakaApp from '../src/HarakaApp.dom';
 /** Links the web view can't open itself: phone calls, SMS, email, WhatsApp. */
 const EXTERNAL_LINK = /^(tel|sms|mailto|whatsapp|intent):|^https?:\/\/(wa\.me|api\.whatsapp\.com)\//i;
 
+/** Startup values for the page (same as Expo provides; props are re-sent once the page is ready). */
+const STARTUP_SCRIPT = `
+  window.$$EXPO_DOM_HOST_OS = window.$$EXPO_DOM_HOST_OS || ${JSON.stringify(Platform.OS)};
+  window.$$EXPO_INITIAL_PROPS = window.$$EXPO_INITIAL_PROPS || { names: ['registerForPush', 'sendPush'], props: { openRoute: null } };
+  true;
+`;
+
 // Show notifications even while the app is open
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -104,6 +111,9 @@ export default function Index() {
           textZoom: 100,
           showsVerticalScrollIndicator: false,
           showsHorizontalScrollIndicator: false,
+          // Give the page its startup info as the page starts loading. Without this the page can
+          // occasionally start first and fail with "Top OS ($$EXPO_DOM_HOST_OS) is not defined".
+          injectedJavaScriptBeforeContentLoaded: STARTUP_SCRIPT,
           onShouldStartLoadWithRequest: (request) => {
             // Pages shown inside the app (Privacy Policy, Terms) load in a frame: allow them
             if (request.isTopFrame === false) return true;

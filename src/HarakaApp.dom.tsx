@@ -37,6 +37,15 @@ function setUpPhoneScreen() {
 
 if (typeof document !== 'undefined') setUpPhoneScreen();
 
+// Safety net: if the app's startup info has not reached the page yet, use safe defaults so the
+// app still starts (the real props arrive a moment later from the app). This runs before Expo
+// checks for them.
+if (typeof window !== 'undefined') {
+  const w = window as any;
+  if (w.$$EXPO_DOM_HOST_OS === undefined) w.$$EXPO_DOM_HOST_OS = /iPhone|iPad|iPod/i.test(navigator.userAgent) ? 'ios' : 'android';
+  if (w.$$EXPO_INITIAL_PROPS === undefined) w.$$EXPO_INITIAL_PROPS = { names: ['registerForPush', 'sendPush'], props: { openRoute: null } };
+}
+
 /** Shows what went wrong (instead of a blank screen) if the app fails to start. */
 class StartupErrorBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
   state = { error: null as string | null };

@@ -488,7 +488,8 @@ const PLACEHOLDER_IMAGE =
 /** Public web address of Haraka; shared links point here so anyone can open them. */
 const PUBLIC_WEB_URL = 'https://harakaapp.web.app';
 /** True inside the Android/iOS app (Expo DOM component), false on the website */
-const IN_PHONE_APP = typeof window !== 'undefined' && Boolean((window as any).$$EXPO_DOM_HOST_OS);
+const IN_PHONE_APP =
+  typeof window !== 'undefined' && Boolean((window as any).ReactNativeWebView || (window as any).$$EXPO_DOM_HOST_OS);
 
 /** Chat times: "14:05" today, otherwise "16 Oct". */
 function formatChatTime(iso: string): string {
