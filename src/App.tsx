@@ -486,7 +486,7 @@ const PLACEHOLDER_IMAGE =
   "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 4 3'><rect width='4' height='3' fill='%23e2e8f0'/></svg>";
 
 /** Public web address of Haraka; shared links point here so anyone can open them. */
-const PUBLIC_WEB_URL = 'https://ga4-viewer-kiyumart-platform.web.app';
+const PUBLIC_WEB_URL = 'https://harakaapp.web.app';
 
 /** Chat times: "14:05" today, otherwise "16 Oct". */
 function formatChatTime(iso: string): string {
@@ -1786,7 +1786,6 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     setSubmittedSellerApplicantId(null);
     setIsLoggedIn(false);
     navigateTo({ type: 'welcome' });
-    showToast('Signed out of Haraka.');
   };
 
   // Real Firebase session: restores a saved login on launch and loads the user's profile
@@ -2241,8 +2240,6 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
       if (await checkEmailVerified()) {
         setEmailConfirmed(true);
         navigateTo({ type: 'tabs', tab: 'home' });
-        const firstName = (firebaseAuth.currentUser?.displayName || '').split(' ')[0];
-        showToast(firstName ? `🎉 Email confirmed. Welcome to Haraka, ${firstName}!` : '🎉 Email confirmed. Welcome to Haraka!', 'check');
       } else if (fromButton) {
         setVerifyNotice('Not confirmed yet. Open the link in the email we sent, then try again.');
       }
@@ -21152,9 +21149,6 @@ export default function RootLayout() {
               }));
               setIsLoggedIn(true);
               navigateTo({ type: 'tabs', tab: 'home' });
-              if (isEmailConfirmed(firebaseAuth.currentUser)) {
-                showToast(userName ? `Welcome back, ${userName}!` : 'Welcome back!', 'check');
-              }
             }}
             onNavigateSignUp={() => {
               navigateTo({ type: 'sign-up' });

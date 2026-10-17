@@ -8,7 +8,7 @@ import HarakaApp from '../src/HarakaApp.dom';
 
 /** Links opened outside the app: phone calls, SMS, email, WhatsApp, and the Privacy Policy / Terms pages. */
 const EXTERNAL_LINK =
-  /^(tel|sms|mailto|whatsapp|intent):|^https?:\/\/(wa\.me|api\.whatsapp\.com)\/|^https:\/\/ga4-viewer-kiyumart-platform\.web\.app\/(privacy|terms)\.html/i;
+  /^(tel|sms|mailto|whatsapp|intent):|^https?:\/\/(wa\.me|api\.whatsapp\.com)\/|^https:\/\/(harakaapp|ga4-viewer-kiyumart-platform)\.web\.app\/(privacy|terms)\.html/i;
 
 // Show notifications even while the app is open
 Notifications.setNotificationHandler({

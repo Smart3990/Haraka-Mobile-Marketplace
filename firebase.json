@@ -5,15 +5,43 @@
       "rules": "firestore.rules"
     }
   ],
-  "hosting": {
-    "public": "dist",
-    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
-    "rewrites": [{ "source": "**", "destination": "/index.html" }],
-    "headers": [
-      {
-        "source": "/assets/**",
-        "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }]
-      }
-    ]
-  }
+  "hosting": [
+    {
+      "public": "dist",
+      "ignore": [
+        "firebase.json",
+        "**/.*",
+        "**/node_modules/**"
+      ],
+      "rewrites": [
+        {
+          "source": "**",
+          "destination": "/index.html"
+        }
+      ],
+      "headers": [
+        {
+          "source": "/assets/**",
+          "headers": [
+            {
+              "key": "Cache-Control",
+              "value": "public, max-age=31536000, immutable"
+            }
+          ]
+        }
+      ],
+      "site": "harakaapp"
+    },
+    {
+      "site": "ga4-viewer-kiyumart-platform",
+      "public": "hosting-redirect",
+      "redirects": [
+        {
+          "regex": "^/(.*)$",
+          "destination": "https://harakaapp.web.app/:1",
+          "type": 301
+        }
+      ]
+    }
+  ]
 }
