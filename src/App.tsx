@@ -487,6 +487,8 @@ const PLACEHOLDER_IMAGE =
 
 /** Public web address of Haraka; shared links point here so anyone can open them. */
 const PUBLIC_WEB_URL = 'https://harakaapp.web.app';
+/** True inside the Android/iOS app (Expo DOM component), false on the website */
+const IN_PHONE_APP = typeof window !== 'undefined' && Boolean((window as any).$$EXPO_DOM_HOST_OS);
 
 /** Chat times: "14:05" today, otherwise "16 Oct". */
 function formatChatTime(iso: string): string {
@@ -574,7 +576,8 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
   // Phone layout: size the app to the screen actually visible (also correct on older iPhones and
   // when the keyboard is open), and never let the page itself scroll or bounce
   useLayoutEffect(() => {
-    if (!native) return;
+    // Inside the phone app the screen already has a fixed size (see HarakaApp.dom.tsx)
+    if (!native || IN_PHONE_APP) return;
     const html = document.documentElement;
     html.classList.add('haraka-phone');
     const fit = () => {
@@ -22754,7 +22757,7 @@ export default function RootLayout() {
 
   return (
     <div
-      style={native ? { height: 'var(--app-height, 100vh)' } : undefined}
+      style={native ? { height: IN_PHONE_APP ? '100%' : 'var(--app-height, 100vh)' } : undefined}
       className={`${native ? 'overflow-hidden' : 'min-h-screen'} ${bgStyle === 'dark' ? 'bg-slate-950 text-slate-100' : 'bg-slate-100 text-slate-900'} flex flex-col font-sans selection:bg-orange-500 selection:text-white transition-colors`}>
       {/* Top Navbar with App Identity and Mode Switcher */}
       {!native && (

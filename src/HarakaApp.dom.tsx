@@ -4,7 +4,7 @@
  * Runs the original Haraka web app (App.tsx) inside the native Expo app as an
  * Expo DOM component, without the desktop simulator chrome.
  */
-import { useEffect } from 'react';
+import { Component, useEffect, type ReactNode } from 'react';
 import type { DOMProps } from 'expo/dom';
 import App, { type NativeBridge } from './App';
 import './index.css';
@@ -37,6 +37,40 @@ function setUpPhoneScreen() {
 
 if (typeof document !== 'undefined') setUpPhoneScreen();
 
+/** Shows what went wrong (instead of a blank screen) if the app fails to start. */
+class StartupErrorBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
+  state = { error: null as string | null };
+  static getDerivedStateFromError(error: unknown) {
+    return { error: error instanceof Error ? `${error.name}: ${error.message}` : String(error) };
+  }
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 24, textAlign: 'center', fontFamily: 'sans-serif', background: '#fff' }}>
+        <h2 style={{ fontSize: 18, margin: 0, color: '#0f172a' }}>Haraka could not start</h2>
+        <p style={{ fontSize: 13, color: '#475569', margin: '8px 0 16px' }}>Please send this message to support:</p>
+        <code style={{ fontSize: 11, color: '#b91c1c', wordBreak: 'break-word', maxWidth: 320 }}>{this.state.error}</code>
+        <button
+          onClick={() => location.reload()}
+          style={{ marginTop: 20, padding: '10px 22px', borderRadius: 12, border: 0, background: '#FF6A00', color: '#fff', fontWeight: 700 }}
+        >
+          Try again
+        </button>
+      </div>
+    );
+  }
+}
+
+// Errors outside React (e.g. while loading) are shown too, rather than a blank page
+if (typeof window !== 'undefined') {
+  window.addEventListener('error', (event) => {
+    const root = document.getElementById('root');
+    if (root && !root.childElementCount) {
+      root.innerHTML = `<div style="padding:24px;font-family:sans-serif;text-align:center"><h2 style="font-size:18px">Haraka could not start</h2><code style="font-size:11px;color:#b91c1c;word-break:break-word">${String(event.message).replace(/</g, '&lt;')}</code></div>`;
+    }
+  });
+}
+
 export default function HarakaApp({
   registerForPush,
   sendPush,
@@ -50,5 +84,9 @@ export default function HarakaApp({
     document.head.appendChild(link);
   }, []);
 
-  return <App native nativeBridge={{ registerForPush, sendPush, openRoute }} />;
+  return (
+    <StartupErrorBoundary>
+      <App native nativeBridge={{ registerForPush, sendPush, openRoute }} />
+    </StartupErrorBoundary>
+  );
 }
