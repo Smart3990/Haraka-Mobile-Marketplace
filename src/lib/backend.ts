@@ -6,8 +6,11 @@
 import { deleteApp, initializeApp } from 'firebase/app';
 import {
   createUserWithEmailAndPassword,
+  deleteUser,
+  EmailAuthProvider,
   getAuth,
   onAuthStateChanged,
+  reauthenticateWithCredential,
   sendEmailVerification,
   sendPasswordResetEmail,
   signInWithEmailAndPassword,
@@ -22,6 +25,7 @@ import {
   getFirestore,
   doc,
   getDoc,
+  getDocs,
   onSnapshot,
   limit,
   orderBy,
@@ -113,6 +117,13 @@ export function watchAdmins(callback: (admins: AdminRecord[]) => void): () => vo
     (snap) => callback(snap.docs.map((d) => d.data() as AdminRecord)),
     (error) => console.warn('Could not load admins', error)
   );
+}
+
+/** Removes an admin added in the app (the system admin cannot be removed). */
+export function removeAdmin(email: string): Promise<void> {
+  const key = email.trim().toLowerCase();
+  if (key === SYSTEM_ADMIN_EMAIL) return Promise.reject(new Error('The system admin cannot be removed.'));
+  return deleteDoc(doc(db, 'admins', key));
 }
 
 /**
@@ -234,6 +245,37 @@ export function sendPasswordReset(email: string): Promise<void> {
 
 export function signOutUser(): Promise<void> {
   return firebaseSignOut(auth);
+}
+
+/**
+ * Permanently deletes the signed-in user's account: their ads, partner application (with ID
+ * documents), public artisan profile, notification token and profile, then the login itself.
+ * Chats and bookings stay so the other person keeps their history.
+ */
+export async function deleteMyAccount(password: string): Promise<void> {
+  const user = auth.currentUser;
+  if (!user || !user.email) throw new Error('Please log in again to delete your account.');
+  if (user.email.toLowerCase() === SYSTEM_ADMIN_EMAIL) throw new Error('The system admin account cannot be deleted.');
+  try {
+    await reauthenticateWithCredential(user, EmailAuthProvider.credential(user.email, password));
+  } catch (error) {
+    const code = (error as { code?: string })?.code || '';
+    throw new Error(
+      code.includes('wrong-password') || code.includes('invalid-credential') || code.includes('invalid-login')
+        ? 'Incorrect password. Please try again.'
+        : friendlyAuthError(error)
+    );
+  }
+  const uid = user.uid;
+  const myListings = await getDocs(query(collection(db, 'listings'), where('sellerId', '==', uid)));
+  await Promise.all(myListings.docs.map((d) => deleteDoc(d.ref)));
+  await Promise.all(
+    [doc(db, 'applications', uid), doc(db, 'artisans', uid), doc(db, 'pushTokens', uid)].map((ref) =>
+      deleteDoc(ref).catch(() => {})
+    )
+  );
+  await deleteDoc(doc(db, 'users', uid));
+  await deleteUser(user);
 }
 
 /** Loads the Firestore profile for a signed-in user, creating it if it is missing. */
@@ -773,6 +815,44 @@ export async function submitReport(listing: { id: string; title: string; sellerI
     status: 'open',
     createdAtISO: new Date().toISOString(),
   }));
+}
+
+export type ReportStatus = 'open' | 'resolved' | 'dismissed';
+
+export interface ReportDoc {
+  id: string;
+  listingId: string;
+  listingTitle: string;
+  sellerId?: string;
+  reason: string;
+  details: string;
+  reporterId: string;
+  reporterEmail: string;
+  status: ReportStatus;
+  createdAtISO: string;
+  resolvedAtISO?: string;
+  resolvedBy?: string;
+  action?: string;
+}
+
+/** All user reports, newest first. Admins only. */
+export function watchReports(callback: (reports: ReportDoc[]) => void): () => void {
+  return onSnapshot(
+    query(collection(db, 'reports'), orderBy('createdAtISO', 'desc'), limit(200)),
+    (snap) => callback(snap.docs.map((d) => ({ ...(d.data() as ReportDoc), id: d.id }))),
+    (error) => console.warn('Could not load reports', error)
+  );
+}
+
+/** Closes a report. With removeAd, the reported ad is deleted first. Admins only. */
+export async function resolveReport(report: ReportDoc, outcome: 'resolved' | 'dismissed', removeAd = false): Promise<void> {
+  if (removeAd && report.listingId) await deleteDoc(doc(db, 'listings', report.listingId));
+  await updateDoc(doc(db, 'reports', report.id), {
+    status: outcome,
+    resolvedAtISO: new Date().toISOString(),
+    resolvedBy: auth.currentUser?.email || '',
+    action: removeAd ? 'Ad removed' : outcome === 'dismissed' ? 'No action needed' : 'Resolved',
+  });
 }
 
 /**

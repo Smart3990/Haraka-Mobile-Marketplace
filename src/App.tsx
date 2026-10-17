@@ -166,6 +166,13 @@ import {
   watchMyBookings,
   watchMyChats,
   watchReviews,
+  deleteMyAccount,
+  removeAdmin,
+  resolveReport,
+  watchAdmins,
+  watchReports,
+  type AdminRecord,
+  type ReportDoc,
   type AdminAccess,
   type ApplicationDecision,
   type ArtisanProfileDoc,
@@ -1884,7 +1891,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
         onClick={() => !isAddingAdmin && setShowAddAdminModal(false)}
       >
         <div
-          className="w-full max-w-sm bg-white rounded-3xl p-5 shadow-2xl border border-slate-100 space-y-3.5"
+          className="w-full max-w-sm max-h-[90dvh] overflow-y-auto no-scrollbar bg-white rounded-3xl p-5 shadow-2xl border border-slate-100 space-y-3.5"
           onClick={(e) => e.stopPropagation()}
         >
           <div className="flex items-start justify-between gap-3">
@@ -1974,6 +1981,306 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
               className="flex-1 py-2.5 rounded-xl bg-[#FF6A00] hover:bg-orange-600 text-white font-bold text-xs cursor-pointer disabled:opacity-60"
             >
               {isAddingAdmin ? 'Adding…' : 'Add Admin'}
+            </button>
+          </div>
+
+          {/* Current admins (the system admin is not listed) */}
+          <div className="pt-3 border-t border-slate-100">
+            <p className="text-[11px] font-black text-slate-800 mb-1.5">Current Admins ({adminList.length})</p>
+            {adminList.length === 0 ? (
+              <p className="text-[11px] text-slate-500">No admins added yet.</p>
+            ) : (
+              <div className="space-y-1.5 max-h-40 overflow-y-auto no-scrollbar">
+                {adminList.map((admin) => {
+                  const isMe = admin.email === (firebaseAuth.currentUser?.email || '').toLowerCase();
+                  return (
+                    <div key={admin.email} className="flex items-center gap-2 p-2 rounded-xl border border-slate-100">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[11px] font-bold text-slate-900 truncate">
+                          {admin.name || admin.email} {isMe && <span className="text-slate-400 font-semibold">(you)</span>}
+                        </p>
+                        <p className="text-[10px] text-slate-500 truncate">
+                          {admin.email}
+                          {admin.canAddAdmins ? ' • can add admins' : ''}
+                        </p>
+                      </div>
+                      {!isMe && (
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveAdmin(admin)}
+                          className={`shrink-0 px-2 py-1 rounded-lg text-[10.5px] font-bold cursor-pointer ${
+                            confirmRemoveAdmin === admin.email ? 'bg-red-600 text-white' : 'text-red-600 hover:bg-red-50'
+                          }`}
+                        >
+                          {confirmRemoveAdmin === admin.email ? 'Tap to confirm' : 'Remove'}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // ---------- Admin: list and remove admins ----------
+  const [adminList, setAdminList] = useState<AdminRecord[]>([]);
+  /** Email of the admin waiting for a second tap to confirm removal */
+  const [confirmRemoveAdmin, setConfirmRemoveAdmin] = useState<string | null>(null);
+  useEffect(() => {
+    setAdminList([]);
+    setConfirmRemoveAdmin(null);
+    if (!showAddAdminModal || !adminAccess.canAddAdmins) return;
+    return watchAdmins((list) => setAdminList([...list].sort((a, b) => (a.name || a.email).localeCompare(b.name || b.email))));
+  }, [showAddAdminModal, adminAccess.canAddAdmins]);
+  const handleRemoveAdmin = (admin: AdminRecord) => {
+    if (confirmRemoveAdmin !== admin.email) return setConfirmRemoveAdmin(admin.email);
+    setConfirmRemoveAdmin(null);
+    removeAdmin(admin.email)
+      .then(() => {
+        showToast(`${admin.name || admin.email} is no longer an admin.`, 'check');
+        refreshPlatformStats();
+      })
+      .catch((err) => showToast(`⚠️ ${err instanceof Error ? err.message : 'Could not remove this admin.'}`));
+  };
+
+  // ---------- Admin: user reports ----------
+  const [showReportsModal, setShowReportsModal] = useState(false);
+  const [reportsList, setReportsList] = useState<ReportDoc[]>([]);
+  const [reportsTab, setReportsTab] = useState<'open' | 'closed'>('open');
+  const [busyReportId, setBusyReportId] = useState<string | null>(null);
+  /** Report waiting for a second tap to confirm removing its ad */
+  const [confirmRemoveAdReport, setConfirmRemoveAdReport] = useState<string | null>(null);
+  useEffect(() => {
+    setReportsList([]);
+    if (!showReportsModal || !adminAccess.isAdmin) return;
+    return watchReports(setReportsList);
+  }, [showReportsModal, adminAccess.isAdmin]);
+  const handleResolveReport = (report: ReportDoc, outcome: 'resolved' | 'dismissed', removeAd = false) => {
+    if (removeAd && confirmRemoveAdReport !== report.id) return setConfirmRemoveAdReport(report.id);
+    setConfirmRemoveAdReport(null);
+    setBusyReportId(report.id);
+    resolveReport(report, outcome, removeAd)
+      .then(() => {
+        showToast(removeAd ? 'Ad removed and report closed.' : outcome === 'dismissed' ? 'Report dismissed.' : 'Report resolved.', 'check');
+        refreshPlatformStats();
+      })
+      .catch((err) => {
+        console.warn('Could not update report', err);
+        showToast('⚠️ Could not update this report. Try again.');
+      })
+      .finally(() => setBusyReportId(null));
+  };
+
+  const renderReportsModal = () => {
+    if (!showReportsModal) return null;
+    const open = reportsList.filter((r) => r.status === 'open');
+    const closed = reportsList.filter((r) => r.status !== 'open');
+    const shown = reportsTab === 'open' ? open : closed;
+    return (
+      <div
+        className="fixed inset-0 z-[80] bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4"
+        onClick={() => setShowReportsModal(false)}
+      >
+        <div
+          className="w-full max-w-sm max-h-[85dvh] flex flex-col bg-white rounded-3xl p-5 shadow-2xl border border-slate-100"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-xl border border-slate-200 flex items-center justify-center text-red-600">
+                <Flag size={17} />
+              </div>
+              <div>
+                <h2 className="text-sm font-black text-slate-900">User Reports</h2>
+                <p className="text-[11px] text-slate-500">Ads flagged by buyers for review.</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowReportsModal(false)}
+              className="p-1 text-slate-500 hover:text-slate-900 cursor-pointer"
+              title="Close"
+            >
+              <X size={18} />
+            </button>
+          </div>
+
+          <div className="flex gap-1.5 mt-3.5">
+            {(['open', 'closed'] as const).map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => setReportsTab(tab)}
+                className={`flex-1 py-1.5 rounded-xl text-[11px] font-bold cursor-pointer border ${
+                  reportsTab === tab ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-600 border-slate-200'
+                }`}
+              >
+                {tab === 'open' ? `Open (${open.length})` : `Closed (${closed.length})`}
+              </button>
+            ))}
+          </div>
+
+          <div className="mt-3 flex-1 min-h-0 overflow-y-auto space-y-2.5 no-scrollbar">
+            {shown.length === 0 ? (
+              <div className="py-10 text-center">
+                <CheckCircle size={26} className="mx-auto text-emerald-500" />
+                <p className="text-xs font-bold text-slate-800 mt-2">
+                  {reportsTab === 'open' ? 'No open reports' : 'No closed reports yet'}
+                </p>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  {reportsTab === 'open' ? 'Everything has been reviewed.' : 'Reports you handle will appear here.'}
+                </p>
+              </div>
+            ) : (
+              shown.map((r) => (
+                <div key={r.id} className="p-3 rounded-2xl border border-slate-200 space-y-1.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="text-xs font-black text-slate-900 leading-snug">{r.listingTitle || 'Untitled ad'}</p>
+                    <span className="text-[10px] text-slate-400 font-semibold shrink-0">{formatChatTime(r.createdAtISO)}</span>
+                  </div>
+                  <p className="text-[11px] font-bold text-red-600">{r.reason}</p>
+                  {r.details && <p className="text-[11px] text-slate-600 whitespace-pre-wrap break-words">{r.details}</p>}
+                  <p className="text-[10px] text-slate-400 break-all">Reported by {r.reporterEmail || 'a user'}</p>
+                  {r.status === 'open' ? (
+                    <div className="flex gap-1.5 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowReportsModal(false);
+                          navigateTo({ type: 'listing', id: r.listingId });
+                        }}
+                        className="flex-1 py-1.5 rounded-xl border border-slate-200 text-slate-700 font-bold text-[11px] cursor-pointer flex items-center justify-center gap-1"
+                      >
+                        <ExternalLink size={12} /> View Ad
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busyReportId === r.id}
+                        onClick={() => handleResolveReport(r, 'dismissed')}
+                        className="flex-1 py-1.5 rounded-xl bg-slate-100 text-slate-700 font-bold text-[11px] cursor-pointer disabled:opacity-50"
+                      >
+                        Dismiss
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busyReportId === r.id}
+                        onClick={() => handleResolveReport(r, 'resolved', true)}
+                        className="flex-1 py-1.5 rounded-xl bg-red-600 text-white font-bold text-[11px] cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1"
+                      >
+                        <Trash2 size={12} /> {confirmRemoveAdReport === r.id ? 'Tap to confirm' : 'Remove Ad'}
+                      </button>
+                    </div>
+                  ) : (
+                    <p className="text-[10.5px] font-semibold text-emerald-700">
+                      {r.action || (r.status === 'dismissed' ? 'Dismissed' : 'Resolved')}
+                      {r.resolvedBy ? ` by ${r.resolvedBy}` : ''}
+                      {r.resolvedAtISO ? ` • ${formatChatTime(r.resolvedAtISO)}` : ''}
+                    </p>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // ---------- Delete my account ----------
+  const [showDeleteAccountModal, setShowDeleteAccountModal] = useState(false);
+  const [deleteAccountPassword, setDeleteAccountPassword] = useState('');
+  const [deleteAccountError, setDeleteAccountError] = useState('');
+  const [isDeletingAccount, setIsDeletingAccount] = useState(false);
+  const openDeleteAccountModal = () => {
+    setDeleteAccountPassword('');
+    setDeleteAccountError('');
+    setShowDeleteAccountModal(true);
+  };
+  const handleDeleteAccount = async () => {
+    if (!deleteAccountPassword) return setDeleteAccountError('Enter your password to confirm.');
+    setDeleteAccountError('');
+    setIsDeletingAccount(true);
+    try {
+      callSessionRef.current?.hangUp();
+      await deleteMyAccount(deleteAccountPassword);
+      setShowDeleteAccountModal(false);
+      setFirebaseUid(null);
+      profileLoadedRef.current = false;
+      setSavedIds([]);
+      setFollowedSellerIds([]);
+      profileRoleRef.current = 'buyer';
+      setCurrentUserRole('buyer');
+      setSubmittedSellerApplicantId(null);
+      setIsLoggedIn(false);
+      navigateTo({ type: 'welcome' });
+      showToast('Your Haraka account has been deleted.', 'check');
+    } catch (err) {
+      console.warn('Could not delete account', err);
+      setDeleteAccountError(err instanceof Error ? err.message : 'Could not delete your account. Try again.');
+    } finally {
+      setIsDeletingAccount(false);
+    }
+  };
+
+  const renderDeleteAccountModal = () => {
+    if (!showDeleteAccountModal) return null;
+    return (
+      <div
+        className="fixed inset-0 z-[80] bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4"
+        onClick={() => !isDeletingAccount && setShowDeleteAccountModal(false)}
+      >
+        <div
+          className="w-full max-w-sm bg-white rounded-3xl p-5 shadow-2xl border border-slate-100 space-y-3.5"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-xl bg-red-50 border border-red-100 flex items-center justify-center text-red-600">
+              <AlertTriangle size={17} />
+            </div>
+            <div>
+              <h2 className="text-sm font-black text-slate-900">Delete Account</h2>
+              <p className="text-[11px] text-slate-500">This cannot be undone.</p>
+            </div>
+          </div>
+          <div className="text-[11px] text-slate-600 space-y-1 bg-slate-50 rounded-xl p-3 border border-slate-100">
+            <p className="font-bold text-slate-800">This permanently deletes:</p>
+            <p>• Your profile, login and saved items</p>
+            <p>• All your ads</p>
+            <p>• Your partner application and ID documents</p>
+            <p>• Your public artisan profile, if you have one</p>
+            <p className="pt-1 text-slate-500">Messages and bookings stay with the people you dealt with.</p>
+          </div>
+          <label className="block">
+            <span className="text-[11px] font-bold text-slate-700 block mb-1">Enter your password to confirm</span>
+            <input
+              type="password"
+              value={deleteAccountPassword}
+              onChange={(e) => setDeleteAccountPassword(e.target.value)}
+              autoComplete="current-password"
+              className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-base text-slate-900 outline-none focus:border-red-400 focus:bg-white"
+            />
+          </label>
+          {deleteAccountError && <p className="text-[11px] font-semibold text-red-600">{deleteAccountError}</p>}
+          <div className="flex gap-2 pt-1">
+            <button
+              type="button"
+              onClick={() => setShowDeleteAccountModal(false)}
+              disabled={isDeletingAccount}
+              className="flex-1 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleDeleteAccount}
+              disabled={isDeletingAccount}
+              className="flex-1 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-xs cursor-pointer disabled:opacity-60"
+            >
+              {isDeletingAccount ? 'Deleting…' : 'Delete Forever'}
             </button>
           </div>
         </div>
@@ -7439,6 +7746,7 @@ export default function RootLayout() {
           </div>
         </div>
         {renderAddAdminModal()}
+        {renderReportsModal()}
 
         {/* Dashboard Body based on Role */}
         <div className="p-3.5 space-y-3">
@@ -7814,13 +8122,20 @@ export default function RootLayout() {
                     </span>
                     <span className="text-[10px] text-orange-600 font-medium block mt-1">Awaiting review</span>
                   </div>
-                  <div className="p-3.5 border border-slate-200/80 rounded-2xl bg-white shadow-2xs">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setReportsTab('open');
+                      setShowReportsModal(true);
+                    }}
+                    className="p-3.5 border border-slate-200/80 rounded-2xl bg-white shadow-2xs text-left cursor-pointer active:scale-98 transition-transform"
+                  >
                     <span className="text-slate-500 text-[11px] font-semibold block">Open User Reports</span>
                     <span className={`text-xl font-black block mt-0.5 ${(platformStats?.openReports ?? 0) > 0 ? 'text-red-600' : 'text-emerald-700'}`}>
                       {platformStats?.openReports ?? 0}
                     </span>
-                    <span className="text-[10px] text-slate-500 font-medium block mt-1">Flagged listings to review</span>
-                  </div>
+                    <span className="text-[10px] text-slate-500 font-medium block mt-1">Tap to review flagged ads</span>
+                  </button>
                 </div>
 
                 {/* Platform Userbase Demographics in 2x2 Grid (Real-Time Data) */}
@@ -10300,6 +10615,16 @@ export default function RootLayout() {
                         </div>
                         <ChevronRight size={15} className="text-red-400" />
                       </button>
+                      <button
+                        onClick={openDeleteAccountModal}
+                        className="w-full p-2.5 flex items-center justify-between text-xs font-semibold text-slate-500 hover:bg-red-50/50 rounded-xl cursor-pointer"
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <Trash2 size={16} className="text-slate-400" />
+                          <span>Delete Account</span>
+                        </div>
+                        <ChevronRight size={15} className="text-slate-300" />
+                      </button>
                     </div>
                   </div>
                 ) : (
@@ -10411,6 +10736,16 @@ export default function RootLayout() {
                           <span>Sign Out</span>
                         </div>
                         <ChevronRight size={15} className="text-red-400" />
+                      </button>
+                      <button
+                        onClick={openDeleteAccountModal}
+                        className="w-full p-2.5 flex items-center justify-between text-xs font-semibold text-slate-500 hover:bg-red-50/50 rounded-xl cursor-pointer"
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <Trash2 size={16} className="text-slate-400" />
+                          <span>Delete Account</span>
+                        </div>
+                        <ChevronRight size={15} className="text-slate-300" />
                       </button>
                     </div>
                   </div>
@@ -22442,6 +22777,7 @@ export default function RootLayout() {
                 {renderClientProfileModal()}
                 {renderCallDropdown()}
                 {renderCallModal()}
+                {renderDeleteAccountModal()}
               </div>
 
               {/* Bottom Tab Bar matching user screenshot */}
@@ -22598,6 +22934,7 @@ export default function RootLayout() {
                   {renderClientProfileModal()}
                   {renderCallDropdown()}
                   {renderCallModal()}
+                  {renderDeleteAccountModal()}
                 </div>
 
                 {/* BOTTOM TAB BAR (Navigation) matching user screenshot */}
