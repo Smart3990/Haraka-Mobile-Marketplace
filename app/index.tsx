@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Linking, Platform, StyleSheet } from 'react-native';
+import { KeyboardAvoidingView, Linking, Platform, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Constants from 'expo-constants';
 import * as Device from 'expo-device';
@@ -77,7 +77,9 @@ export default function Index() {
   }, []);
 
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom', 'left', 'right']}>
+      {/* Keeps text boxes above the keyboard */}
+      <KeyboardAvoidingView style={styles.container} behavior="padding">
       <HarakaApp
         registerForPush={registerForPush}
         sendPush={sendPush}
@@ -93,6 +95,15 @@ export default function Index() {
           geolocationEnabled: true,
           bounces: false,
           overScrollMode: 'never',
+          // The page itself never scrolls or zooms; only the app's screens scroll inside it
+          scrollEnabled: Platform.OS !== 'ios',
+          setBuiltInZoomControls: false,
+          contentInsetAdjustmentBehavior: 'never',
+          automaticallyAdjustContentInsets: false,
+          // Ignore the phone's font-size setting so layouts don't overflow
+          textZoom: 100,
+          showsVerticalScrollIndicator: false,
+          showsHorizontalScrollIndicator: false,
           onShouldStartLoadWithRequest: (request) => {
             if (EXTERNAL_LINK.test(request.url)) {
               Linking.openURL(request.url).catch(() => {});
@@ -102,6 +113,7 @@ export default function Index() {
           },
         }}
       />
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }

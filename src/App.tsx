@@ -22171,7 +22171,7 @@ export default function RootLayout() {
   };
 
   return (
-    <div className={`min-h-screen ${bgStyle === 'dark' ? 'bg-slate-950 text-slate-100' : 'bg-slate-100 text-slate-900'} flex flex-col font-sans selection:bg-orange-500 selection:text-white transition-colors`}>
+    <div className={`${native ? 'h-dvh overflow-hidden' : 'min-h-screen'} ${bgStyle === 'dark' ? 'bg-slate-950 text-slate-100' : 'bg-slate-100 text-slate-900'} flex flex-col font-sans selection:bg-orange-500 selection:text-white transition-colors`}>
       {/* Top Navbar with App Identity and Mode Switcher */}
       {!native && (
       <header className={`border-b ${bgStyle === 'dark' ? 'border-slate-800 bg-slate-900/90 text-slate-100' : 'border-slate-200 bg-white/95 text-slate-900 shadow-2xs'} backdrop-blur sticky top-0 z-50 px-4 py-2.5 flex items-center justify-between transition-colors`}>
@@ -22394,11 +22394,11 @@ export default function RootLayout() {
       )}
 
       {/* Main Workspace */}
-      <main className="flex-1 flex overflow-hidden">
+      <main className={`flex-1 flex overflow-hidden ${native ? 'min-h-0' : ''}`}>
         {/* FRAMELESS FULLSCREEN MOBILE VIEW (Zero background, zero shell) */}
         {viewMode === 'frameless' && (
-          <div className="flex-1 flex justify-center bg-slate-100 overflow-y-auto">
-            <div className={native ? 'w-full max-w-[480px] mx-auto h-dvh bg-slate-50 flex flex-col text-slate-900 relative overflow-hidden' : 'w-full max-w-[440px] bg-slate-50 min-h-screen flex flex-col text-slate-900 shadow-xl border-x border-slate-200 relative overflow-hidden'}>
+          <div className={`flex-1 flex justify-center bg-slate-100 ${native ? 'min-h-0 overflow-hidden' : 'overflow-y-auto'}`}>
+            <div className={native ? 'w-full max-w-[480px] mx-auto h-full min-h-0 bg-slate-50 flex flex-col text-slate-900 relative overflow-hidden' : 'w-full max-w-[440px] bg-slate-50 min-h-screen flex flex-col text-slate-900 shadow-xl border-x border-slate-200 relative overflow-hidden'}>
               {/* Native Notice Badge */}
               {!native && (<>
               <div className="bg-emerald-600 text-white px-3 py-1.5 text-[11px] font-bold flex items-center justify-between z-30">
@@ -22425,7 +22425,7 @@ export default function RootLayout() {
               {/* Screen Content */}
               <div
                 ref={phoneScreenScrollRef1}
-                className={`flex-1 flex flex-col ${currentRoute.type === 'welcome' ? 'overflow-hidden' : 'overflow-y-auto'} no-scrollbar relative ${['welcome', 'sign-up', 'login'].includes(currentRoute.type) ? 'bg-white' : ''}`}
+                className={`flex-1 min-h-0 flex flex-col overflow-x-hidden ${currentRoute.type === 'welcome' ? 'overflow-hidden' : 'overflow-y-auto overscroll-contain'} no-scrollbar relative ${['welcome', 'sign-up', 'login'].includes(currentRoute.type) ? 'bg-white' : ''}`}
                 style={{ overflowAnchor: 'none', scrollbarWidth: 'none', msOverflowStyle: 'none' }}
               >
                 {renderCurrentScreen()}
@@ -22446,7 +22446,7 @@ export default function RootLayout() {
 
               {/* Bottom Tab Bar matching user screenshot */}
               {currentRoute.type === 'tabs' && !viewingApplicantDetails && !viewingArtisanBookingDetails && (
-                <div className="sticky bottom-0 left-0 right-0 bg-white border-t border-slate-200/80 py-2 px-3 flex items-center justify-around z-40 select-none shadow-lg">
+                <div className="sticky bottom-0 left-0 right-0 shrink-0 bg-white border-t border-slate-200/80 py-2 px-3 flex items-center justify-around z-40 select-none shadow-lg">
                   {/* 1. Explore */}
                   <button
                     onClick={() => handleTabPress('home')}
