@@ -9,7 +9,7 @@ import {
   deleteUser,
   EmailAuthProvider,
   getAuth,
-  onAuthStateChanged,
+  onIdTokenChanged,
   reauthenticateWithCredential,
   sendEmailVerification,
   sendPasswordResetEmail,
@@ -210,22 +210,32 @@ const AUTH_ERROR_MESSAGES: Record<string, string> = {
 /** Turns a Firebase error into a message suitable for showing to the user. */
 export function friendlyAuthError(error: unknown): string {
   const code = (error as { code?: string })?.code || '';
-  return AUTH_ERROR_MESSAGES[code] || 'Something went wrong. Please try again.';
+  if (AUTH_ERROR_MESSAGES[code]) return AUTH_ERROR_MESSAGES[code];
+  // Our own messages (no Firebase code) are already written for users
+  if (!code && error instanceof Error && error.message) return error.message;
+  return 'Something went wrong. Please try again.';
 }
 
-export async function signUpWithEmail(name: string, email: string, password: string): Promise<UserProfileDoc> {
-  const cred = await createUserWithEmailAndPassword(auth, email, password);
-  if (name) await updateProfile(cred.user, { displayName: name });
-  const profile: UserProfileDoc = {
-    id: cred.user.uid,
-    email,
-    name,
-    role: 'buyer',
-    createdAt: new Date().toISOString(),
-  };
-  await setDoc(doc(db, 'users', cred.user.uid), profile);
-  sendEmailVerification(cred.user).catch((err) => console.warn('Could not send verification email', err));
-  return profile;
+/**
+ * Starts a sign-up: creates the login and emails a verification link. The Haraka account
+ * (profile) is only created once the email is confirmed (see watchAuth). Signing up again with
+ * an email that was never confirmed resumes that sign-up and re-sends the link.
+ */
+export async function signUpWithEmail(name: string, email: string, password: string): Promise<void> {
+  let user: User;
+  try {
+    user = (await createUserWithEmailAndPassword(auth, email, password)).user;
+  } catch (error) {
+    if ((error as { code?: string })?.code !== 'auth/email-already-in-use') throw error;
+    try {
+      user = (await signInWithEmailAndPassword(auth, email, password)).user;
+    } catch {
+      throw new Error('This email is already registered. Please log in instead.');
+    }
+    if (user.emailVerified) return; // already a confirmed account: just signed in
+  }
+  if (name && user.displayName !== name) await updateProfile(user, { displayName: name });
+  await sendEmailVerification(user).catch((err) => console.warn('Could not send verification email', err));
 }
 
 /** Re-sends the "verify your email" message to the signed-in user. */
@@ -326,11 +336,21 @@ export async function saveUserProfile(uid: string, data: Partial<UserProfileDoc>
  */
 export function watchAuth(callback: (user: User | null, profile: UserProfileDoc | null) => void): () => void {
   let stopProfile: (() => void) | null = null;
-  const stopAuth = onAuthStateChanged(auth, async (user) => {
+  let current = '';
+  // Token changes also report a newly confirmed email, which creates the account profile
+  const stopAuth = onIdTokenChanged(auth, async (user) => {
+    const key = user ? `${user.uid}:${isEmailConfirmed(user)}` : '';
+    if (key === current) return;
+    current = key;
     stopProfile?.();
     stopProfile = null;
     if (!user) {
       callback(null, null);
+      return;
+    }
+    if (!isEmailConfirmed(user)) {
+      // Not a Haraka account yet: no profile until the email is confirmed
+      callback(user, null);
       return;
     }
     try {

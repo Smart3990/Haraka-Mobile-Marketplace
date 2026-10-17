@@ -47,3 +47,18 @@
   background-size: 16px 16px;
 }
 
+
+/* Phone layout (app and phone-sized website): the page never scrolls; screens scroll inside */
+html.haraka-phone,
+html.haraka-phone body {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+html.haraka-phone body {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+}

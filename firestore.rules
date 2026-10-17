@@ -61,7 +61,8 @@ service cloud.firestore {
     match /users/{userId} {
       allow get: if isOwner(userId) || isAdmin();
       allow list: if isAdmin();
-      allow create: if isOwner(userId) && isValidId(userId)
+      // Accounts are created only after the email address is confirmed
+      allow create: if isOwner(userId) && isValidId(userId) && isVerifiedUser()
         && request.resource.data.role == 'buyer'
         && !('verified' in request.resource.data);
       allow update: if isAdmin() || (

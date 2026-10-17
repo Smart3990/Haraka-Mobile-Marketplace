@@ -570,6 +570,28 @@ export interface NativeBridge {
 export default function App({ native = false, nativeBridge }: { native?: boolean; nativeBridge?: NativeBridge } = {}) {
   // View mode (inside the mobile app only the full-screen 'frameless' view is used)
   const [viewMode, setViewMode] = useState<'preview' | 'frameless' | 'split' | 'code'>(native ? 'frameless' : 'split');
+
+  // Phone layout: size the app to the screen actually visible (also correct on older iPhones and
+  // when the keyboard is open), and never let the page itself scroll or bounce
+  useLayoutEffect(() => {
+    if (!native) return;
+    const html = document.documentElement;
+    html.classList.add('haraka-phone');
+    const fit = () => {
+      const height = window.visualViewport?.height || window.innerHeight;
+      html.style.setProperty('--app-height', `${Math.round(height)}px`);
+      if (window.scrollY) window.scrollTo(0, 0);
+    };
+    fit();
+    window.addEventListener('resize', fit);
+    window.addEventListener('orientationchange', fit);
+    window.visualViewport?.addEventListener('resize', fit);
+    return () => {
+      window.removeEventListener('resize', fit);
+      window.removeEventListener('orientationchange', fit);
+      window.visualViewport?.removeEventListener('resize', fit);
+    };
+  }, [native]);
   const [phoneFrame, setPhoneFrame] = useState(true);
   const [bgStyle, setBgStyle] = useState<'dark' | 'clean'>('clean');
   const [showExportModal, setShowExportModal] = useState(false);
@@ -2204,7 +2226,8 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
   };
 
   // ---------- Confirm email before using the app ----------
-  const needsEmailVerification = Boolean(firebaseUid) && !emailConfirmed;
+  // Read from the live sign-in (not only state) so Home never flashes right after sign-up
+  const needsEmailVerification = Boolean(firebaseAuth.currentUser) && !isEmailConfirmed(firebaseAuth.currentUser);
   const [verifyResendWait, setVerifyResendWait] = useState(0);
   const [isCheckingVerification, setIsCheckingVerification] = useState(false);
   const [verifyNotice, setVerifyNotice] = useState('');
@@ -2218,7 +2241,8 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
       if (await checkEmailVerified()) {
         setEmailConfirmed(true);
         navigateTo({ type: 'tabs', tab: 'home' });
-        showToast('🎉 Email confirmed. Welcome to Haraka!', 'check');
+        const firstName = (firebaseAuth.currentUser?.displayName || '').split(' ')[0];
+        showToast(firstName ? `🎉 Email confirmed. Welcome to Haraka, ${firstName}!` : '🎉 Email confirmed. Welcome to Haraka!', 'check');
       } else if (fromButton) {
         setVerifyNotice('Not confirmed yet. Open the link in the email we sent, then try again.');
       }
@@ -2271,14 +2295,12 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
   };
 
   const renderVerifyEmailScreen = () => (
-    <div className="flex-1 flex flex-col bg-white px-6 pt-10 pb-8">
+    <div className="flex-1 min-h-full flex flex-col bg-white px-6 pt-8 pb-6">
       <div className="flex justify-center">
         <HarakaLogo className="h-10 w-auto" />
       </div>
-      <div className="flex-1 flex flex-col items-center justify-center text-center">
-        <div className="w-20 h-20 rounded-full bg-orange-50 border border-orange-100 flex items-center justify-center text-[#FF6A00]">
-          <Mail size={34} />
-        </div>
+      <div className="flex-1 flex flex-col items-center justify-center text-center py-6">
+        <Mail size={56} strokeWidth={1.6} className="text-[#FF6A00]" />
         <h1 className="text-xl font-black text-slate-900 mt-5">Confirm your email</h1>
         <p className="text-sm text-slate-600 mt-2 leading-relaxed">
           We sent a verification link to
@@ -8736,8 +8758,8 @@ export default function RootLayout() {
               }));
               setCurrentUserRole('buyer'); // Authenticated user role: neither seller, nor artisan, nor admin
               setIsLoggedIn(true);
+              // Shows "Confirm your email" until the link is opened (welcome comes after that)
               navigateTo({ type: 'tabs', tab: 'home' });
-              showToast(displayName ? `Welcome to Haraka, ${displayName}! 🎉` : 'Welcome to Haraka! 🎉', 'check');
             }}
             onNavigateLogin={() => {
               navigateTo({ type: 'login' });
@@ -21130,7 +21152,9 @@ export default function RootLayout() {
               }));
               setIsLoggedIn(true);
               navigateTo({ type: 'tabs', tab: 'home' });
-              showToast(userName ? `Welcome back, ${userName}!` : 'Welcome back!', 'check');
+              if (isEmailConfirmed(firebaseAuth.currentUser)) {
+                showToast(userName ? `Welcome back, ${userName}!` : 'Welcome back!', 'check');
+              }
             }}
             onNavigateSignUp={() => {
               navigateTo({ type: 'sign-up' });
@@ -22681,7 +22705,9 @@ export default function RootLayout() {
   };
 
   return (
-    <div className={`${native ? 'h-dvh overflow-hidden' : 'min-h-screen'} ${bgStyle === 'dark' ? 'bg-slate-950 text-slate-100' : 'bg-slate-100 text-slate-900'} flex flex-col font-sans selection:bg-orange-500 selection:text-white transition-colors`}>
+    <div
+      style={native ? { height: 'var(--app-height, 100vh)' } : undefined}
+      className={`${native ? 'overflow-hidden' : 'min-h-screen'} ${bgStyle === 'dark' ? 'bg-slate-950 text-slate-100' : 'bg-slate-100 text-slate-900'} flex flex-col font-sans selection:bg-orange-500 selection:text-white transition-colors`}>
       {/* Top Navbar with App Identity and Mode Switcher */}
       {!native && (
       <header className={`border-b ${bgStyle === 'dark' ? 'border-slate-800 bg-slate-900/90 text-slate-100' : 'border-slate-200 bg-white/95 text-slate-900 shadow-2xs'} backdrop-blur sticky top-0 z-50 px-4 py-2.5 flex items-center justify-between transition-colors`}>
