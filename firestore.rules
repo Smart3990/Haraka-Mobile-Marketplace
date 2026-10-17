@@ -16,6 +16,11 @@ service cloud.firestore {
       return isSignedIn() && request.auth.token.email == 'blanc.69458@gmail.com';
     }
 
+    // Signed in with a confirmed email address (needed to post, message, call, book, review or apply)
+    function isVerifiedUser() {
+      return isSignedIn() && (request.auth.token.email_verified == true || isSystemAdmin());
+    }
+
     function adminDocPath() {
       return /databases/$(database)/documents/admins/$(request.auth.token.email);
     }
@@ -85,7 +90,7 @@ service cloud.firestore {
       allow get: if isOwner(userId) || isAdmin();
       allow list: if isAdmin();
       allow create, update: if isAdmin() || (
-        isOwner(userId)
+        isOwner(userId) && isVerifiedUser()
         && request.resource.data.uid == userId
         && request.resource.data.status == 'pending'
         && request.resource.data.verifiedBadge == false
@@ -96,7 +101,7 @@ service cloud.firestore {
     // Marketplace listings: anyone can browse; only approved sellers/artisans post
     match /listings/{listingId} {
       allow get, list: if true;
-      allow create: if isSignedIn() && isValidId(listingId)
+      allow create: if isVerifiedUser() && isValidId(listingId)
         && request.resource.data.sellerId == request.auth.uid
         && userRole() in ['seller', 'artisan'];
       allow update: if isSignedIn() && isValidId(listingId) && (
@@ -121,7 +126,7 @@ service cloud.firestore {
     match /chats/{chatId} {
       allow get: if isSignedIn() && (resource == null || request.auth.uid in resource.data.participants);
       allow list: if isSignedIn() && request.auth.uid in resource.data.participants;
-      allow create: if isSignedIn() && isValidId(chatId)
+      allow create: if isVerifiedUser() && isValidId(chatId)
         && request.resource.data.buyerId == request.auth.uid
         && request.resource.data.sellerId != request.auth.uid
         && request.resource.data.participants == [request.auth.uid, request.resource.data.sellerId]
@@ -141,7 +146,7 @@ service cloud.firestore {
           return get(/databases/$(database)/documents/chats/$(chatId)).data.participants;
         }
         allow read: if isSignedIn() && request.auth.uid in chatParticipants();
-        allow create: if isSignedIn() && request.auth.uid in chatParticipants()
+        allow create: if isVerifiedUser() && request.auth.uid in chatParticipants()
           && request.resource.data.senderId == request.auth.uid;
         // Only the person who received an offer can accept it
         allow update: if isSignedIn() && request.auth.uid in chatParticipants()
@@ -153,7 +158,7 @@ service cloud.firestore {
 
     // "Report this listing": any signed-in user can send one; only admins read and handle them
     match /reports/{reportId} {
-      allow create: if isSignedIn() && isValidId(reportId)
+      allow create: if isVerifiedUser() && isValidId(reportId)
         && request.resource.data.reporterId == request.auth.uid
         && request.resource.data.status == 'open';
       allow get, list, update, delete: if isAdmin();
@@ -189,7 +194,7 @@ service cloud.firestore {
         );
       }
       allow get, list: if isBookingParty();
-      allow create: if isSignedIn() && isValidId(bookingId)
+      allow create: if isVerifiedUser() && isValidId(bookingId)
         && request.resource.data.customerId == request.auth.uid
         && request.resource.data.artisanId != request.auth.uid
         && request.resource.data.status == 'Pending'
@@ -215,7 +220,7 @@ service cloud.firestore {
         return request.auth.uid == resource.data.callerId || request.auth.uid == resource.data.calleeId;
       }
       allow get, list: if isSignedIn() && isCallParty();
-      allow create: if isSignedIn()
+      allow create: if isVerifiedUser()
         && request.resource.data.callerId == request.auth.uid
         && request.resource.data.calleeId is string
         && request.resource.data.calleeId != request.auth.uid
@@ -241,7 +246,7 @@ service cloud.firestore {
     // Reviews: one per completed booking, written by that booking's customer; public to read
     match /reviews/{bookingId} {
       allow get, list: if true;
-      allow create: if isSignedIn()
+      allow create: if isVerifiedUser()
         && request.resource.data.customerId == request.auth.uid
         && request.resource.data.bookingId == bookingId
         && request.resource.data.rating is int

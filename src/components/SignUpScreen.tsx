@@ -8,6 +8,8 @@ interface SignUpScreenProps {
   onNavigateLogin: () => void;
   /** Google/Apple popup sign-in only works in a browser, not inside the mobile app. */
   showSocialLogins?: boolean;
+  /** Opens the Terms of Use or Privacy Policy page */
+  onOpenPolicy?: (page: 'terms' | 'privacy') => void;
 }
 
 const HARAKA_LOGO_URL =
@@ -17,6 +19,7 @@ export default function SignUpScreen({
   onSuccess,
   onNavigateLogin,
   showSocialLogins = true,
+  onOpenPolicy,
 }: SignUpScreenProps) {
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
@@ -264,9 +267,27 @@ export default function SignUpScreen({
             />
             <label className="text-xs text-slate-600 leading-snug select-none cursor-pointer" htmlFor="terms">
               I agree to Haraka's{' '}
-              <span className="font-bold text-[#006B44] hover:underline">Terms of Service</span>{' '}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  onOpenPolicy?.('terms');
+                }}
+                className="font-bold text-[#006B44] hover:underline cursor-pointer"
+              >
+                Terms of Service
+              </button>{' '}
               and{' '}
-              <span className="font-bold text-[#006B44] hover:underline">Privacy Policy</span>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  onOpenPolicy?.('privacy');
+                }}
+                className="font-bold text-[#006B44] hover:underline cursor-pointer"
+              >
+                Privacy Policy
+              </button>
             </label>
           </div>
 

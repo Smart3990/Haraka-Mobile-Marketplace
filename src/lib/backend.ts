@@ -234,6 +234,25 @@ export function resendEmailVerification(): Promise<void> {
   return sendEmailVerification(auth.currentUser);
 }
 
+/** True when the signed-in user has confirmed their email (or is the system admin). */
+export function isEmailConfirmed(user: User | null): boolean {
+  return Boolean(user && (user.emailVerified || (user.email || '').toLowerCase() === SYSTEM_ADMIN_EMAIL));
+}
+
+/**
+ * Checks with Firebase whether the user has clicked the verification link yet. When they have,
+ * the sign-in token is refreshed so the database also sees the confirmed email straight away.
+ */
+export async function checkEmailVerified(): Promise<boolean> {
+  const user = auth.currentUser;
+  if (!user) return false;
+  await user.reload();
+  const fresh = auth.currentUser;
+  if (!fresh?.emailVerified) return false;
+  await fresh.getIdToken(true);
+  return true;
+}
+
 export async function signInWithEmail(email: string, password: string): Promise<User> {
   const cred = await signInWithEmailAndPassword(auth, email, password);
   return cred.user;

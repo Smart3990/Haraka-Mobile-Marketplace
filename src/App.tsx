@@ -166,6 +166,9 @@ import {
   watchMyBookings,
   watchMyChats,
   watchReviews,
+  checkEmailVerified,
+  isEmailConfirmed,
+  resendEmailVerification,
   deleteMyAccount,
   removeAdmin,
   resolveReport,
@@ -1766,6 +1769,8 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
 
   // Real Firebase session: restores a saved login on launch and loads the user's profile
   const [firebaseUid, setFirebaseUid] = useState<string | null>(null);
+  /** False while a signed-in user has not yet confirmed their email address */
+  const [emailConfirmed, setEmailConfirmed] = useState(true);
   const [isFirebaseAdmin, setIsFirebaseAdmin] = useState(false);
   const [adminAccess, setAdminAccess] = useState<AdminAccess>({ isAdmin: false, canAddAdmins: false, isSystemAdmin: false });
   const profileLoadedRef = useRef(false);
@@ -1779,6 +1784,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     return watchAuth((user, profile) => {
       firebaseUidRef.current = user?.uid ?? null;
       setFirebaseUid(user?.uid ?? null);
+      setEmailConfirmed(user ? isEmailConfirmed(user) : true);
       if (!user) return;
       setCurrentUserId(user.uid);
       if (profile) {
@@ -2196,6 +2202,123 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     if (native) window.location.href = url;
     else window.open(url, '_blank', 'noopener');
   };
+
+  // ---------- Confirm email before using the app ----------
+  const needsEmailVerification = Boolean(firebaseUid) && !emailConfirmed;
+  const [verifyResendWait, setVerifyResendWait] = useState(0);
+  const [isCheckingVerification, setIsCheckingVerification] = useState(false);
+  const [verifyNotice, setVerifyNotice] = useState('');
+
+  const confirmEmailVerified = async (fromButton: boolean) => {
+    if (fromButton) {
+      setIsCheckingVerification(true);
+      setVerifyNotice('');
+    }
+    try {
+      if (await checkEmailVerified()) {
+        setEmailConfirmed(true);
+        navigateTo({ type: 'tabs', tab: 'home' });
+        showToast('🎉 Email confirmed. Welcome to Haraka!', 'check');
+      } else if (fromButton) {
+        setVerifyNotice('Not confirmed yet. Open the link in the email we sent, then try again.');
+      }
+    } catch (err) {
+      if (fromButton) setVerifyNotice('Could not check right now. Check your connection and try again.');
+    } finally {
+      if (fromButton) setIsCheckingVerification(false);
+    }
+  };
+
+  // Check automatically while waiting, and as soon as the user comes back from their email app
+  useEffect(() => {
+    if (!needsEmailVerification) return;
+    const check = () => {
+      if (document.visibilityState === 'visible') confirmEmailVerified(false);
+    };
+    const timer = setInterval(check, 5000);
+    document.addEventListener('visibilitychange', check);
+    window.addEventListener('focus', check);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', check);
+      window.removeEventListener('focus', check);
+    };
+  }, [needsEmailVerification]);
+
+  // Countdown before the email can be sent again
+  useEffect(() => {
+    if (verifyResendWait <= 0) return;
+    const timer = setTimeout(() => setVerifyResendWait((n) => n - 1), 1000);
+    return () => clearTimeout(timer);
+  }, [verifyResendWait]);
+
+  const handleResendVerification = () => {
+    if (verifyResendWait > 0) return;
+    setVerifyNotice('');
+    resendEmailVerification()
+      .then(() => {
+        setVerifyResendWait(60);
+        setVerifyNotice('A new verification email is on its way.');
+      })
+      .catch((err) => {
+        setVerifyResendWait(60);
+        setVerifyNotice(
+          (err as { code?: string })?.code === 'auth/too-many-requests'
+            ? 'Too many emails sent. Please wait a few minutes and try again.'
+            : 'Could not send the email. Check your connection and try again.'
+        );
+      });
+  };
+
+  const renderVerifyEmailScreen = () => (
+    <div className="flex-1 flex flex-col bg-white px-6 pt-10 pb-8">
+      <div className="flex justify-center">
+        <HarakaLogo className="h-10 w-auto" />
+      </div>
+      <div className="flex-1 flex flex-col items-center justify-center text-center">
+        <div className="w-20 h-20 rounded-full bg-orange-50 border border-orange-100 flex items-center justify-center text-[#FF6A00]">
+          <Mail size={34} />
+        </div>
+        <h1 className="text-xl font-black text-slate-900 mt-5">Confirm your email</h1>
+        <p className="text-sm text-slate-600 mt-2 leading-relaxed">
+          We sent a verification link to
+          <span className="block font-bold text-slate-900 break-all mt-0.5">{firebaseAuth.currentUser?.email || userProfile.email}</span>
+        </p>
+        <p className="text-xs text-slate-500 mt-3 leading-relaxed max-w-[300px]">
+          Open the email and tap the link to activate your account. This page continues automatically once it's done.
+          Can't find it? Check your Spam or Promotions folder.
+        </p>
+        {verifyNotice && <p className="text-xs font-semibold text-slate-700 mt-4 max-w-[300px]">{verifyNotice}</p>}
+      </div>
+      <div className="space-y-2.5">
+        <button
+          type="button"
+          onClick={() => confirmEmailVerified(true)}
+          disabled={isCheckingVerification}
+          className="w-full py-3.5 rounded-2xl bg-[#FF6A00] hover:bg-orange-600 text-white font-bold text-sm cursor-pointer active:scale-98 transition-all disabled:opacity-60 flex items-center justify-center gap-2"
+        >
+          <CheckCircle size={17} />
+          {isCheckingVerification ? 'Checking…' : "I've Confirmed My Email"}
+        </button>
+        <button
+          type="button"
+          onClick={handleResendVerification}
+          disabled={verifyResendWait > 0}
+          className="w-full py-3.5 rounded-2xl border border-slate-200 bg-white text-slate-800 font-bold text-sm cursor-pointer active:scale-98 transition-all disabled:text-slate-400"
+        >
+          {verifyResendWait > 0 ? `Resend email in ${verifyResendWait}s` : 'Resend Email'}
+        </button>
+        <button
+          type="button"
+          onClick={handleSignOut}
+          className="w-full py-2.5 text-xs font-semibold text-slate-500 hover:text-slate-800 cursor-pointer flex items-center justify-center gap-1.5"
+        >
+          <LogOut size={14} />
+          Wrong email? Sign out
+        </button>
+      </div>
+    </div>
+  );
 
   // ---------- Delete my account ----------
   const [showDeleteAccountModal, setShowDeleteAccountModal] = useState(false);
@@ -8529,6 +8652,10 @@ export default function RootLayout() {
 
   // Render current mobile screen
   const renderCurrentScreen = () => {
+    // Signed in but email not confirmed yet: only the confirmation screen (and sign-in screens) are available
+    if (needsEmailVerification && !['splash', 'onboarding', 'welcome', 'sign-up', 'login', 'forgot-password'].includes(currentRoute.type)) {
+      return renderVerifyEmailScreen();
+    }
     switch (currentRoute.type) {
       case 'splash': {
         return (
@@ -8580,6 +8707,7 @@ export default function RootLayout() {
       case 'sign-up': {
         return (
           <SignUpScreen
+            onOpenPolicy={openPublicPage}
             onSuccess={(userData) => {
               const displayName = userData.fullName.trim();
               const userEmail = userData.email.trim();
@@ -22828,7 +22956,7 @@ export default function RootLayout() {
               </div>
 
               {/* Bottom Tab Bar matching user screenshot */}
-              {currentRoute.type === 'tabs' && !viewingApplicantDetails && !viewingArtisanBookingDetails && (
+              {currentRoute.type === 'tabs' && !needsEmailVerification && !viewingApplicantDetails && !viewingArtisanBookingDetails && (
                 <div className="sticky bottom-0 left-0 right-0 shrink-0 bg-white border-t border-slate-200/80 py-2 px-3 flex items-center justify-around z-40 select-none shadow-lg">
                   {/* 1. Explore */}
                   <button
@@ -22985,7 +23113,7 @@ export default function RootLayout() {
                 </div>
 
                 {/* BOTTOM TAB BAR (Navigation) matching user screenshot */}
-                {currentRoute.type === 'tabs' && !viewingApplicantDetails && !viewingArtisanBookingDetails && (
+                {currentRoute.type === 'tabs' && !needsEmailVerification && !viewingApplicantDetails && !viewingArtisanBookingDetails && (
                   <div className="bg-white border-t border-slate-200/80 py-2 px-3 flex items-center justify-around z-40 select-none shadow-lg">
                     {/* 1. Explore */}
                     <button
