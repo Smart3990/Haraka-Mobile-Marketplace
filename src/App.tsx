@@ -148,6 +148,9 @@ import {
   getPlatformStats,
   hasRequiredDocuments,
   markChatRead,
+  deleteChatForMe,
+  deleteMessageForEveryone,
+  deleteMessageForMe,
   openChat,
   saveUserProfile,
   sendChatMessage,
@@ -491,6 +494,58 @@ const PUBLIC_WEB_URL = 'https://harakaapp.web.app';
 /** True inside the Android/iOS app (Expo DOM component), false on the website */
 const IN_PHONE_APP =
   typeof window !== 'undefined' && Boolean((window as any).ReactNativeWebView || (window as any).$$EXPO_DOM_HOST_OS);
+
+/**
+ * Press-and-hold (about half a second) on a touch screen, or right-click with a mouse.
+ * The tap that ends a long press does not also open the item.
+ */
+let longPressTimer: ReturnType<typeof setTimeout> | null = null;
+let longPressFiredAt = 0;
+let longPressStart = { x: 0, y: 0 };
+const justLongPressed = () => Date.now() - longPressFiredAt < 800;
+function longPress(onLongPress: () => void) {
+  const cancel = () => {
+    if (longPressTimer) clearTimeout(longPressTimer);
+    longPressTimer = null;
+  };
+  const fire = () => {
+    cancel();
+    longPressFiredAt = Date.now();
+    try {
+      navigator.vibrate?.(25);
+    } catch {
+      // vibration is optional
+    }
+    onLongPress();
+  };
+  return {
+    onTouchStart: (e: React.TouchEvent) => {
+      longPressStart = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      cancel();
+      longPressTimer = setTimeout(fire, 500);
+    },
+    onTouchMove: (e: React.TouchEvent) => {
+      const t = e.touches[0];
+      if (Math.abs(t.clientX - longPressStart.x) > 10 || Math.abs(t.clientY - longPressStart.y) > 10) cancel();
+    },
+    onTouchEnd: (e: React.TouchEvent) => {
+      cancel();
+      if (justLongPressed()) e.preventDefault();
+    },
+    onTouchCancel: cancel,
+    // Right-click with a mouse; on phones the browser's own long-press menu is replaced by ours
+    onContextMenu: (e: React.MouseEvent) => {
+      e.preventDefault();
+      if (!justLongPressed()) fire();
+    },
+    onClickCapture: (e: React.MouseEvent) => {
+      if (justLongPressed()) {
+        e.stopPropagation();
+        e.preventDefault();
+      }
+    },
+  };
+}
 
 /** Chat times: "14:05" today, otherwise "16 Oct". */
 function formatChatTime(iso: string): string {
@@ -1977,7 +2032,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
                 onChange={(e) => setAddAdminForm({ ...addAdminForm, password: e.target.value })}
                 placeholder="At least 8 characters"
               />
-              <span className="text-[10px] text-slate-400 block mt-1">
+              <span className="text-[11px] text-slate-400 block mt-1">
                 Not needed if they already have a Haraka account. Ask them to change it after first login.
               </span>
             </label>
@@ -2031,7 +2086,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
                         <p className="text-[11px] font-bold text-slate-900 truncate">
                           {admin.name || admin.email} {isMe && <span className="text-slate-400 font-semibold">(you)</span>}
                         </p>
-                        <p className="text-[10px] text-slate-500 truncate">
+                        <p className="text-[11px] text-slate-500 truncate">
                           {admin.email}
                           {admin.canAddAdmins ? ' • can add admins' : ''}
                         </p>
@@ -2172,11 +2227,11 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
                 <div key={r.id} className="p-3 rounded-2xl border border-slate-200 space-y-1.5">
                   <div className="flex items-start justify-between gap-2">
                     <p className="text-xs font-black text-slate-900 leading-snug">{r.listingTitle || 'Untitled ad'}</p>
-                    <span className="text-[10px] text-slate-400 font-semibold shrink-0">{formatChatTime(r.createdAtISO)}</span>
+                    <span className="text-[11px] text-slate-400 font-semibold shrink-0">{formatChatTime(r.createdAtISO)}</span>
                   </div>
                   <p className="text-[11px] font-bold text-red-600">{r.reason}</p>
                   {r.details && <p className="text-[11px] text-slate-600 whitespace-pre-wrap break-words">{r.details}</p>}
-                  <p className="text-[10px] text-slate-400 break-all">Reported by {r.reporterEmail || 'a user'}</p>
+                  <p className="text-[11px] text-slate-400 break-all">Reported by {r.reporterEmail || 'a user'}</p>
                   {r.status === 'open' ? (
                     <div className="flex gap-1.5 pt-1">
                       <button
@@ -2402,6 +2457,97 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     } finally {
       setIsDeletingAccount(false);
     }
+  };
+
+  // ---------- Press and hold a message or a conversation to delete it ----------
+  type ChatActionTarget =
+    | { kind: 'message'; id: string; mine: boolean; text: string }
+    | { kind: 'chat'; id: string; name: string };
+  const [chatAction, setChatAction] = useState<ChatActionTarget | null>(null);
+  const [chatActionBusy, setChatActionBusy] = useState(false);
+
+  const runChatAction = async (action: 'everyone' | 'me' | 'chat' | 'copy') => {
+    const target = chatAction;
+    if (!target) return;
+    if (action === 'copy' && target.kind === 'message') {
+      navigator.clipboard?.writeText(target.text).catch(() => undefined);
+      setChatAction(null);
+      return;
+    }
+    setChatActionBusy(true);
+    try {
+      if (target.kind === 'chat') {
+        await deleteChatForMe(target.id);
+        if (currentRoute.type === 'chat' && currentRoute.id === target.id) navigateTo({ type: 'tabs', tab: 'messages' });
+      } else if (action === 'everyone') {
+        const chat = chatDocs.find((c) => c.id === activeChatId);
+        if (chat) {
+          const last = activeChatMessages[activeChatMessages.length - 1];
+          await deleteMessageForEveryone(chat, target.id, last?.id === target.id);
+        }
+      } else {
+        await deleteMessageForMe(activeChatId, target.id);
+      }
+      setChatAction(null);
+    } catch (err) {
+      console.warn('Could not delete', err);
+      showToast('⚠️ Could not delete. Check your connection and try again.');
+    } finally {
+      setChatActionBusy(false);
+    }
+  };
+
+  const renderChatActionSheet = () => {
+    if (!chatAction) return null;
+    const option = (label: string, onClick: () => void, danger = false) => (
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={chatActionBusy}
+        className={`w-full py-3.5 px-4 rounded-2xl text-sm font-bold text-left flex items-center gap-3 cursor-pointer disabled:opacity-60 ${
+          danger ? 'text-red-600 bg-red-50 active:bg-red-100' : 'text-slate-800 bg-slate-50 active:bg-slate-100'
+        }`}
+      >
+        {danger ? <Trash2 size={18} /> : <Copy size={18} />}
+        <span>{label}</span>
+      </button>
+    );
+    return (
+      <div
+        className="fixed inset-0 z-[85] bg-slate-900/40 flex items-end justify-center"
+        onClick={() => !chatActionBusy && setChatAction(null)}
+      >
+        <div
+          className="w-full max-w-md bg-white rounded-t-3xl px-4 pt-3 pb-[calc(env(safe-area-inset-bottom,0px)+16px)] space-y-2 shadow-2xl animate-in slide-in-from-bottom duration-200"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="w-10 h-1.5 rounded-full bg-slate-200 mx-auto mb-2" />
+          {chatAction.kind === 'chat' ? (
+            <>
+              <p className="text-sm font-black text-slate-900 px-1">Delete chat with {chatAction.name}?</p>
+              <p className="text-xs text-slate-500 px-1 pb-1 leading-relaxed">
+                It is removed from your Messages. {chatAction.name} keeps their copy.
+              </p>
+              {option(chatActionBusy ? 'Deleting…' : 'Delete chat', () => runChatAction('chat'), true)}
+            </>
+          ) : (
+            <>
+              {chatAction.text && option('Copy text', () => runChatAction('copy'))}
+              {chatAction.mine && option(chatActionBusy ? 'Deleting…' : 'Delete for everyone', () => runChatAction('everyone'), true)}
+              {option(chatActionBusy ? 'Deleting…' : 'Delete for me', () => runChatAction('me'), true)}
+            </>
+          )}
+          <button
+            type="button"
+            onClick={() => setChatAction(null)}
+            disabled={chatActionBusy}
+            className="w-full py-3.5 rounded-2xl text-sm font-bold text-slate-600 bg-white border border-slate-200 cursor-pointer"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
   };
 
   const renderDeleteAccountModal = () => {
@@ -2680,7 +2826,11 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
       return;
     }
     setConversations(
-      chatDocs.map((chat) => {
+      chatDocs
+        // A chat you deleted stays hidden until someone sends a new message
+        .filter((chat) => !chat.deletedAt?.[firebaseUid] || chat.lastMessageAtISO > chat.deletedAt[firebaseUid])
+        .map((chat) => {
+        const deletedAtISO = chat.deletedAt?.[firebaseUid] || '';
         const otherId = chat.participants.find((p) => p !== firebaseUid) || '';
         const other = chat.people?.[otherId];
         return {
@@ -2698,12 +2848,14 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
             online: false,
             phone: other?.phone || '',
           },
-          lastMessage: chat.lastMessage || 'No messages yet',
+          lastMessage: (deletedAtISO && chat.lastMessageAtISO <= deletedAtISO ? '' : chat.lastMessage) || 'No messages yet',
           lastMessageTime: formatChatTime(chat.lastMessageAtISO),
           unreadCount: chat.unread?.[firebaseUid] || 0,
           messages:
             chat.id === activeChatId
-              ? activeChatMessages.map((m) => ({
+              ? activeChatMessages
+                  .filter((m) => m.createdAtISO > deletedAtISO && !m.hiddenFor?.includes(firebaseUid))
+                  .map((m) => ({
                   id: m.id,
                   senderId: m.senderId === firebaseUid ? 'me' : m.senderId,
                   text: m.text,
@@ -5544,7 +5696,7 @@ export default function RootLayout() {
               <h3 className="text-xs font-bold text-white truncate max-w-[200px]">
                 {currentImg.title || 'Photos'}
               </h3>
-              <p className="text-[10px] text-slate-400">
+              <p className="text-[11px] text-slate-400">
                 {galleryModal.currentIndex + 1} of {galleryModal.images.length} photos
               </p>
             </div>
@@ -5804,17 +5956,17 @@ export default function RootLayout() {
             )}
             <div className="flex-1 min-w-0">
               <div className="flex items-center justify-between">
-                <span className="text-[9.5px] font-bold text-orange-600 uppercase tracking-wider">
+                <span className="text-[10.5px] font-bold text-orange-600 uppercase tracking-wider">
                   ID #{listingIdShort}
                 </span>
-                <span className="text-[10px] font-bold text-slate-900">
+                <span className="text-[11px] font-bold text-slate-900">
                   {reportListingTarget.currency || 'GH₵'} {reportListingTarget.price.toLocaleString()}
                 </span>
               </div>
               <h4 className="text-[11.5px] font-bold text-slate-900 truncate">
                 {reportListingTarget.title}
               </h4>
-              <p className="text-[10px] text-slate-500 truncate">
+              <p className="text-[11px] text-slate-500 truncate">
                 Seller: <span className="font-semibold text-slate-700">{reportListingTarget.seller.name}</span>
               </p>
             </div>
@@ -5933,7 +6085,7 @@ export default function RootLayout() {
             )}
             <div className="min-w-0 flex-1">
               <p className="font-extrabold text-slate-900 truncate text-[11px]">{callDropdownUser.name}</p>
-              <p className="text-[10px] text-slate-500 font-mono truncate">{rawPhone || 'No phone number shared'}</p>
+              <p className="text-[11px] text-slate-500 font-mono truncate">{rawPhone || 'No phone number shared'}</p>
             </div>
           </div>
 
@@ -6580,7 +6732,7 @@ export default function RootLayout() {
                 <div className="pt-2 space-y-2.5">
                   <div className="flex items-center justify-between">
                     <span className="text-slate-700 font-bold text-[11px] block">Uploaded Ghana National ID Cards:</span>
-                    <span className="text-[10px] text-slate-400">Front &amp; Back Photos</span>
+                    <span className="text-[11px] text-slate-400">Front &amp; Back Photos</span>
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -6589,7 +6741,7 @@ export default function RootLayout() {
                       <div className="space-y-1.5">
                         <div className="flex items-center justify-between">
                           <span className="text-[10.5px] font-bold text-slate-700">Front ID Photo</span>
-                          <span className="text-[9px] text-emerald-600 font-bold">Attached Document</span>
+                          <span className="text-[10.5px] text-emerald-600 font-bold">Attached Document</span>
                         </div>
                         <div
                           onClick={() =>
@@ -6607,7 +6759,7 @@ export default function RootLayout() {
                             <Maximize2 size={15} />
                             <span>Inspect Card</span>
                           </div>
-                          <div className="absolute bottom-1.5 right-1.5 bg-black/70 backdrop-blur-xs text-[9px] text-emerald-400 font-bold px-1.5 py-0.5 rounded">
+                          <div className="absolute bottom-1.5 right-1.5 bg-black/70 backdrop-blur-xs text-[10.5px] text-emerald-400 font-bold px-1.5 py-0.5 rounded">
                             Front Photo • Tap to zoom
                           </div>
                         </div>
@@ -6623,7 +6775,7 @@ export default function RootLayout() {
                       <div className="space-y-1.5">
                         <div className="flex items-center justify-between">
                           <span className="text-[10.5px] font-bold text-slate-700">Back ID Photo</span>
-                          <span className="text-[9px] text-emerald-600 font-bold">Security Seal</span>
+                          <span className="text-[10.5px] text-emerald-600 font-bold">Security Seal</span>
                         </div>
                         <div
                           onClick={() =>
@@ -6641,7 +6793,7 @@ export default function RootLayout() {
                             <Maximize2 size={15} />
                             <span>Inspect Card</span>
                           </div>
-                          <div className="absolute bottom-1.5 right-1.5 bg-black/70 backdrop-blur-xs text-[9px] text-emerald-400 font-bold px-1.5 py-0.5 rounded">
+                          <div className="absolute bottom-1.5 right-1.5 bg-black/70 backdrop-blur-xs text-[10.5px] text-emerald-400 font-bold px-1.5 py-0.5 rounded">
                             Back Photo • Tap to zoom
                           </div>
                         </div>
@@ -6669,7 +6821,7 @@ export default function RootLayout() {
                 <Briefcase size={13} className="text-[#FF6A00]" />
                 <span>Business Documents &amp; Trade Compliance</span>
               </h5>
-              <span className="text-[10px] text-slate-400 font-medium">Review prior to approval</span>
+              <span className="text-[11px] text-slate-400 font-medium">Review prior to approval</span>
             </div>
 
             <div className="bg-slate-50 rounded-2xl p-3 border border-slate-100 space-y-3 text-xs">
@@ -6726,7 +6878,7 @@ export default function RootLayout() {
                         <p className="font-bold text-slate-900 text-xs truncate">
                           {applicant.businessCertName || 'Business_Certificate.pdf'}
                         </p>
-                        <p className="text-[10px] text-slate-500 mt-0.5">
+                        <p className="text-[11px] text-slate-500 mt-0.5">
                           Verified Upload • Official Trade / Registration Record
                         </p>
                       </div>
@@ -6937,7 +7089,7 @@ export default function RootLayout() {
                   <div className="space-y-2 pt-2 border-t border-slate-200/60">
                     <div className="flex items-center justify-between">
                       <span className="text-slate-900 font-extrabold text-xs">Services &amp; Pricing</span>
-                      <span className="text-[10px] text-slate-400 font-medium">Standard rates</span>
+                      <span className="text-[11px] text-slate-400 font-medium">Standard rates</span>
                     </div>
 
                     <div className="space-y-2">
@@ -6952,7 +7104,7 @@ export default function RootLayout() {
                             </div>
                             <div className="min-w-0">
                               <h6 className="text-[11.5px] font-bold text-slate-900 truncate">{srv.title}</h6>
-                              <p className="text-[10px] text-slate-500 truncate">{srv.desc}</p>
+                              <p className="text-[11px] text-slate-500 truncate">{srv.desc}</p>
                             </div>
                           </div>
                           <span className={`text-[11px] font-black shrink-0 ${srv.price === 'Free' ? 'text-emerald-700' : 'text-orange-600'}`}>
@@ -6969,7 +7121,7 @@ export default function RootLayout() {
                       <span className="text-slate-900 font-extrabold text-xs">
                         Verified Work <span className="text-slate-400 font-normal">({(applicant.verifiedWorkPortfolio || []).length})</span>
                       </span>
-                      <span className="text-[10px] text-emerald-700 font-bold">Tap photo to inspect</span>
+                      <span className="text-[11px] text-emerald-700 font-bold">Tap photo to inspect</span>
                     </div>
 
                     <div className="grid grid-cols-2 gap-2">
@@ -6991,7 +7143,7 @@ export default function RootLayout() {
                               alt={work.title}
                               className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                             />
-                            <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-[10px] font-bold gap-1">
+                            <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-[11px] font-bold gap-1">
                               <Maximize2 size={12} />
                               <span>Inspect</span>
                             </div>
@@ -6999,9 +7151,9 @@ export default function RootLayout() {
                           <div className="p-2">
                             <div className="flex items-center justify-between gap-1 mb-0.5">
                               <h6 className="text-[11px] font-bold text-slate-900 truncate">{work.title}</h6>
-                              <span className="text-[9.5px] font-bold text-orange-600 shrink-0">{work.tag}</span>
+                              <span className="text-[10.5px] font-bold text-orange-600 shrink-0">{work.tag}</span>
                             </div>
-                            <p className="text-[9.5px] text-slate-400 font-medium truncate">{work.sub}</p>
+                            <p className="text-[10.5px] text-slate-400 font-medium truncate">{work.sub}</p>
                           </div>
                         </div>
                       ))}
@@ -7461,7 +7613,7 @@ export default function RootLayout() {
                   <Camera size={14} className="text-[#FF6A00]" />
                   <span>Images of the Work</span>
                 </h5>
-                <span className="text-[10px] text-slate-400 font-medium">
+                <span className="text-[11px] text-slate-400 font-medium">
                   {booking.workImages.length} photos uploaded by client
                 </span>
               </div>
@@ -7475,7 +7627,7 @@ export default function RootLayout() {
                   >
                     <img src={imgUrl} alt={`Job Photo ${idx + 1}`} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
                     <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent flex items-end p-2">
-                      <span className="text-[10px] text-white font-bold flex items-center gap-1">
+                      <span className="text-[11px] text-white font-bold flex items-center gap-1">
                         <Eye size={11} />
                         <span>Tap to zoom</span>
                       </span>
@@ -7984,12 +8136,12 @@ export default function RootLayout() {
                   <span className="text-xl font-black text-slate-900 block mt-0.5">
                     {artisanBookings.filter((b) => b.status === 'Pending' || b.status === 'Confirmed' || b.status === 'In Progress').length}
                   </span>
-                  <span className="text-[10px] text-slate-400 font-medium block mt-1">Scheduled client service visits</span>
+                  <span className="text-[11px] text-slate-400 font-medium block mt-1">Scheduled client service visits</span>
                 </div>
                 <div className="p-3.5 border border-slate-200/80 rounded-2xl bg-white shadow-2xs">
                   <span className="text-slate-500 text-[11px] font-semibold block">Completed Jobs</span>
                   <span className="text-xl font-black text-slate-900 block mt-0.5">{artisanProfiles.find((a) => a.id === firebaseUid)?.jobsCompleted || 0}</span>
-                  <span className="text-[10px] text-slate-400 font-medium block mt-1">Verified work completions</span>
+                  <span className="text-[11px] text-slate-400 font-medium block mt-1">Verified work completions</span>
                 </div>
                 <div className="p-3.5 border border-slate-200/80 rounded-2xl bg-white shadow-2xs">
                   <span className="text-slate-500 text-[11px] font-semibold block">Client Rating</span>
@@ -7997,7 +8149,7 @@ export default function RootLayout() {
                     <Star size={16} className="text-amber-500 fill-amber-500" />
                     <span>{ARTISANS_DIRECTORY.find((a) => a.id === firebaseUid)?.rating || 'New'}</span>
                   </span>
-                  <span className="text-[10px] text-amber-600 font-medium block mt-1">
+                  <span className="text-[11px] text-amber-600 font-medium block mt-1">
                     From {artisanReviews.filter((r) => r.artisanId === firebaseUid).length} verified reviews
                   </span>
                 </div>
@@ -8010,7 +8162,7 @@ export default function RootLayout() {
                     const repeat = [...unique].filter((c) => customers.filter((x) => x === c).length > 1).length;
                     return `${Math.round((repeat / unique.size) * 100)}%`;
                   })()}</span>
-                  <span className="text-[10px] text-emerald-700 font-medium block mt-1">Returning client retention</span>
+                  <span className="text-[11px] text-emerald-700 font-medium block mt-1">Returning client retention</span>
                 </div>
               </div>
 
@@ -8286,19 +8438,19 @@ export default function RootLayout() {
                   <div className="p-3.5 border border-slate-200/80 rounded-2xl bg-white shadow-2xs">
                     <span className="text-slate-500 text-[11px] font-semibold block">Total Platform Users</span>
                     <span className="text-xl font-black text-slate-900 block mt-0.5">{totalUsersCalculated.toLocaleString()}</span>
-                    <span className="text-[10px] text-slate-400 font-medium block mt-1">All registered accounts</span>
+                    <span className="text-[11px] text-slate-400 font-medium block mt-1">All registered accounts</span>
                   </div>
                   <div className="p-3.5 border border-slate-200/80 rounded-2xl bg-white shadow-2xs">
                     <span className="text-slate-500 text-[11px] font-semibold block">Live Marketplace Ads</span>
                     <span className="text-xl font-black text-slate-900 block mt-0.5">{liveAdsTotal.toLocaleString()}</span>
-                    <span className="text-[10px] text-slate-400 font-medium block mt-1">Active ads across Ghana</span>
+                    <span className="text-[11px] text-slate-400 font-medium block mt-1">Active ads across Ghana</span>
                   </div>
                   <div className="p-3.5 border border-slate-200/80 rounded-2xl bg-white shadow-2xs">
                     <span className="text-slate-500 text-[11px] font-semibold block">Pending Verification</span>
                     <span className="text-xl font-black text-orange-600 block mt-0.5">
                       {pendingCount}
                     </span>
-                    <span className="text-[10px] text-orange-600 font-medium block mt-1">Awaiting review</span>
+                    <span className="text-[11px] text-orange-600 font-medium block mt-1">Awaiting review</span>
                   </div>
                   <button
                     type="button"
@@ -8312,7 +8464,7 @@ export default function RootLayout() {
                     <span className={`text-xl font-black block mt-0.5 ${(platformStats?.openReports ?? 0) > 0 ? 'text-red-600' : 'text-emerald-700'}`}>
                       {platformStats?.openReports ?? 0}
                     </span>
-                    <span className="text-[10px] text-slate-500 font-medium block mt-1">Tap to review flagged ads</span>
+                    <span className="text-[11px] text-slate-500 font-medium block mt-1">Tap to review flagged ads</span>
                   </button>
                 </div>
 
@@ -8326,22 +8478,22 @@ export default function RootLayout() {
                     <div className="p-2.5 bg-slate-50/70 rounded-xl border border-slate-100">
                       <span className="text-slate-500 text-[10.5px] block font-medium">Verified Sellers</span>
                       <span className="text-sm font-black text-slate-900">{verifiedSellersTotal.toLocaleString()}</span>
-                      <span className="text-[9.5px] text-slate-400 block mt-0.5">{sellerPct}% of userbase</span>
+                      <span className="text-[10.5px] text-slate-400 block mt-0.5">{sellerPct}% of userbase</span>
                     </div>
                     <div className="p-2.5 bg-slate-50/70 rounded-xl border border-slate-100">
                       <span className="text-slate-500 text-[10.5px] block font-medium">Trade Artisans</span>
                       <span className="text-sm font-black text-slate-900">{tradeArtisansTotal.toLocaleString()}</span>
-                      <span className="text-[9.5px] text-slate-400 block mt-0.5">{artisanPct}% of userbase</span>
+                      <span className="text-[10.5px] text-slate-400 block mt-0.5">{artisanPct}% of userbase</span>
                     </div>
                     <div className="p-2.5 bg-slate-50/70 rounded-xl border border-slate-100">
                       <span className="text-slate-500 text-[10.5px] block font-medium">Regular Users</span>
                       <span className="text-sm font-black text-slate-900">{activeUsersTotal.toLocaleString()}</span>
-                      <span className="text-[9.5px] text-slate-400 block mt-0.5">{userPct}% of userbase</span>
+                      <span className="text-[10.5px] text-slate-400 block mt-0.5">{userPct}% of userbase</span>
                     </div>
                     <div className="p-2.5 bg-slate-50/70 rounded-xl border border-slate-100">
                       <span className="text-slate-500 text-[10.5px] block font-medium">Added Administrators</span>
                       <span className="text-sm font-black text-slate-900">{platformAdminsTotal.toLocaleString()}</span>
-                      <span className="text-[9.5px] text-slate-400 block mt-0.5">{adminPct}% of userbase</span>
+                      <span className="text-[10.5px] text-slate-400 block mt-0.5">{adminPct}% of userbase</span>
                     </div>
                   </div>
                 </div>
@@ -8429,7 +8581,7 @@ export default function RootLayout() {
                             <p className="text-[11px] font-medium text-slate-600 truncate mt-0.5">
                               {applicant.role === 'artisan' ? '🔧 Artisan' : '🛒 Seller'} • {applicant.tradeCategory}
                             </p>
-                            <p className="text-[10px] text-slate-400 truncate mt-0.5">
+                            <p className="text-[11px] text-slate-400 truncate mt-0.5">
                               {applicant.location} • Submitted {applicant.dateSubmitted}
                             </p>
                           </div>
@@ -9204,16 +9356,16 @@ export default function RootLayout() {
                   return (
                     <div
                       onClick={currentSlide.action}
-                      className={`mx-3.5 my-3 relative overflow-hidden rounded-2xl bg-gradient-to-r ${currentSlide.bgGradient} text-white p-4 shadow-md transition-all duration-300 cursor-pointer active:scale-[0.99]`}
+                      className={`mx-4 my-3 relative overflow-hidden rounded-2xl bg-gradient-to-r ${currentSlide.bgGradient} text-white p-4 shadow-md transition-all duration-300 cursor-pointer active:scale-[0.99] flex items-center gap-2`}
                     >
-                      {/* Clean 3D marketplace illustration with visible grounded shadow */}
+                      {/* Illustration beside the text (never underneath it) */}
                       <img
                         src={currentSlide.image || WELCOME_HERO_TRANS}
-                        alt={currentSlide.title || 'Haraka Marketplace'}
-                        className="absolute right-0 bottom-0.5 w-36 h-36 object-contain pointer-events-none z-0"
+                        alt=""
+                        className="order-last w-[30%] max-w-32 aspect-square shrink-0 object-contain pointer-events-none"
                       />
 
-                      <div className="relative z-10 w-full pr-24">
+                      <div className="relative z-10 flex-1 min-w-0">
                         <h3 className="text-base font-black text-white leading-tight mb-1">
                           {currentSlide.title}
                         </h3>
@@ -9344,7 +9496,7 @@ export default function RootLayout() {
 
                           {/* Top Left Verified Tag matching screenshot */}
                           {item.isVerifiedDeal && (
-                            <div className="absolute top-2 left-2 flex items-center gap-1 bg-[#059669] text-white text-[9px] font-black tracking-wider px-1.5 py-0.5 rounded-sm shadow-xs">
+                            <div className="absolute top-2 left-2 flex items-center gap-1 bg-[#059669] text-white text-[10.5px] font-black tracking-wider px-1.5 py-0.5 rounded-sm shadow-xs">
                               <CheckCircle size={10} className="text-white fill-white/20" />
                               <span>VERIFIED</span>
                             </div>
@@ -9374,7 +9526,7 @@ export default function RootLayout() {
                             </span>
                             {item.condition && (
                               <span
-                                className={`text-[10px] font-bold shrink-0 ${
+                                className={`text-[11px] font-bold shrink-0 ${
                                   item.condition === 'Brand New'
                                     ? 'text-emerald-600'
                                     : item.condition === 'Like New'
@@ -9435,7 +9587,7 @@ export default function RootLayout() {
                         </div>
                         <div>
                           <h3 className="text-xs font-extrabold text-slate-900">{cat.name}</h3>
-                          <p className="text-[10px] text-slate-400 font-medium mt-0.5">{listings.filter((l) => l.category === cat.id).length} active ads</p>
+                          <p className="text-[11px] text-slate-400 font-medium mt-0.5">{listings.filter((l) => l.category === cat.id).length} active ads</p>
                         </div>
                       </div>
                       <ChevronRight size={17} className="text-slate-400 shrink-0" />
@@ -9540,7 +9692,7 @@ export default function RootLayout() {
                                 <CheckCircle size={14} className="text-emerald-600 shrink-0" />
                               )}
                               <span
-                                className={`inline-flex items-center gap-1 text-[10px] font-extrabold ${
+                                className={`inline-flex items-center gap-1 text-[11px] font-extrabold ${
                                   isAvailable ? 'text-emerald-700' : 'text-amber-700'
                                 }`}
                               >
@@ -9631,7 +9783,7 @@ export default function RootLayout() {
                           <span className="font-semibold text-slate-700">
                             View Portfolio ({artisan.portfolioCount || 10} photos)
                           </span>
-                          <span className="text-[10px] text-slate-400 block">
+                          <span className="text-[11px] text-slate-400 block">
                             {isAvailable ? '🟢 Accepting bookings now' : '🟠 Busy on client site'}
                           </span>
                         </div>
@@ -9704,7 +9856,7 @@ export default function RootLayout() {
                       <div className="flex items-start justify-between">
                         <div className="max-w-[72%]">
                           {subTag ? (
-                            <span className="text-[10px] font-black uppercase text-orange-600 tracking-wider block mb-1">
+                            <span className="text-[11px] font-black uppercase text-orange-600 tracking-wider block mb-1">
                               {subTag}
                             </span>
                           ) : null}
@@ -9787,13 +9939,14 @@ export default function RootLayout() {
                   return uniqueList.map((conv) => (
                     <div
                       key={conv.id}
+                      {...longPress(() => setChatAction({ kind: 'chat', id: conv.id, name: conv.otherUser.name }))}
                       onClick={() => {
                         setConversations((prev) =>
                           prev.map((c) => (c.id === conv.id ? { ...c, unreadCount: 0 } : c))
                         );
                         navigateTo({ type: 'chat', id: conv.id });
                       }}
-                    className={`p-3 rounded-2xl border flex items-center gap-3 cursor-pointer shadow-2xs hover:shadow-xs transition-all active:scale-98 ${
+                    className={`p-3 rounded-2xl border flex items-center gap-3 cursor-pointer shadow-2xs hover:shadow-xs transition-all active:scale-98 select-none [-webkit-touch-callout:none] ${
                       (conv.unreadCount || 0) > 0
                         ? 'bg-orange-50/30 border-orange-200/80 ring-1 ring-orange-500/10'
                         : 'bg-white border-slate-100'
@@ -9825,11 +9978,11 @@ export default function RootLayout() {
                         </span>
                         <div className="flex items-center gap-1.5 shrink-0">
                           {(conv.unreadCount || 0) > 0 && (
-                            <span className="bg-[#FF6A00] text-white text-[9.5px] font-black px-1.5 py-0.5 rounded-full">
+                            <span className="bg-[#FF6A00] text-white text-[10.5px] font-black px-1.5 py-0.5 rounded-full">
                               {conv.unreadCount} new
                             </span>
                           )}
-                          <span className="text-[10px] text-slate-400">{conv.lastMessageTime}</span>
+                          <span className="text-[11px] text-slate-400">{conv.lastMessageTime}</span>
                         </div>
                       </div>
                       <p className="text-[11px] font-bold text-orange-600 truncate mb-0.5">
@@ -9994,7 +10147,7 @@ export default function RootLayout() {
                   </div>
                   <div>
                     <h3 className="text-xs font-black text-slate-900">My Scheduled Bookings</h3>
-                    <p className="text-[10px] text-slate-500">
+                    <p className="text-[11px] text-slate-500">
                       {myBookings.filter(b => b.status === 'Confirmed' || b.status === 'In Progress').length} active artisan appointments
                     </p>
                   </div>
@@ -10082,7 +10235,7 @@ export default function RootLayout() {
                                   <Star size={11} className="fill-amber-500 text-amber-500" />
                                   {art.rating}
                                 </span>
-                                <span className="text-[10px] text-slate-400">•</span>
+                                <span className="text-[11px] text-slate-400">•</span>
                                 <span className="text-[10.5px] text-slate-400 truncate flex items-center gap-0.5">
                                   <MapPin size={10} />
                                   {art.location}
@@ -10197,7 +10350,7 @@ export default function RootLayout() {
                                     <Package size={22} className="text-slate-400" />
                                   )}
                                   <div className="absolute inset-0 flex items-center justify-center px-1">
-                                    <span className="bg-[#DC2626] text-white text-[9.5px] font-black px-2 py-0.5 rounded shadow-sm tracking-wider uppercase">
+                                    <span className="bg-[#DC2626] text-white text-[10.5px] font-black px-2 py-0.5 rounded shadow-sm tracking-wider uppercase">
                                       SOLD OUT
                                     </span>
                                   </div>
@@ -10225,14 +10378,14 @@ export default function RootLayout() {
                                     <h3 className="text-xs font-semibold text-slate-800 line-clamp-1 mt-0.5">
                                       {item.title}
                                     </h3>
-                                    <p className="text-[10px] text-slate-400 flex items-center gap-1 mt-0.5">
+                                    <p className="text-[11px] text-slate-400 flex items-center gap-1 mt-0.5">
                                       <MapPin size={10} className="shrink-0" />
                                       <span className="truncate">{item.location.neighborhood}, {item.location.city}</span>
                                     </p>
                                   </div>
 
                                   {/* Listing closed notice */}
-                                  <div className="flex items-center gap-1 text-[10px] text-red-500 font-medium mt-1">
+                                  <div className="flex items-center gap-1 text-[11px] text-red-500 font-medium mt-1">
                                     <AlertCircle size={11} className="shrink-0 text-red-500" />
                                     <span className="truncate">
                                       {item.soldNotice || 'Listing closed by seller yesterday'}
@@ -10306,7 +10459,7 @@ export default function RootLayout() {
                                   </button>
                                 </div>
                                 <h3 className="text-xs font-bold text-slate-800 line-clamp-1">{item.title}</h3>
-                                <p className="text-[10px] text-slate-400">{item.location.neighborhood}, {item.location.city}</p>
+                                <p className="text-[11px] text-slate-400">{item.location.neighborhood}, {item.location.city}</p>
                               </div>
                               <div className="flex gap-2 mt-1">
                                 <button
@@ -10584,20 +10737,20 @@ export default function RootLayout() {
                         <div className="text-base font-black text-slate-900">
                           {myOwnListings.filter((l) => l.status === 'Active').length}
                         </div>
-                        <div className="text-[10px] font-bold text-slate-500">Active Ads</div>
+                        <div className="text-[11px] font-bold text-slate-500">Active Ads</div>
                       </div>
                       <div className="bg-slate-50/80 rounded-xl p-2 shadow-2xs">
                         <div className="text-base font-black text-slate-900">
                           {userProfile.dealsCompleted || 0}
                         </div>
-                        <div className="text-[10px] font-bold text-slate-500">Deals Closed</div>
+                        <div className="text-[11px] font-bold text-slate-500">Deals Closed</div>
                       </div>
                       <div className="bg-slate-50/80 rounded-xl p-2 shadow-2xs">
                         <div className="text-base font-black text-slate-900 flex items-center justify-center gap-1">
                           <Star size={12} className="text-amber-500 fill-amber-500" />
                           <span>{userProfile.reviewsCount > 0 ? userProfile.rating : '—'}</span>
                         </div>
-                        <div className="text-[10px] font-bold text-slate-500">Rating ({userProfile.reviewsCount || 0})</div>
+                        <div className="text-[11px] font-bold text-slate-500">Rating ({userProfile.reviewsCount || 0})</div>
                       </div>
                     </div>
                   )}
@@ -11229,7 +11382,7 @@ export default function RootLayout() {
                               <Upload size={14} className="text-orange-500" />
                               <span>Upload Photo</span>
                             </button>
-                            <p className="text-[10px] text-slate-400 text-center">
+                            <p className="text-[11px] text-slate-400 text-center">
                               Select JPG, PNG or WEBP (max 5MB)
                             </p>
                           </div>
@@ -11256,7 +11409,7 @@ export default function RootLayout() {
                             <button
                               type="button"
                               onClick={() => setEditProfileForm((prev) => ({ ...prev, inspectionFee: 0 }))}
-                              className="text-[10px] font-bold text-emerald-600 hover:underline cursor-pointer"
+                              className="text-[11px] font-bold text-emerald-600 hover:underline cursor-pointer"
                             >
                               Set to Free (GH₵ 0)
                             </button>
@@ -11273,7 +11426,7 @@ export default function RootLayout() {
                             />
                           </div>
                           {(Number(editProfileForm.inspectionFee) === 0 || editProfileForm.inspectionFee === 0) && (
-                            <p className="text-[10px] font-bold text-emerald-600 mt-1 flex items-center gap-1">
+                            <p className="text-[11px] font-bold text-emerald-600 mt-1 flex items-center gap-1">
                               ✓ Shows &quot;FREE INSPECTION&quot; on cards
                             </p>
                           )}
@@ -11696,7 +11849,7 @@ export default function RootLayout() {
                           </div>
                         )}
                         {item.isVerifiedDeal && (
-                          <div className="absolute top-2 left-2 flex items-center gap-1 bg-emerald-600 text-white text-[9px] font-black px-1.5 py-0.5 rounded-md shadow-xs">
+                          <div className="absolute top-2 left-2 flex items-center gap-1 bg-emerald-600 text-white text-[10.5px] font-black px-1.5 py-0.5 rounded-md shadow-xs">
                             <ShieldCheck size={10} />
                             <span>VERIFIED</span>
                           </div>
@@ -11723,7 +11876,7 @@ export default function RootLayout() {
                           </span>
                           {item.condition && (
                             <span
-                              className={`text-[10px] font-bold shrink-0 ${
+                              className={`text-[11px] font-bold shrink-0 ${
                                 item.condition === 'Brand New'
                                   ? 'text-emerald-600'
                                   : item.condition === 'Like New'
@@ -12462,10 +12615,11 @@ export default function RootLayout() {
                 <button
                   type="button"
                   onClick={goBack}
-                  className="p-1 rounded-full text-slate-700 hover:text-slate-900 active:scale-95 transition-transform cursor-pointer"
+                  className="p-2 -ml-1 rounded-full text-slate-700 hover:text-slate-900 active:bg-slate-100 active:scale-95 transition-transform cursor-pointer"
                   title="Back"
+                  aria-label="Back"
                 >
-                  <ArrowLeft size={18} />
+                  <ArrowLeft size={20} />
                 </button>
                 <div className="relative shrink-0">
                   {activeConv.otherUser.avatar ? (
@@ -12490,7 +12644,7 @@ export default function RootLayout() {
                       <CheckCircle size={12} className="text-emerald-500 fill-emerald-100" />
                     )}
                   </div>
-                  <p className="text-[10px] text-slate-500 font-semibold">{amBuyer ? 'Seller' : 'Buyer'}</p>
+                  <p className="text-[11px] text-slate-500 font-semibold">{amBuyer ? 'Seller' : 'Buyer'}</p>
                 </div>
               </div>
               <div>
@@ -12521,7 +12675,7 @@ export default function RootLayout() {
                   <span className="font-extrabold text-slate-800 truncate block text-[11px]">
                     {activeConv.listingTitle}
                   </span>
-                  <span className="text-[9.5px] text-slate-400">
+                  <span className="text-[10.5px] text-slate-400">
                     {hasValidPrice && !isServiceOrJob ? 'Asking Price' : 'Consultation / Service'}
                   </span>
                 </div>
@@ -12537,11 +12691,15 @@ export default function RootLayout() {
                 const isOfferAccepted = m.offerStatus === 'accepted' || !!acceptedOffers[m.id];
                 const currentOfferVal = m.offerAmount || offer1Amount;
 
+                const messageActions = longPress(() =>
+                  setChatAction({ kind: 'message', id: m.id, mine: m.senderId === 'me', text: m.text || '' })
+                );
+
                 return (
                   <React.Fragment key={m.id}>
                     {m.isOffer ? (
                       /* Clean Interactive Offer Card (Image 4 Styled - No text background color, no Cash on Pickup) */
-                      <div className={`w-full max-w-[96%] sm:max-w-[88%] ${m.senderId === 'me' ? 'self-end' : 'self-start'} my-1 bg-white border-2 border-orange-400 rounded-3xl p-3.5 shadow-sm space-y-2.5 animate-in fade-in zoom-in-95 duration-200`}>
+                      <div {...messageActions} className={`w-full max-w-[96%] sm:max-w-[88%] select-none [-webkit-touch-callout:none] ${m.senderId === 'me' ? 'self-end' : 'self-start'} my-1 bg-white border-2 border-orange-400 rounded-3xl p-3.5 shadow-sm space-y-2.5 animate-in fade-in zoom-in-95 duration-200`}>
                         {/* Listing Reference Preview */}
                         <div className="flex items-start gap-2.5 pb-2.5 border-b border-slate-100">
                           {activeConv.listingImage && (
@@ -12567,7 +12725,7 @@ export default function RootLayout() {
                             <p className="text-xs font-black text-slate-900 mt-0.5">
                               GH₵ {rawPrice.toLocaleString()}
                             </p>
-                            <div className="flex items-center gap-1.5 text-[10px] text-slate-500 mt-0.5">
+                            <div className="flex items-center gap-1.5 text-[11px] text-slate-500 mt-0.5">
                               <span className="font-bold text-orange-600">{m.senderId === 'me' ? 'Your offer' : 'Offer received'}</span>
                             </div>
                           </div>
@@ -12575,7 +12733,7 @@ export default function RootLayout() {
 
                         {/* Offer Amount Section - No text background color, no Cash on Pickup */}
                         <div className="py-1">
-                          <span className="text-[9.5px] font-extrabold uppercase tracking-wider text-slate-400 block">
+                          <span className="text-[10.5px] font-extrabold uppercase tracking-wider text-slate-400 block">
                             Offered Cash Price
                           </span>
                           <span className="text-xl font-black text-orange-600">
@@ -12664,7 +12822,7 @@ export default function RootLayout() {
                         )}
 
                         {/* Footer: Location & Time */}
-                        <div className="flex items-center justify-between text-[9.5px] text-slate-400 font-medium pt-0.5">
+                        <div className="flex items-center justify-between text-[10.5px] text-slate-400 font-medium pt-0.5">
                           <span />
                           <span>{m.timestamp}</span>
                         </div>
@@ -12672,17 +12830,18 @@ export default function RootLayout() {
                     ) : (
                       /* Standard Message Bubble */
                       <div
-                        className={`max-w-[85%] text-xs animate-in fade-in-50 duration-150 ${
+                        {...messageActions}
+                        className={`max-w-[85%] text-xs animate-in fade-in-50 duration-150 select-none [-webkit-touch-callout:none] break-words ${
                           m.senderId === 'me'
                             ? 'bg-orange-500 text-white self-end shadow-xs rounded-2xl rounded-br-xs p-3'
                             : 'bg-white text-slate-900 self-start border border-slate-200/80 rounded-2xl rounded-bl-xs shadow-2xs p-3'
                         }`}
                       >
-                        <p className={`leading-snug ${m.senderId === 'me' ? 'text-white font-medium' : 'text-slate-800 font-normal'}`}>
+                        <p className={`text-[13px] leading-snug ${m.senderId === 'me' ? 'text-white font-medium' : 'text-slate-800 font-normal'}`}>
                           {m.text}
                         </p>
                         <span
-                          className={`text-[9.5px] block mt-1.5 text-right ${
+                          className={`text-[10.5px] block mt-1.5 text-right ${
                             m.senderId === 'me' ? 'text-orange-100 font-medium' : 'text-slate-400'
                           }`}
                         >
@@ -12796,22 +12955,23 @@ export default function RootLayout() {
                 e.preventDefault();
                 handleSendChatMessage();
               }}
-              className="bg-white p-2.5 border-t border-slate-200 flex items-center gap-2 z-10"
+              className="bg-white px-3 py-2.5 border-t border-slate-200 flex items-center gap-2 z-10"
             >
               <input
                 type="text"
                 value={chatInputText}
                 onChange={(e) => setChatInputText(e.target.value)}
                 placeholder="Type message or counter-offer (e.g. GH₵4,500)..."
-                className="flex-1 bg-slate-100 focus:bg-white focus:ring-1 focus:ring-orange-500 rounded-full px-4 py-2 text-xs outline-hidden text-slate-900 transition-all"
+                className="flex-1 min-w-0 bg-slate-100 focus:bg-white focus:ring-1 focus:ring-orange-500 rounded-full px-4 py-2.5 text-sm outline-hidden text-slate-900 transition-all"
               />
               <button
                 type="submit"
                 disabled={!chatInputText.trim()}
-                className="w-8 h-8 rounded-full bg-orange-500 hover:bg-orange-600 disabled:opacity-40 text-white flex items-center justify-center active:scale-95 transition-all cursor-pointer shrink-0 shadow-xs"
+                className="w-10 h-10 rounded-full bg-orange-500 hover:bg-orange-600 disabled:opacity-40 text-white flex items-center justify-center active:scale-95 transition-all cursor-pointer shrink-0 shadow-xs"
                 title="Send"
+                aria-label="Send"
               >
-                <Send size={14} />
+                <Send size={17} />
               </button>
             </form>
 
@@ -12822,7 +12982,7 @@ export default function RootLayout() {
                   <div className="flex items-center justify-between pb-2 border-b border-slate-100">
                     <div>
                       <h3 className="text-sm font-black text-slate-900">Send Offer Card</h3>
-                      <p className="text-[10px] text-slate-400">Direct offer to {activeConv.otherUser.name}</p>
+                      <p className="text-[11px] text-slate-400">Direct offer to {activeConv.otherUser.name}</p>
                     </div>
                     <button
                       type="button"
@@ -12845,7 +13005,7 @@ export default function RootLayout() {
 
                   {/* Custom Input */}
                   <div className="space-y-1.5">
-                    <label className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block">
+                    <label className="text-[11px] font-extrabold text-slate-500 uppercase tracking-wider block">
                       Custom Offer Amount (GH₵)
                     </label>
                     <div className="relative">
@@ -12863,7 +13023,7 @@ export default function RootLayout() {
 
                   {/* Note input */}
                   <div className="space-y-1.5">
-                    <label className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block">
+                    <label className="text-[11px] font-extrabold text-slate-500 uppercase tracking-wider block">
                       Message Note to Seller
                     </label>
                     <input
@@ -12901,7 +13061,7 @@ export default function RootLayout() {
                   <div className="flex items-center justify-between pb-2 border-b border-slate-100">
                     <div>
                       <h3 className="text-sm font-black text-slate-900">Make Counter Offer</h3>
-                      <p className="text-[10px] text-slate-400">Propose a new price to {activeConv.otherUser.name}</p>
+                      <p className="text-[11px] text-slate-400">Propose a new price to {activeConv.otherUser.name}</p>
                     </div>
                     <button
                       type="button"
@@ -12924,7 +13084,7 @@ export default function RootLayout() {
                   </div>
 
                   <div className="space-y-1.5">
-                    <label className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block">
+                    <label className="text-[11px] font-extrabold text-slate-500 uppercase tracking-wider block">
                       Your Counter Price (GH₵)
                     </label>
                     <div className="relative">
@@ -13089,7 +13249,7 @@ export default function RootLayout() {
                             <span className="w-1.5 h-1.5 rounded-full bg-blue-600 shrink-0" />
                           )}
                         </div>
-                        <span className="text-[10px] text-slate-400 font-medium shrink-0">
+                        <span className="text-[11px] text-slate-400 font-medium shrink-0">
                           {item.time}
                         </span>
                       </div>
@@ -13239,13 +13399,13 @@ export default function RootLayout() {
                               </div>
                             )}
                             {item.isVerifiedDeal && (
-                              <span className="absolute top-2 left-2 bg-emerald-600 text-white text-[9px] font-black px-1.5 py-0.5 rounded-md tracking-wider">
+                              <span className="absolute top-2 left-2 bg-emerald-600 text-white text-[10.5px] font-black px-1.5 py-0.5 rounded-md tracking-wider">
                                 VERIFIED
                               </span>
                             )}
                             {item.condition && (
                               <div
-                                className={`absolute bottom-2 left-2 flex items-center gap-1 text-[9px] font-black tracking-wide px-2 py-0.5 rounded-md shadow-xs backdrop-blur-xs ${
+                                className={`absolute bottom-2 left-2 flex items-center gap-1 text-[10.5px] font-black tracking-wide px-2 py-0.5 rounded-md shadow-xs backdrop-blur-xs ${
                                   item.condition === 'Brand New'
                                     ? 'bg-emerald-600/90 text-white'
                                     : item.condition === 'Like New'
@@ -13372,7 +13532,7 @@ export default function RootLayout() {
                           </div>
                           <div className="min-w-0">
                             <h4 className="text-xs font-bold text-slate-900 truncate">{c.name}</h4>
-                            <p className="text-[10px] text-slate-400">{listings.filter((l) => l.category === c.id).length} items</p>
+                            <p className="text-[11px] text-slate-400">{listings.filter((l) => l.category === c.id).length} items</p>
                           </div>
                         </div>
                       ))}
@@ -13412,13 +13572,13 @@ export default function RootLayout() {
                               </div>
                             )}
                             {item.isVerifiedDeal && (
-                              <span className="absolute top-2 left-2 bg-emerald-600 text-white text-[9px] font-black px-1.5 py-0.5 rounded-md tracking-wider">
+                              <span className="absolute top-2 left-2 bg-emerald-600 text-white text-[10.5px] font-black px-1.5 py-0.5 rounded-md tracking-wider">
                                 VERIFIED
                               </span>
                             )}
                             {item.condition && (
                               <div
-                                className={`absolute bottom-2 left-2 flex items-center gap-1 text-[9px] font-black tracking-wide px-2 py-0.5 rounded-md shadow-xs backdrop-blur-xs ${
+                                className={`absolute bottom-2 left-2 flex items-center gap-1 text-[10.5px] font-black tracking-wide px-2 py-0.5 rounded-md shadow-xs backdrop-blur-xs ${
                                   item.condition === 'Brand New'
                                     ? 'bg-emerald-600/90 text-white'
                                     : item.condition === 'Like New'
@@ -13571,7 +13731,7 @@ export default function RootLayout() {
                             <CheckCircle size={14} className="text-emerald-600 shrink-0" />
                           )}
                           <span
-                            className={`inline-flex items-center gap-1 text-[10px] font-extrabold ${
+                            className={`inline-flex items-center gap-1 text-[11px] font-extrabold ${
                               isAvailable ? 'text-emerald-700' : 'text-amber-700'
                             }`}
                           >
@@ -13660,7 +13820,7 @@ export default function RootLayout() {
                       <span className="font-semibold text-slate-700">
                         View Portfolio ({artisan.portfolioCount || 10} photos)
                       </span>
-                      <span className="text-[10px] text-slate-400 block">
+                      <span className="text-[11px] text-slate-400 block">
                         {isAvailable ? '🟢 Accepting bookings now' : '🟠 Busy on client site'}
                       </span>
                     </div>
@@ -13864,7 +14024,7 @@ export default function RootLayout() {
                       <Star size={11} className="fill-amber-500 text-amber-500" />
                       <span>{artisan.rating || 'New'}</span>
                     </div>
-                    <span className="text-[9.5px] text-slate-400 font-medium block mt-0.5">
+                    <span className="text-[10.5px] text-slate-400 font-medium block mt-0.5">
                       {(() => { const n = artisanReviews.filter((r) => r.artisanId === artisan.id).length; return `${n} review${n === 1 ? '' : 's'}`; })()}
                     </span>
                   </div>
@@ -13872,7 +14032,7 @@ export default function RootLayout() {
                     <span className="text-slate-900 font-black text-xs block">
                       {artisan.jobsCompleted}
                     </span>
-                    <span className="text-[9.5px] text-slate-400 font-medium block mt-0.5">
+                    <span className="text-[10.5px] text-slate-400 font-medium block mt-0.5">
                       Completed
                     </span>
                   </div>
@@ -13880,7 +14040,7 @@ export default function RootLayout() {
                     <span className="text-slate-900 font-black text-xs block">
                       {artisanProfiles.find((a) => a.id === artisan.id)?.experienceYears || '—'}
                     </span>
-                    <span className="text-[9.5px] text-slate-400 font-medium block mt-0.5">
+                    <span className="text-[10.5px] text-slate-400 font-medium block mt-0.5">
                       Experience
                     </span>
                   </div>
@@ -13888,7 +14048,7 @@ export default function RootLayout() {
                     <span className="text-emerald-600 font-black text-xs block">
                       {artisanReviews.filter((r) => r.artisanId === artisan.id).length}
                     </span>
-                    <span className="text-[9.5px] text-slate-400 font-medium block mt-0.5">
+                    <span className="text-[10.5px] text-slate-400 font-medium block mt-0.5">
                       Reviews
                     </span>
                   </div>
@@ -14019,7 +14179,7 @@ export default function RootLayout() {
                 </div>
 
                 {/* Haraka Guarantee */}
-                <div className="flex items-start gap-1.5 pt-1 text-[10px] text-slate-600 leading-snug">
+                <div className="flex items-start gap-1.5 pt-1 text-[11px] text-slate-600 leading-snug">
                   <ShieldCheck size={13} className="text-emerald-600 shrink-0 mt-0.5" />
                   <span>
                     <strong className="text-slate-800 font-bold">Haraka 0% Fee Guarantee:</strong>{' '}
@@ -14097,9 +14257,9 @@ export default function RootLayout() {
                       <div className="p-2.5">
                         <div className="flex items-center justify-between gap-1 mb-0.5">
                           <h4 className="text-xs font-bold text-slate-900 truncate">{work.title}</h4>
-                          <span className="text-[10px] font-bold text-orange-600 shrink-0">{work.tag}</span>
+                          <span className="text-[11px] font-bold text-orange-600 shrink-0">{work.tag}</span>
                         </div>
-                        <p className="text-[10px] text-slate-400 font-medium truncate">
+                        <p className="text-[11px] text-slate-400 font-medium truncate">
                           {work.sub}
                         </p>
                       </div>
@@ -14130,7 +14290,7 @@ export default function RootLayout() {
                           </div>
                           <div>
                             <h4 className="text-xs font-bold text-slate-900">{rev.name}</h4>
-                            <span className="text-[10px] text-slate-400 font-medium">{rev.loc} • {rev.time}</span>
+                            <span className="text-[11px] text-slate-400 font-medium">{rev.loc} • {rev.time}</span>
                           </div>
                         </div>
                         <div className="flex text-amber-400 text-xs">
@@ -14154,7 +14314,7 @@ export default function RootLayout() {
                 </span>
                 <div className="flex items-baseline gap-1 mt-0.5">
                   <span className="text-base font-black text-slate-900">{profileData.calloutPrice}</span>
-                  <span className="text-[10px] font-bold text-emerald-700">{profileData.arrivalNote}</span>
+                  <span className="text-[11px] font-bold text-emerald-700">{profileData.arrivalNote}</span>
                 </div>
               </div>
 
@@ -14419,7 +14579,7 @@ export default function RootLayout() {
                       <Star size={11} className="fill-amber-500 text-amber-500" />
                       <span>{artisan.rating || 'New'}</span>
                     </div>
-                    <span className="text-[9.5px] text-slate-400 font-medium block mt-0.5">
+                    <span className="text-[10.5px] text-slate-400 font-medium block mt-0.5">
                       {(() => { const n = artisanReviews.filter((r) => r.artisanId === artisan.id).length; return `${n} review${n === 1 ? '' : 's'}`; })()}
                     </span>
                   </div>
@@ -14427,7 +14587,7 @@ export default function RootLayout() {
                     <span className="text-slate-900 font-black text-xs block">
                       {artisan.jobsCompleted}
                     </span>
-                    <span className="text-[9.5px] text-slate-400 font-medium block mt-0.5">
+                    <span className="text-[10.5px] text-slate-400 font-medium block mt-0.5">
                       Completed
                     </span>
                   </div>
@@ -14435,7 +14595,7 @@ export default function RootLayout() {
                     <span className="text-slate-900 font-black text-xs block">
                       {artisanProfiles.find((a) => a.id === artisan.id)?.experienceYears || '—'}
                     </span>
-                    <span className="text-[9.5px] text-slate-400 font-medium block mt-0.5">
+                    <span className="text-[10.5px] text-slate-400 font-medium block mt-0.5">
                       Experience
                     </span>
                   </div>
@@ -14443,7 +14603,7 @@ export default function RootLayout() {
                     <span className="text-emerald-600 font-black text-xs block">
                       {artisanReviews.filter((r) => r.artisanId === artisan.id).length}
                     </span>
-                    <span className="text-[9.5px] text-slate-400 font-medium block mt-0.5">
+                    <span className="text-[10.5px] text-slate-400 font-medium block mt-0.5">
                       Reviews
                     </span>
                   </div>
@@ -14628,7 +14788,7 @@ export default function RootLayout() {
                                 ))}
                               </div>
 
-                              <span className="text-[10px] font-medium text-slate-500 italic truncate hidden xs:inline">
+                              <span className="text-[11px] font-medium text-slate-500 italic truncate hidden xs:inline">
                                 Recording audio memo...
                               </span>
                             </div>
@@ -14689,7 +14849,7 @@ export default function RootLayout() {
                                     );
                                   })}
                                 </div>
-                                <span className="text-[10px] text-slate-600 font-semibold block leading-tight truncate">
+                                <span className="text-[11px] text-slate-600 font-semibold block leading-tight truncate">
                                   {recordedAudioUrl
                                     ? `Your recorded voice note (0:${audioRecordDuration.toString().padStart(2, '0')}) • Tap Play`
                                     : `Voice note attached (0:${audioRecordDuration.toString().padStart(2, '0')}) • Twi & English`}
@@ -14723,7 +14883,7 @@ export default function RootLayout() {
                                 <span className="text-[11px] font-bold text-slate-800 block leading-tight">
                                   Tap to record audio note
                                 </span>
-                                <span className="text-[9.5px] text-slate-400">
+                                <span className="text-[10.5px] text-slate-400">
                                   Instant voice note (Twi or English)
                                 </span>
                               </div>
@@ -14822,13 +14982,13 @@ export default function RootLayout() {
                                 : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
                             }`}
                           >
-                            <span className="text-[9.5px] uppercase font-bold block leading-none">
+                            <span className="text-[10.5px] uppercase font-bold block leading-none">
                               {item.label}
                             </span>
                             <span className="text-base font-black block mt-0.5">
                               {item.day}
                             </span>
-                            <span className={`text-[10px] font-bold block mt-0.5 ${isSelected ? 'text-slate-300' : 'text-slate-400'}`}>
+                            <span className={`text-[11px] font-bold block mt-0.5 ${isSelected ? 'text-slate-300' : 'text-slate-400'}`}>
                               {item.month}
                             </span>
                           </button>
@@ -14860,7 +15020,7 @@ export default function RootLayout() {
                             <span className={`text-xs font-bold block ${isSelected ? 'text-slate-900' : 'text-slate-700'}`}>
                               {win.title}
                             </span>
-                            <span className="text-[10px] text-slate-500 font-medium block mt-0.5">
+                            <span className="text-[11px] text-slate-500 font-medium block mt-0.5">
                               {win.time}
                             </span>
                           </button>
@@ -14914,7 +15074,7 @@ export default function RootLayout() {
                           <div className="w-6 h-6 rounded-full bg-orange-500 ring-4 ring-orange-500/25 flex items-center justify-center shadow-lg text-white">
                             <MapPin size={13} />
                           </div>
-                          <span className="text-[10px] font-black text-white drop-shadow-[0_1px_3px_rgba(0,0,0,0.85)] mt-1">
+                          <span className="text-[11px] font-black text-white drop-shadow-[0_1px_3px_rgba(0,0,0,0.85)] mt-1">
                             Spintex Rd (~2.1 km away)
                           </span>
                         </div>
@@ -14931,7 +15091,7 @@ export default function RootLayout() {
                     <div className="flex items-center justify-between text-xs py-1 border-b border-slate-100">
                       <div>
                         <span className="text-slate-700 font-medium block">Base Inspection / Consultation</span>
-                        <span className="text-[10px] text-emerald-700 font-bold">Direct to Artisan</span>
+                        <span className="text-[11px] text-emerald-700 font-bold">Direct to Artisan</span>
                       </div>
                       <span className="font-bold text-slate-900">{baseRateFormatted}</span>
                     </div>
@@ -14949,7 +15109,7 @@ export default function RootLayout() {
                         <span className="text-xs font-black text-slate-900 block">
                           Estimated Inspection Total
                         </span>
-                        <span className="text-[10px] text-slate-500 font-medium">
+                        <span className="text-[11px] text-slate-500 font-medium">
                           Pay {firstName} directly on site
                         </span>
                       </div>
@@ -15063,7 +15223,7 @@ export default function RootLayout() {
                           <MapPin size={14} className="text-slate-400 shrink-0" />
                           <span className="truncate">{bookingLocation}</span>
                         </div>
-                        <span className="shrink-0 px-2 py-0.5 rounded-full bg-white text-[10px] font-bold text-slate-600 border border-slate-200 shadow-2xs">
+                        <span className="shrink-0 px-2 py-0.5 rounded-full bg-white text-[11px] font-bold text-slate-600 border border-slate-200 shadow-2xs">
                           3.4 km
                         </span>
                       </div>
@@ -15137,7 +15297,7 @@ export default function RootLayout() {
                     {/* Written Job Description if entered */}
                     {bookingDescription && (
                       <div className="bg-slate-50/80 rounded-2xl p-3 border border-slate-100 text-xs">
-                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                        <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
                           Job Description
                         </span>
                         <p className="text-slate-700 font-medium leading-relaxed">
@@ -15155,7 +15315,7 @@ export default function RootLayout() {
                           className="w-full h-full object-cover"
                         />
                         <div className="absolute bottom-2 left-2">
-                          <span className="px-2.5 py-1 rounded-lg bg-slate-900/85 backdrop-blur-xs text-white text-[10px] font-bold shadow-xs">
+                          <span className="px-2.5 py-1 rounded-lg bg-slate-900/85 backdrop-blur-xs text-white text-[11px] font-bold shadow-xs">
                             Wall
                           </span>
                         </div>
@@ -15168,7 +15328,7 @@ export default function RootLayout() {
                           className="w-full h-full object-cover"
                         />
                         <div className="absolute bottom-2 left-2">
-                          <span className="px-2.5 py-1 rounded-lg bg-slate-900/85 backdrop-blur-xs text-white text-[10px] font-bold shadow-xs">
+                          <span className="px-2.5 py-1 rounded-lg bg-slate-900/85 backdrop-blur-xs text-white text-[11px] font-bold shadow-xs">
                             Reference Sketch
                           </span>
                         </div>
@@ -15510,7 +15670,7 @@ export default function RootLayout() {
                   </div>
 
                   {/* Weekday Row */}
-                  <div className="grid grid-cols-7 text-center text-[10px] font-black text-slate-400">
+                  <div className="grid grid-cols-7 text-center text-[11px] font-black text-slate-400">
                     {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map((w) => (
                       <span key={w} className="py-0.5">{w}</span>
                     ))}
@@ -16151,7 +16311,7 @@ export default function RootLayout() {
                           <Camera size={14} className="text-[#FF6A00]" />
                           <span>Images of the Work</span>
                         </h5>
-                        <span className="text-[10px] text-slate-400 font-medium">
+                        <span className="text-[11px] text-slate-400 font-medium">
                           {selectedBookingForDetails.workImages.length} photos attached
                         </span>
                       </div>
@@ -16165,7 +16325,7 @@ export default function RootLayout() {
                           >
                             <img src={imgUrl} alt={`Job Photo ${idx + 1}`} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
                             <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent flex items-end p-2">
-                              <span className="text-[10px] text-white font-bold flex items-center gap-1">
+                              <span className="text-[11px] text-white font-bold flex items-center gap-1">
                                 <Eye size={11} />
                                 <span>Tap to zoom</span>
                               </span>
@@ -16780,17 +16940,17 @@ export default function RootLayout() {
 
                       {/* Badges in single horizontal row - Image 10 guarantee */}
                       <div className="flex flex-row items-center justify-between gap-1 pt-2.5 border-t border-slate-100/90 w-full flex-nowrap overflow-hidden">
-                        <div className="flex items-center gap-1 text-[9.5px] xs:text-[10px] sm:text-[10.5px] font-extrabold text-slate-800 whitespace-nowrap shrink-0">
+                        <div className="flex items-center gap-1 text-[10.5px] xs:text-[11px] sm:text-[10.5px] font-extrabold text-slate-800 whitespace-nowrap shrink-0">
                           <div className="w-3.5 h-3.5 rounded-full bg-[#065F46] flex items-center justify-center shrink-0">
                             <Gauge size={8} className="text-white stroke-[2.5]" />
                           </div>
                           <span>0% Commission</span>
                         </div>
-                        <div className="flex items-center gap-1 text-[9.5px] xs:text-[10px] sm:text-[10.5px] font-extrabold text-slate-800 whitespace-nowrap shrink-0">
+                        <div className="flex items-center gap-1 text-[10.5px] xs:text-[11px] sm:text-[10.5px] font-extrabold text-slate-800 whitespace-nowrap shrink-0">
                           <ShieldCheck size={12} className="text-[#FF6A00] fill-[#FF6A00] shrink-0" />
                           <span>Verified Pro Shield</span>
                         </div>
-                        <div className="flex items-center gap-1 text-[9.5px] xs:text-[10px] sm:text-[10.5px] font-extrabold text-slate-800 whitespace-nowrap shrink-0">
+                        <div className="flex items-center gap-1 text-[10.5px] xs:text-[11px] sm:text-[10.5px] font-extrabold text-slate-800 whitespace-nowrap shrink-0">
                           <Navigation size={10} className="text-[#0284C7] fill-[#0284C7] rotate-45 shrink-0" />
                           <span>Top Pro Feed</span>
                         </div>
@@ -16814,17 +16974,17 @@ export default function RootLayout() {
 
                       {/* Badges in single horizontal row */}
                       <div className="grid grid-cols-3 gap-1 pt-2.5 border-t border-slate-100/90 w-full items-center">
-                        <div className="flex items-center justify-start gap-1 text-[10px] sm:text-[10.5px] font-extrabold text-slate-800 whitespace-nowrap min-w-0">
+                        <div className="flex items-center justify-start gap-1 text-[11px] sm:text-[10.5px] font-extrabold text-slate-800 whitespace-nowrap min-w-0">
                           <div className="w-3.5 h-3.5 rounded-full bg-[#065F46] flex items-center justify-center shrink-0">
                             <Gauge size={8} className="text-white stroke-[2.5]" />
                           </div>
                           <span className="truncate">2x Fast Sales</span>
                         </div>
-                        <div className="flex items-center justify-center gap-1 text-[10px] sm:text-[10.5px] font-extrabold text-slate-800 whitespace-nowrap min-w-0">
+                        <div className="flex items-center justify-center gap-1 text-[11px] sm:text-[10.5px] font-extrabold text-slate-800 whitespace-nowrap min-w-0">
                           <ShieldCheck size={13} className="text-[#FF6A00] fill-[#FF6A00] shrink-0" />
                           <span className="truncate">Anti-Scam Shield</span>
                         </div>
-                        <div className="flex items-center justify-end gap-1 text-[10px] sm:text-[10.5px] font-extrabold text-slate-800 whitespace-nowrap min-w-0">
+                        <div className="flex items-center justify-end gap-1 text-[11px] sm:text-[10.5px] font-extrabold text-slate-800 whitespace-nowrap min-w-0">
                           <Navigation size={11} className="text-[#0284C7] fill-[#0284C7] rotate-45 shrink-0" />
                           <span className="truncate">Top Local Feed</span>
                         </div>
@@ -17178,7 +17338,7 @@ export default function RootLayout() {
                         <div className="space-y-1.5 pt-1">
                           <div className="flex items-center justify-between">
                             <label className="text-xs font-semibold text-slate-700">Custom Storefront Banner</label>
-                            <span className="text-[10px] text-slate-400 font-medium">Recommended: 1200 × 400 px</span>
+                            <span className="text-[11px] text-slate-400 font-medium">Recommended: 1200 × 400 px</span>
                           </div>
                           <div className="relative rounded-2xl overflow-hidden shadow-2xs border border-slate-200/60 aspect-[21/9] bg-slate-100 flex items-center justify-center group">
                             {storeBannerImage ? (
@@ -17193,7 +17353,7 @@ export default function RootLayout() {
                                   <Camera size={18} />
                                 </div>
                                 <span className="text-xs font-bold text-slate-700">No Storefront Banner Uploaded</span>
-                                <span className="text-[10px] text-slate-400">Recommended: 1200 × 400 px</span>
+                                <span className="text-[11px] text-slate-400">Recommended: 1200 × 400 px</span>
                               </div>
                             )}
                             <input
@@ -17652,7 +17812,7 @@ export default function RootLayout() {
                                     <span className="font-extrabold text-xs text-slate-900">
                                       Front ID Photo Attached
                                     </span>
-                                    <span className="text-[10px] text-slate-500 mt-0.5 truncate max-w-[220px]">
+                                    <span className="text-[11px] text-slate-500 mt-0.5 truncate max-w-[220px]">
                                       {ghanaCardFrontName || 'front_id.jpg'}
                                     </span>
                                     <div className="flex items-center gap-2 mt-2.5">
@@ -17690,7 +17850,7 @@ export default function RootLayout() {
                                     <span className="font-bold text-xs text-slate-700">
                                       No Photo Attached Yet
                                     </span>
-                                    <span className="text-[10px] text-slate-400 mt-0.5">
+                                    <span className="text-[11px] text-slate-400 mt-0.5">
                                       Clear photo of Ghana Card front (JPEG, PNG)
                                     </span>
                                     <button
@@ -17733,7 +17893,7 @@ export default function RootLayout() {
                                     <span className="font-extrabold text-xs text-slate-900">
                                       Back ID Photo Attached
                                     </span>
-                                    <span className="text-[10px] text-slate-500 mt-0.5 truncate max-w-[220px]">
+                                    <span className="text-[11px] text-slate-500 mt-0.5 truncate max-w-[220px]">
                                       {ghanaCardBackName || 'back_id.jpg'}
                                     </span>
                                     <div className="flex items-center gap-2 mt-2.5">
@@ -17771,7 +17931,7 @@ export default function RootLayout() {
                                     <span className="font-bold text-xs text-slate-700">
                                       No Photo Attached Yet
                                     </span>
-                                    <span className="text-[10px] text-slate-400 mt-0.5">
+                                    <span className="text-[11px] text-slate-400 mt-0.5">
                                       Clear photo of Ghana Card back (JPEG, PNG)
                                     </span>
                                     <button
@@ -17888,7 +18048,7 @@ export default function RootLayout() {
                                 <span className="font-extrabold text-xs text-slate-900 z-10">
                                   {businessCertName ? businessCertName : 'Upload Business / Trade Certificate'}
                                 </span>
-                                <span className="text-[10px] text-slate-500 mt-0.5 z-10">
+                                <span className="text-[11px] text-slate-500 mt-0.5 z-10">
                                   PDF, PNG, JPG accepted (Optional)
                                 </span>
                                 <button
@@ -18028,7 +18188,7 @@ export default function RootLayout() {
                             <label className="text-xs font-semibold text-slate-700">
                               Professional Headline / Title
                             </label>
-                            <span className="text-[10px] text-slate-400">Displays on client cards</span>
+                            <span className="text-[11px] text-slate-400">Displays on client cards</span>
                           </div>
                           <div className="bg-[#F3F4FB] rounded-2xl p-2.5 px-3 flex items-center gap-2 border border-slate-200/50">
                             <Cog size={16} className="text-orange-500 shrink-0 stroke-[2.2]" />
@@ -18113,7 +18273,7 @@ export default function RootLayout() {
                                 className="text-xs font-bold text-slate-900 bg-transparent flex-1 outline-none w-full"
                               />
                             </div>
-                            <span className="text-[10px] text-slate-400 mt-1 block truncate">
+                            <span className="text-[11px] text-slate-400 mt-1 block truncate">
                               Initial callout charge
                             </span>
                           </div>
@@ -18137,7 +18297,7 @@ export default function RootLayout() {
                                 className="text-xs font-bold text-slate-900 bg-transparent flex-1 outline-none w-full"
                               />
                             </div>
-                            <span className="text-[10px] text-slate-400 mt-1 block truncate">
+                            <span className="text-[11px] text-slate-400 mt-1 block truncate">
                               Field experience
                             </span>
                           </div>
@@ -18231,7 +18391,7 @@ export default function RootLayout() {
                             <label className="text-xs font-semibold text-slate-700">
                               Service Coverage Towns &amp; Neighborhoods
                             </label>
-                            <span className="text-[10px] text-slate-400">Where you travel for callouts</span>
+                            <span className="text-[11px] text-slate-400">Where you travel for callouts</span>
                           </div>
                           {artisanCoverageAreas.length === 0 ? (
                             <div className="py-2.5 text-xs text-slate-400 font-medium">
@@ -18293,7 +18453,7 @@ export default function RootLayout() {
                           </div>
                           {/* Quick suggestions - Clean white background, no peach fill */}
                           <div className="flex items-center gap-1.5 flex-wrap pt-1.5">
-                            <span className="text-[10px] text-slate-400 font-medium">Quick add:</span>
+                            <span className="text-[11px] text-slate-400 font-medium">Quick add:</span>
                             {['East Legon', 'Madina', 'Spintex', 'Accra Central', 'Airport Res', 'Tema', 'Osu'].filter((t) => !artisanCoverageAreas.includes(t)).slice(0, 4).map((t) => (
                               <button
                                 key={t}
@@ -18388,7 +18548,7 @@ export default function RootLayout() {
                                 <span className="font-extrabold text-xs text-slate-900 z-10">
                                   {policeClearanceName ? policeClearanceName : 'Upload CID Clearance Certificate'}
                                 </span>
-                                <span className="text-[10px] text-slate-500 mt-0.5 z-10">
+                                <span className="text-[11px] text-slate-500 mt-0.5 z-10">
                                   PDF, PNG, JPG accepted (Optional)
                                 </span>
                                 <button
@@ -18577,7 +18737,7 @@ export default function RootLayout() {
                               <Languages size={13} className="text-slate-400" />
                               <span>Spoken Languages</span>
                             </label>
-                            <span className="text-[10px] text-slate-400">Select all that apply</span>
+                            <span className="text-[11px] text-slate-400">Select all that apply</span>
                           </div>
                           <div className="flex flex-wrap gap-1.5">
                             {['English', 'Twi', 'Ga', 'Ewe', 'Hausa', 'Fante', 'Dagbani'].map((lang) => {
@@ -18616,7 +18776,7 @@ export default function RootLayout() {
                             <h3 className="text-sm font-black text-slate-900 flex items-center gap-1.5 flex-wrap">
                               <span>Services &amp; Pricing</span>
                               <span className="text-red-500 font-black text-base">*</span>
-                              <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-red-50 text-red-600 border border-red-200">
+                              <span className="text-[11px] font-black uppercase px-2 py-0.5 rounded-full bg-red-50 text-red-600 border border-red-200">
                                 Required • Non-Skippable
                               </span>
                             </h3>
@@ -18776,7 +18936,7 @@ export default function RootLayout() {
                               <span>Verified Work</span>
                               <span className="text-red-500 font-black text-base">*</span>
                               <span className="text-slate-400 font-normal">({artisanPortfolio.length})</span>
-                              <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-red-50 text-red-600 border border-red-200">
+                              <span className="text-[11px] font-black uppercase px-2 py-0.5 rounded-full bg-red-50 text-red-600 border border-red-200">
                                 Required • Non-Skippable
                               </span>
                             </h3>
@@ -18833,9 +18993,9 @@ export default function RootLayout() {
                               <div className="p-2">
                                 <div className="flex items-center justify-between gap-1 mb-0.5">
                                   <h6 className="text-[11px] font-bold text-slate-900 truncate">{work.title}</h6>
-                                  <span className="text-[9.5px] font-bold text-orange-600 shrink-0">{work.tag}</span>
+                                  <span className="text-[10.5px] font-bold text-orange-600 shrink-0">{work.tag}</span>
                                 </div>
-                                <p className="text-[9.5px] text-slate-400 font-medium truncate">{work.sub}</p>
+                                <p className="text-[10.5px] text-slate-400 font-medium truncate">{work.sub}</p>
                               </div>
                             </div>
                           ))}
@@ -18928,7 +19088,7 @@ export default function RootLayout() {
                                         Remove
                                       </button>
                                     </div>
-                                    <span className="absolute bottom-2 left-2 bg-emerald-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-xs">
+                                    <span className="absolute bottom-2 left-2 bg-emerald-600 text-white text-[11px] font-bold px-2 py-0.5 rounded-full shadow-xs">
                                       ✓ Photo Selected (Preview)
                                     </span>
                                   </div>
@@ -18941,7 +19101,7 @@ export default function RootLayout() {
                                       <Upload size={18} />
                                     </div>
                                     <span className="text-xs font-bold text-slate-800">Tap to upload photo from device</span>
-                                    <span className="text-[10px] text-slate-400 mt-0.5">JPG, PNG, or WEBP (preview will show immediately)</span>
+                                    <span className="text-[11px] text-slate-400 mt-0.5">JPG, PNG, or WEBP (preview will show immediately)</span>
                                   </div>
                                 )}
                               </div>
@@ -19062,7 +19222,7 @@ export default function RootLayout() {
                             <div className="grid grid-cols-2 gap-3 pt-1">
                               <div className="border border-slate-200 rounded-2xl p-3 text-center bg-slate-50">
                                 <span className="text-[11px] font-bold text-slate-800 block">Front ID</span>
-                                <span className="text-[9.5px] text-slate-500 block truncate">{ghanaCardFrontName || 'Photo Attached'}</span>
+                                <span className="text-[10.5px] text-slate-500 block truncate">{ghanaCardFrontName || 'Photo Attached'}</span>
                                 <button
                                   type="button"
                                   onClick={() => ghanaCardFrontInputRef.current?.click()}
@@ -19073,7 +19233,7 @@ export default function RootLayout() {
                               </div>
                               <div className="border border-slate-200 rounded-2xl p-3 text-center bg-slate-50">
                                 <span className="text-[11px] font-bold text-slate-800 block">Back ID</span>
-                                <span className="text-[9.5px] text-slate-500 block truncate">{ghanaCardBackName || 'Photo Attached'}</span>
+                                <span className="text-[10.5px] text-slate-500 block truncate">{ghanaCardBackName || 'Photo Attached'}</span>
                                 <button
                                   type="button"
                                   onClick={() => ghanaCardBackInputRef.current?.click()}
@@ -19175,7 +19335,7 @@ export default function RootLayout() {
                                 <span className="font-extrabold text-xs text-slate-900 z-10">
                                   {businessCertName ? businessCertName : 'Upload NVTI / Trade Guild Certificate'}
                                 </span>
-                                <span className="text-[10px] text-slate-500 mt-0.5 z-10">
+                                <span className="text-[11px] text-slate-500 mt-0.5 z-10">
                                   PDF, PNG, JPG accepted (Optional)
                                 </span>
                                 <button
@@ -19559,7 +19719,7 @@ export default function RootLayout() {
                                     <span className="font-extrabold text-xs text-slate-900">
                                       Front ID Photo Attached
                                     </span>
-                                    <span className="text-[10px] text-slate-500 mt-0.5 truncate max-w-[220px]">
+                                    <span className="text-[11px] text-slate-500 mt-0.5 truncate max-w-[220px]">
                                       {ghanaCardFrontName || 'front_id.jpg'}
                                     </span>
                                     <div className="flex items-center gap-2 mt-2.5">
@@ -19597,7 +19757,7 @@ export default function RootLayout() {
                                     <span className="font-bold text-xs text-slate-700">
                                       No Photo Attached Yet
                                     </span>
-                                    <span className="text-[10px] text-slate-400 mt-0.5">
+                                    <span className="text-[11px] text-slate-400 mt-0.5">
                                       Clear photo of Ghana Card front (JPEG, PNG)
                                     </span>
                                     <button
@@ -19640,7 +19800,7 @@ export default function RootLayout() {
                                     <span className="font-extrabold text-xs text-slate-900">
                                       Back ID Photo Attached
                                     </span>
-                                    <span className="text-[10px] text-slate-500 mt-0.5 truncate max-w-[220px]">
+                                    <span className="text-[11px] text-slate-500 mt-0.5 truncate max-w-[220px]">
                                       {ghanaCardBackName || 'back_id.jpg'}
                                     </span>
                                     <div className="flex items-center gap-2 mt-2.5">
@@ -19678,7 +19838,7 @@ export default function RootLayout() {
                                     <span className="font-bold text-xs text-slate-700">
                                       No Photo Attached Yet
                                     </span>
-                                    <span className="text-[10px] text-slate-400 mt-0.5">
+                                    <span className="text-[11px] text-slate-400 mt-0.5">
                                       Clear photo of Ghana Card back (JPEG, PNG)
                                     </span>
                                     <button
@@ -19795,7 +19955,7 @@ export default function RootLayout() {
                                 <span className="font-extrabold text-xs text-slate-900 z-10">
                                   {businessCertName ? businessCertName : 'Upload Business / Trade Certificate'}
                                 </span>
-                                <span className="text-[10px] text-slate-500 mt-0.5 z-10">
+                                <span className="text-[11px] text-slate-500 mt-0.5 z-10">
                                   PDF, PNG, JPG accepted (Optional)
                                 </span>
                                 <button
@@ -19890,7 +20050,7 @@ export default function RootLayout() {
                             <span>Applicant Profile Picture</span>
                             <span className="text-red-500 font-black text-sm">*</span>
                           </span>
-                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${sellerAvatarPhoto ? 'text-emerald-700 bg-emerald-50 border-emerald-200' : 'text-red-500 bg-red-50 border-red-200'}`}>
+                          <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full border ${sellerAvatarPhoto ? 'text-emerald-700 bg-emerald-50 border-emerald-200' : 'text-red-500 bg-red-50 border-red-200'}`}>
                             {sellerAvatarPhoto ? '✓ Uploaded' : 'Required *'}
                           </span>
                         </div>
@@ -19922,7 +20082,7 @@ export default function RootLayout() {
                               <h3 className="text-base font-black text-slate-900 leading-tight truncate">
                                 {sellerRegForm.fullName || 'Artisan Applicant'}
                               </h3>
-                              <span className="bg-emerald-50 text-emerald-800 text-[10px] font-extrabold px-2 py-0.5 rounded-full border border-emerald-200 flex items-center gap-1">
+                              <span className="bg-emerald-50 text-emerald-800 text-[11px] font-extrabold px-2 py-0.5 rounded-full border border-emerald-200 flex items-center gap-1">
                                 <BadgeCheck size={12} className="text-emerald-700" />
                                 <span>Verified Trade Pro</span>
                               </span>
@@ -19940,7 +20100,7 @@ export default function RootLayout() {
                                   <span>Police Cleared</span>
                                 </span>
                               ) : (
-                                <span className="text-slate-400 font-semibold text-[10px]">
+                                <span className="text-slate-400 font-semibold text-[11px]">
                                   {isPoliceClearanceSkipped ? 'Police Clearance Skipped' : 'CID Pending'}
                                 </span>
                               )}
@@ -20060,7 +20220,7 @@ export default function RootLayout() {
                                 </div>
                                 <div className="min-w-0">
                                   <h5 className="text-[11.5px] font-bold text-slate-900 truncate">{srv.title}</h5>
-                                  <p className="text-[10px] text-slate-500 truncate">{srv.desc}</p>
+                                  <p className="text-[11px] text-slate-500 truncate">{srv.desc}</p>
                                 </div>
                               </div>
                               <span className={`text-[11px] font-black shrink-0 ${srv.price === 'Free' ? 'text-emerald-700' : 'text-orange-600'}`}>
@@ -20105,9 +20265,9 @@ export default function RootLayout() {
                               <div className="p-2">
                                 <div className="flex items-center justify-between gap-1 mb-0.5">
                                   <h6 className="text-[11px] font-bold text-slate-900 truncate">{work.title}</h6>
-                                  <span className="text-[9.5px] font-bold text-orange-600 shrink-0">{work.tag}</span>
+                                  <span className="text-[10.5px] font-bold text-orange-600 shrink-0">{work.tag}</span>
                                 </div>
-                                <p className="text-[9.5px] text-slate-400 font-medium truncate">{work.sub}</p>
+                                <p className="text-[10.5px] text-slate-400 font-medium truncate">{work.sub}</p>
                               </div>
                             </div>
                           ))}
@@ -20532,7 +20692,7 @@ export default function RootLayout() {
                                 </div>
                               )}
                               <div className="min-w-0">
-                                <span className="text-[10px] font-semibold text-slate-500 block">Front ID Photo</span>
+                                <span className="text-[11px] font-semibold text-slate-500 block">Front ID Photo</span>
                                 <span className="font-extrabold text-emerald-800 text-[11px] truncate block">
                                   {ghanaCardFrontPreview ? 'Attached ✓' : 'Front ID Ready ✓'}
                                 </span>
@@ -20552,7 +20712,7 @@ export default function RootLayout() {
                                 </div>
                               )}
                               <div className="min-w-0">
-                                <span className="text-[10px] font-semibold text-slate-500 block">Back ID Photo</span>
+                                <span className="text-[11px] font-semibold text-slate-500 block">Back ID Photo</span>
                                 <span className="font-extrabold text-emerald-800 text-[11px] truncate block">
                                   {ghanaCardBackPreview ? 'Attached ✓' : 'Back ID Ready ✓'}
                                 </span>
@@ -20587,7 +20747,7 @@ export default function RootLayout() {
                           Required for verification and buyer credibility in chat.
                         </p>
                       </div>
-                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${sellerAvatarPhoto ? 'text-emerald-700 bg-emerald-50 border-emerald-200' : 'text-red-500 bg-red-50 border-red-200'}`}>
+                      <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full border ${sellerAvatarPhoto ? 'text-emerald-700 bg-emerald-50 border-emerald-200' : 'text-red-500 bg-red-50 border-red-200'}`}>
                         {sellerAvatarPhoto ? '✓ Uploaded' : 'Required *'}
                       </span>
                     </div>
@@ -21316,7 +21476,7 @@ export default function RootLayout() {
                       className="w-20 h-20 rounded-xl border-2 border-dashed border-orange-300 bg-orange-50/50 flex flex-col items-center justify-center text-orange-600 gap-1 shrink-0 hover:bg-orange-100/60 active:scale-95 transition-all cursor-pointer"
                     >
                       <Camera size={20} />
-                      <span className="text-[10px] font-bold">+ Add Photo</span>
+                      <span className="text-[11px] font-bold">+ Add Photo</span>
                     </button>
                   )}
                   {adDraft.images?.map((img, i) => (
@@ -21367,7 +21527,7 @@ export default function RootLayout() {
                     </div>
                   ))}
                 </div>
-                <p className="text-[10px] text-slate-500 mt-1">
+                <p className="text-[11px] text-slate-500 mt-1">
                   First image is always your main <strong>Cover photo</strong>. Tap any image to choose it as Cover.
                 </p>
               </div>
@@ -21507,7 +21667,7 @@ export default function RootLayout() {
                   <label className="text-xs font-bold text-slate-800">
                     Description <span className="text-red-500 font-bold">*</span>
                   </label>
-                  <span className="text-[10px] text-slate-400 font-medium">
+                  <span className="text-[11px] text-slate-400 font-medium">
                     {(adDraft.description || '').trim().length} characters
                   </span>
                 </div>
@@ -21570,7 +21730,7 @@ export default function RootLayout() {
                             00:{adLiveRecordingSeconds < 10 ? `0${adLiveRecordingSeconds}` : adLiveRecordingSeconds}&nbsp;/&nbsp;01:00
                           </span>
                         </div>
-                        <p className="text-[10px] text-slate-500 truncate whitespace-nowrap">
+                        <p className="text-[11px] text-slate-500 truncate whitespace-nowrap">
                           Speak clearly about condition & features
                         </p>
                       </div>
@@ -21627,7 +21787,7 @@ export default function RootLayout() {
                             })}
                           </div>
                           {/* Audio Progress / Duration */}
-                          <div className="flex items-center justify-between text-[10px] text-slate-500 font-mono">
+                          <div className="flex items-center justify-between text-[11px] text-slate-500 font-mono">
                             <span>
                               {formatAudioTime(adAudioProgress * (adDraft.audioDescriptionDuration || 0))}
                             </span>
@@ -21760,7 +21920,7 @@ export default function RootLayout() {
                 {postAdErrors.price && (
                   <p className="text-[11px] text-red-600 font-semibold mt-1">⚠️ {postAdErrors.price}</p>
                 )}
-                <p className="text-[10px] text-slate-500 mt-1">Actual amount the buyer pays for your item</p>
+                <p className="text-[11px] text-slate-500 mt-1">Actual amount the buyer pays for your item</p>
               </div>
 
               {/* Original Price */}
@@ -21780,7 +21940,7 @@ export default function RootLayout() {
                     placeholder="e.g. 2200"
                   />
                 </div>
-                <p className="text-[10px] text-slate-500 mt-1">Crossed-out original price to show discount or bargain</p>
+                <p className="text-[11px] text-slate-500 mt-1">Crossed-out original price to show discount or bargain</p>
               </div>
 
               {/* Discount / Savings Banner (Text only without box background) */}
@@ -21801,7 +21961,7 @@ export default function RootLayout() {
               <div className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
                 <div>
                   <span className="text-xs font-bold text-slate-900 block">Price is Negotiable</span>
-                  <span className="text-[10px] text-slate-500">Allow buyers to submit friendly counter-offers</span>
+                  <span className="text-[11px] text-slate-500">Allow buyers to submit friendly counter-offers</span>
                 </div>
                 <input
                   type="checkbox"
@@ -21817,7 +21977,7 @@ export default function RootLayout() {
                   <label className="text-xs font-bold text-slate-800">
                     Region in Ghana <span className="text-red-500 font-bold">*</span>
                   </label>
-                  <span className="text-[10px] font-bold text-orange-600">
+                  <span className="text-[11px] font-bold text-orange-600">
                     16 Regions of Ghana
                   </span>
                 </div>
@@ -21951,7 +22111,7 @@ export default function RootLayout() {
               <div className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
                 <div>
                   <span className="text-xs font-bold text-slate-900 block">Courier Delivery Available</span>
-                  <span className="text-[10px] text-slate-500">I can send via rider / dispatch parcel across Ghana</span>
+                  <span className="text-[11px] text-slate-500">I can send via rider / dispatch parcel across Ghana</span>
                 </div>
                 <input
                   type="checkbox"
@@ -22025,12 +22185,12 @@ export default function RootLayout() {
                     </div>
                   )}
                   {adDraft.images?.[0] && (
-                    <div className="absolute top-2.5 left-2.5 bg-[#FF6A00] text-white text-[10px] font-black px-2 py-0.5 rounded-md shadow-xs flex items-center gap-1">
+                    <div className="absolute top-2.5 left-2.5 bg-[#FF6A00] text-white text-[11px] font-black px-2 py-0.5 rounded-md shadow-xs flex items-center gap-1">
                       <Check size={10} className="stroke-[3.5]" />
                       <span>Chosen Cover Photo</span>
                     </div>
                   )}
-                  <div className="absolute bottom-2.5 right-2.5 bg-black/70 text-white text-[10px] font-bold px-2 py-0.5 rounded-md backdrop-blur-xs">
+                  <div className="absolute bottom-2.5 right-2.5 bg-black/70 text-white text-[11px] font-bold px-2 py-0.5 rounded-md backdrop-blur-xs">
                     {adDraft.images?.length || 0} photo{(adDraft.images?.length || 0) === 1 ? '' : 's'}
                   </div>
                 </div>
@@ -22169,7 +22329,7 @@ export default function RootLayout() {
                       <h3 className="text-xs font-bold text-slate-900 tracking-tight">
                         Audio Description by Seller
                       </h3>
-                      <p className="text-[10px] text-slate-500">
+                      <p className="text-[11px] text-slate-500">
                         Recorded voice preview attached to this listing
                       </p>
                     </div>
@@ -22666,7 +22826,7 @@ export default function RootLayout() {
                         {reg.name}
                       </span>
                       {isDetected && (
-                        <span className="ml-1.5 text-[10px] font-semibold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-md">
+                        <span className="ml-1.5 text-[11px] font-semibold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-md">
                           Detected
                         </span>
                       )}
@@ -22844,7 +23004,7 @@ export default function RootLayout() {
                   <User size={13} className="text-slate-500" />
                 )}
                 <span className="hidden md:inline truncate max-w-[100px]">{userProfile.name || 'User'}</span>
-                <span className={`text-[10px] px-1.5 py-0.2 rounded font-bold uppercase ${
+                <span className={`text-[11px] px-1.5 py-0.2 rounded font-bold uppercase ${
                   submittedSellerApplicantId ? 'bg-amber-100 text-amber-900 border border-amber-300' : 'bg-slate-200/90 text-slate-700'
                 }`}>
                   {submittedSellerApplicantId ? 'PENDING' : currentUserRole}
@@ -22875,7 +23035,7 @@ export default function RootLayout() {
             >
               <LayoutDashboard size={14} />
               <span>Admin Dashboard</span>
-              <span className="bg-amber-200/90 text-amber-900 text-[10px] font-black px-1.5 py-0.2 rounded-full ml-0.5">
+              <span className="bg-amber-200/90 text-amber-900 text-[11px] font-black px-1.5 py-0.2 rounded-full ml-0.5">
                 {adminApplicants.filter((a) => a.status === 'pending').length}
               </span>
             </button>
@@ -23009,7 +23169,7 @@ export default function RootLayout() {
                 </span>
                 <button
                   onClick={() => setShowExportModal(true)}
-                  className="underline text-[10px] hover:text-emerald-100"
+                  className="underline text-[11px] hover:text-emerald-100"
                 >
                   Native Guide
                 </button>
@@ -23044,6 +23204,7 @@ export default function RootLayout() {
                 {renderCallDropdown()}
                 {renderCallModal()}
                 {renderDeleteAccountModal()}
+                {renderChatActionSheet()}
                 {renderPolicyViewer()}
               </div>
 
@@ -23075,7 +23236,7 @@ export default function RootLayout() {
                     <div className="relative">
                       <MessageSquare size={22} strokeWidth={activeTab === 'messages' && currentRoute.type === 'tabs' ? 2.5 : 2} />
                       {totalUnreadMessages > 0 && (
-                        <span className="absolute -top-1.5 -right-2.5 bg-[#FF6A00] text-white text-[10px] font-extrabold w-4 h-4 rounded-full flex items-center justify-center ring-2 ring-white">
+                        <span className="absolute -top-1.5 -right-2.5 bg-[#FF6A00] text-white text-[11px] font-extrabold w-4 h-4 rounded-full flex items-center justify-center ring-2 ring-white">
                           {totalUnreadMessages}
                         </span>
                       )}
@@ -23174,7 +23335,7 @@ export default function RootLayout() {
                     <div className="w-2.5 h-2.5 rounded-full bg-slate-800 ml-auto mr-1.5" />
                   </div>
                   <div className="flex items-center gap-1.5 text-slate-900 text-xs font-semibold">
-                    <span className="text-[10px]">5G</span>
+                    <span className="text-[11px]">5G</span>
                     <div className="w-4 h-2 rounded-xs border border-slate-900 p-0.5 flex items-center">
                       <div className="w-full h-full bg-slate-900 rounded-2xs" />
                     </div>
@@ -23202,6 +23363,7 @@ export default function RootLayout() {
                   {renderCallDropdown()}
                   {renderCallModal()}
                   {renderDeleteAccountModal()}
+                {renderChatActionSheet()}
                 </div>
 
                 {/* BOTTOM TAB BAR (Navigation) matching user screenshot */}
@@ -23232,7 +23394,7 @@ export default function RootLayout() {
                       <div className="relative">
                         <MessageSquare size={22} strokeWidth={activeTab === 'messages' && currentRoute.type === 'tabs' ? 2.5 : 2} />
                         {totalUnreadMessages > 0 && (
-                          <span className="absolute -top-1.5 -right-2.5 bg-[#FF6A00] text-white text-[10px] font-extrabold w-4 h-4 rounded-full flex items-center justify-center ring-2 ring-white">
+                          <span className="absolute -top-1.5 -right-2.5 bg-[#FF6A00] text-white text-[11px] font-extrabold w-4 h-4 rounded-full flex items-center justify-center ring-2 ring-white">
                             {totalUnreadMessages}
                           </span>
                         )}
@@ -23463,13 +23625,13 @@ export default function RootLayout() {
                   When compiled to iOS (iPhone/iPad) or Android, your converted code inside the <code className="text-orange-400 bg-slate-950 px-1 py-0.5 rounded font-mono">app/</code> directory runs <strong>100% full-screen edge-to-edge</strong> on the device hardware. There is zero desktop wrapper.
                 </p>
                 <div className="flex gap-2">
-                  <span className="px-2 py-0.5 rounded bg-slate-700 text-slate-200 text-[10px] font-semibold">
+                  <span className="px-2 py-0.5 rounded bg-slate-700 text-slate-200 text-[11px] font-semibold">
                     ✓ Native SafeAreaView
                   </span>
-                  <span className="px-2 py-0.5 rounded bg-slate-700 text-slate-200 text-[10px] font-semibold">
+                  <span className="px-2 py-0.5 rounded bg-slate-700 text-slate-200 text-[11px] font-semibold">
                     ✓ Native Status Bar
                   </span>
-                  <span className="px-2 py-0.5 rounded bg-slate-700 text-slate-200 text-[10px] font-semibold">
+                  <span className="px-2 py-0.5 rounded bg-slate-700 text-slate-200 text-[11px] font-semibold">
                     ✓ Native Gestures & Transitions
                   </span>
                 </div>

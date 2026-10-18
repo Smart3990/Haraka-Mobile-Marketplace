@@ -140,7 +140,10 @@ service cloud.firestore {
           || get(/databases/$(database)/documents/listings/$(request.resource.data.listingId)).data.sellerId == request.resource.data.sellerId
         );
       allow update: if isSignedIn() && request.auth.uid in resource.data.participants
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastMessage', 'lastMessageAtISO', 'lastSenderId', 'unread']);
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastMessage', 'lastMessageAtISO', 'lastSenderId', 'unread', 'deletedAt'])
+        // Each person can only set their own "deleted the chat" time
+        && (!('deletedAt' in request.resource.data)
+          || request.resource.data.deletedAt.diff(resource.data.get('deletedAt', {})).affectedKeys().hasOnly([request.auth.uid]));
 
       match /messages/{messageId} {
         function chatParticipants() {
@@ -149,11 +152,16 @@ service cloud.firestore {
         allow read: if isSignedIn() && request.auth.uid in chatParticipants();
         allow create: if isVerifiedUser() && request.auth.uid in chatParticipants()
           && request.resource.data.senderId == request.auth.uid;
-        // Only the person who received an offer can accept it
-        allow update: if isSignedIn() && request.auth.uid in chatParticipants()
-          && resource.data.senderId != request.auth.uid
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['offerStatus'])
-          && request.resource.data.offerStatus == 'accepted';
+        // Only the person who received an offer can accept it; anyone in the chat can hide a message for themselves
+        allow update: if isSignedIn() && request.auth.uid in chatParticipants() && (
+          (resource.data.senderId != request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['offerStatus'])
+            && request.resource.data.offerStatus == 'accepted')
+          || (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['hiddenFor'])
+            && request.resource.data.hiddenFor.toSet() == resource.data.get('hiddenFor', []).toSet().union([request.auth.uid].toSet()))
+        );
+        // The sender can delete their own message for everyone
+        allow delete: if isSignedIn() && resource.data.senderId == request.auth.uid && request.auth.uid in chatParticipants();
       }
     }
 

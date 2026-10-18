@@ -19,6 +19,7 @@ import {
   type User,
 } from 'firebase/auth';
 import {
+  arrayUnion,
   collection,
   deleteDoc,
   getCountFromServer,
@@ -949,6 +950,8 @@ export interface ChatDoc {
   lastSenderId: string;
   unread: Record<string, number>;
   createdAtISO: string;
+  /** When each person deleted the conversation; they only see messages sent after that */
+  deletedAt?: Record<string, string>;
 }
 
 export interface ChatMessageDoc {
@@ -959,6 +962,8 @@ export interface ChatMessageDoc {
   isOffer?: boolean;
   offerAmount?: number;
   offerStatus?: 'pending' | 'accepted';
+  /** People who deleted this message for themselves only */
+  hiddenFor?: string[];
 }
 
 /** One conversation per buyer per ad. */
@@ -1061,6 +1066,28 @@ export async function acceptOffer(chat: ChatDoc, messageId: string, amount: numb
   await sendChatMessage(chat, {
     text: `🎉 Offer of ${chat.listingCurrency} ${amount.toLocaleString()} accepted! Let's agree on a safe public meetup point and time.`,
   });
+}
+
+/** Deletes your own message for both people. */
+export async function deleteMessageForEveryone(chat: ChatDoc, messageId: string, wasLastMessage: boolean) {
+  await deleteDoc(doc(db, 'chats', chat.id, 'messages', messageId));
+  if (wasLastMessage) {
+    await updateDoc(doc(db, 'chats', chat.id), { lastMessage: 'Message deleted' });
+  }
+}
+
+/** Hides a message from your own view of the chat only. */
+export async function deleteMessageForMe(chatId: string, messageId: string) {
+  const uid = auth.currentUser?.uid;
+  if (!uid) throw new Error('Please log in again.');
+  await updateDoc(doc(db, 'chats', chatId, 'messages', messageId), { hiddenFor: arrayUnion(uid) });
+}
+
+/** Removes a conversation from your Messages. It comes back (empty) if a new message arrives. */
+export async function deleteChatForMe(chatId: string) {
+  const uid = auth.currentUser?.uid;
+  if (!uid) throw new Error('Please log in again.');
+  await updateDoc(doc(db, 'chats', chatId), { [`deletedAt.${uid}`]: new Date().toISOString(), [`unread.${uid}`]: 0 });
 }
 
 export async function markChatRead(chatId: string) {

@@ -120,7 +120,7 @@ export default function OnboardingScreen({ onFinish, onSkip }: OnboardingScreenP
                       </div>
                       <div className="flex items-center justify-between mt-0.5">
                         <span className="text-xs text-[#994700] font-black">GH₵ 4,200</span>
-                        <span className="text-[10px] text-slate-500 font-medium">East Legon</span>
+                        <span className="text-[11px] text-slate-500 font-medium">East Legon</span>
                       </div>
                     </div>
                   </div>
@@ -139,7 +139,7 @@ export default function OnboardingScreen({ onFinish, onSkip }: OnboardingScreenP
                       </div>
                       <div className="flex items-center justify-between mt-0.5">
                         <span className="text-xs text-[#994700] font-black">GH₵ 48,000</span>
-                        <span className="text-[10px] text-slate-500 font-medium">Kumasi</span>
+                        <span className="text-[11px] text-slate-500 font-medium">Kumasi</span>
                       </div>
                     </div>
                   </div>
@@ -158,7 +158,7 @@ export default function OnboardingScreen({ onFinish, onSkip }: OnboardingScreenP
                       </div>
                       <div className="flex items-center justify-between mt-0.5">
                         <span className="text-xs text-[#994700] font-black">GH₵ 350</span>
-                        <span className="text-[10px] text-slate-500 font-medium">Osu, Accra</span>
+                        <span className="text-[11px] text-slate-500 font-medium">Osu, Accra</span>
                       </div>
                     </div>
                   </div>
@@ -238,11 +238,11 @@ export default function OnboardingScreen({ onFinish, onSkip }: OnboardingScreenP
                   <div className="w-full flex items-center justify-between gap-1">
                     <div className="flex items-center gap-1.5 bg-[#eaedff] px-2.5 py-1 rounded-full whitespace-nowrap shrink-0">
                       <ShieldCheck size={14} className="text-[#006c45]" />
-                      <span className="text-[10px] text-[#131b2e] font-bold">Verified Sellers</span>
+                      <span className="text-[11px] text-[#131b2e] font-bold">Verified Sellers</span>
                     </div>
                     <div className="flex items-center gap-1 bg-[#e2e7ff] px-2.5 py-1 rounded-full whitespace-nowrap shrink-0">
                       <MapPin size={12} className="text-[#994700]" />
-                      <span className="text-[10px] text-slate-700 font-medium">Physical location</span>
+                      <span className="text-[11px] text-slate-700 font-medium">Physical location</span>
                     </div>
                   </div>
 
@@ -269,7 +269,7 @@ export default function OnboardingScreen({ onFinish, onSkip }: OnboardingScreenP
                         <span className="w-1 h-2 bg-[#006c45] rounded-full inline-block" />
                       </div>
                     </div>
-                    <span className="text-[10px] text-slate-500 font-medium">Audio description</span>
+                    <span className="text-[11px] text-slate-500 font-medium">Audio description</span>
                   </div>
                 </div>
               </div>
