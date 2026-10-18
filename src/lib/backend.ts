@@ -19,6 +19,7 @@ import {
   type User,
 } from 'firebase/auth';
 import {
+  arrayRemove,
   arrayUnion,
   collection,
   deleteDoc,
@@ -64,6 +65,8 @@ export interface UserProfileDoc {
   followedSellerIds?: string[];
   /** Notifications at or before this time count as read */
   notificationsReadAtISO?: string;
+  /** People this user blocked: they cannot message or call them, and their ads and chats are hidden */
+  blockedUserIds?: string[];
   createdAt: string;
 }
 
@@ -768,16 +771,62 @@ export function watchListings(
     q,
     (snap) =>
       callback(
-        snap.docs.map((d) => {
-          const data = d.data() as StoredListing;
-          return { ...data, id: d.id, createdAt: timeAgo(data.createdAtISO) };
-        })
+        snap.docs.map((d) => normalizeListing(d.id, d.data() as Partial<StoredListing>))
       ),
     (error) => {
       console.warn('Could not load listings', error);
       onError?.(error);
     }
   );
+}
+
+/**
+ * Fills in any missing fields so one incomplete ad (e.g. written by an older app version)
+ * can never break the screens that list ads.
+ */
+function normalizeListing(id: string, data: Partial<StoredListing>): StoredListing {
+  const createdAtISO = data.createdAtISO || new Date(0).toISOString();
+  const sellerId = data.sellerId || '';
+  return {
+    description: '',
+    price: 0,
+    currency: 'GH₵',
+    negotiable: false,
+    category: 'general',
+    categoryName: 'General',
+    subcategory: '',
+    condition: 'Used - Good',
+    featured: false,
+    isVerifiedDeal: false,
+    views: 0,
+    likes: 0,
+    deliveryAvailable: false,
+    specifications: {},
+    tags: [],
+    ...data,
+    id,
+    title: data.title || 'Untitled ad',
+    images: Array.isArray(data.images) ? data.images : [],
+    location: { city: data.location?.city || '', neighborhood: data.location?.neighborhood || '' },
+    seller: {
+      id: sellerId,
+      name: 'Seller',
+      avatar: '',
+      isVerified: false,
+      memberSince: '',
+      rating: 0,
+      reviewCount: 0,
+      phone: '',
+      whatsapp: '',
+      location: '',
+      responseRate: '',
+      responseTime: '',
+      ...(data.seller || {}),
+    },
+    sellerId,
+    createdAtISO,
+    createdAt: timeAgo(createdAtISO),
+  } as StoredListing;
 }
 
 /** Removes keys with undefined values; Firestore rejects them. */
@@ -857,10 +906,45 @@ export async function submitReport(listing: { id: string; title: string; sellerI
   }));
 }
 
+/** Reports a person (e.g. from a chat) to the admins. Shown in the admin reports list. */
+export async function reportUser(person: { id: string; name: string }, reason: string, details: string) {
+  const user = auth.currentUser;
+  if (!user) throw new Error('Please log in to report someone.');
+  const ref = doc(collection(db, 'reports'));
+  await setDoc(ref, stripUndefined({
+    id: ref.id,
+    kind: 'user',
+    listingId: '',
+    listingTitle: `User: ${person.name}`,
+    sellerId: person.id,
+    reason,
+    details: details.slice(0, 2000),
+    reporterId: user.uid,
+    reporterEmail: user.email || '',
+    status: 'open',
+    createdAtISO: new Date().toISOString(),
+  }));
+}
+
+/** Blocks a person: they can no longer message or call you, and you no longer see their ads or chats. */
+export async function blockUser(otherId: string) {
+  const uid = auth.currentUser?.uid;
+  if (!uid) throw new Error('Please log in again.');
+  await updateDoc(doc(db, 'users', uid), { blockedUserIds: arrayUnion(otherId) });
+}
+
+export async function unblockUser(otherId: string) {
+  const uid = auth.currentUser?.uid;
+  if (!uid) throw new Error('Please log in again.');
+  await updateDoc(doc(db, 'users', uid), { blockedUserIds: arrayRemove(otherId) });
+}
+
 export type ReportStatus = 'open' | 'resolved' | 'dismissed';
 
 export interface ReportDoc {
   id: string;
+  /** 'user' for a reported person; ads otherwise */
+  kind?: 'user';
   listingId: string;
   listingTitle: string;
   sellerId?: string;

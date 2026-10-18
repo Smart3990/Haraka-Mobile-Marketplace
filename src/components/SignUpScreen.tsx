@@ -25,7 +25,7 @@ export default function SignUpScreen({
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [agreeTerms, setAgreeTerms] = useState(true);
+  const [agreeTerms, setAgreeTerms] = useState(false);
   const [error, setError] = useState('');
   const [isSocialLoading, setIsSocialLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);

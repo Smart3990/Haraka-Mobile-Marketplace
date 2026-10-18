@@ -16,6 +16,12 @@ service cloud.firestore {
       return isSignedIn() && request.auth.token.email == 'blanc.69458@gmail.com';
     }
 
+    // True when that person has blocked the signed-in user
+    function blockedBy(uid) {
+      return uid != request.auth.uid
+        && request.auth.uid in get(/databases/$(database)/documents/users/$(uid)).data.get('blockedUserIds', []);
+    }
+
     // Signed in with a confirmed email address (needed to post, message, call, book, review or apply)
     function isVerifiedUser() {
       return isSignedIn() && (request.auth.token.email_verified == true || isSystemAdmin());
@@ -151,7 +157,9 @@ service cloud.firestore {
         }
         allow read: if isSignedIn() && request.auth.uid in chatParticipants();
         allow create: if isVerifiedUser() && request.auth.uid in chatParticipants()
-          && request.resource.data.senderId == request.auth.uid;
+          && request.resource.data.senderId == request.auth.uid
+          // Nobody can message a person who blocked them
+          && !blockedBy(chatParticipants()[0]) && !blockedBy(chatParticipants()[1]);
         // Only the person who received an offer can accept it; anyone in the chat can hide a message for themselves
         allow update: if isSignedIn() && request.auth.uid in chatParticipants() && (
           (resource.data.senderId != request.auth.uid
@@ -234,7 +242,8 @@ service cloud.firestore {
         && request.resource.data.calleeId is string
         && request.resource.data.calleeId != request.auth.uid
         && request.resource.data.participants == [request.auth.uid, request.resource.data.calleeId]
-        && request.resource.data.status == 'ringing';
+        && request.resource.data.status == 'ringing'
+        && !blockedBy(request.resource.data.calleeId);
       allow update: if isSignedIn() && isCallParty()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'answer', 'answeredAtISO', 'endedAtISO'])
         && request.resource.data.status in ['accepted', 'declined', 'ended', 'missed']

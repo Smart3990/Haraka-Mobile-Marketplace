@@ -104,6 +104,8 @@ import {
   Volume2,
   VolumeX,
   Flag,
+  MoreVertical,
+  Ban,
   XCircle,
   CheckCircle2,
   UserCheck,
@@ -160,6 +162,9 @@ import {
   signOutUser,
   submitApplication,
   submitReport,
+  reportUser,
+  blockUser,
+  unblockUser,
   watchAllApplications,
   watchAdminAccess,
   watchArtisanBookings,
@@ -184,6 +189,7 @@ import {
   type ArtisanProfileDoc,
   type BookingDoc,
   type ChatDoc,
+  type StoredListing,
   type ChatMessageDoc,
   type ReviewDoc,
   type PlatformStats,
@@ -1495,7 +1501,11 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
       })
       .catch((err) => {
         console.warn('Could not send message', err);
-        showToast('⚠️ Message not sent. Check your connection and try again.');
+        showToast(
+          (err as { code?: string })?.code === 'permission-denied'
+            ? '⚠️ Message not sent. This person is not accepting messages from you.'
+            : '⚠️ Message not sent. Check your connection and try again.'
+        );
         if (textToSend === undefined) setChatInputText(rawText);
       });
   };
@@ -1874,6 +1884,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
         setSavedIds(profile.savedListingIds || []);
         setFollowedSellerIds(profile.followedSellerIds || []);
         setNotificationsReadAt(profile.notificationsReadAtISO || '');
+        setBlockedUserIds(profile.blockedUserIds || []);
         profileLoadedRef.current = true;
       }
       if (profile?.role) {
@@ -2231,6 +2242,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
                   <p className="text-[11px] text-slate-400 break-all">Reported by {r.reporterEmail || 'a user'}</p>
                   {r.status === 'open' ? (
                     <div className="flex gap-1.5 pt-1">
+                      {r.kind !== 'user' && (
                       <button
                         type="button"
                         onClick={() => {
@@ -2241,6 +2253,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
                       >
                         <ExternalLink size={12} /> View Ad
                       </button>
+                      )}
                       <button
                         type="button"
                         disabled={busyReportId === r.id}
@@ -2249,6 +2262,16 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
                       >
                         Dismiss
                       </button>
+                      {r.kind === 'user' ? (
+                        <button
+                          type="button"
+                          disabled={busyReportId === r.id}
+                          onClick={() => handleResolveReport(r, 'resolved')}
+                          className="flex-1 py-1.5 rounded-xl bg-emerald-600 text-white font-bold text-[11px] cursor-pointer disabled:opacity-50"
+                        >
+                          Mark Handled
+                        </button>
+                      ) : (
                       <button
                         type="button"
                         disabled={busyReportId === r.id}
@@ -2257,6 +2280,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
                       >
                         <Trash2 size={12} /> {confirmRemoveAdReport === r.id ? 'Tap to confirm' : 'Remove Ad'}
                       </button>
+                      )}
                     </div>
                   ) : (
                     <p className="text-[10.5px] font-semibold text-emerald-700">
@@ -2459,13 +2483,128 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
   // ---------- Press and hold a message or a conversation to delete it ----------
   type ChatActionTarget =
     | { kind: 'message'; id: string; mine: boolean; text: string }
-    | { kind: 'chat'; id: string; name: string };
+    | { kind: 'chat'; id: string; name: string }
+    | { kind: 'person'; id: string; name: string };
   const [chatAction, setChatAction] = useState<ChatActionTarget | null>(null);
   const [chatActionBusy, setChatActionBusy] = useState(false);
 
+  // Report a person (from a chat)
+  const [reportPerson, setReportPerson] = useState<{ id: string; name: string } | null>(null);
+  const [reportPersonReason, setReportPersonReason] = useState('');
+  const [reportPersonDetails, setReportPersonDetails] = useState('');
+  const [reportPersonBusy, setReportPersonBusy] = useState(false);
+  const [reportPersonSent, setReportPersonSent] = useState(false);
+  const REPORT_PERSON_REASONS = ['Scam or fraud', 'Harassment or threats', 'Offensive messages', 'Spam', 'Fake profile', 'Something else'];
+
+  const submitPersonReport = async () => {
+    if (!reportPerson || !reportPersonReason) return;
+    setReportPersonBusy(true);
+    try {
+      await reportUser(reportPerson, reportPersonReason, reportPersonDetails.trim());
+      setReportPersonSent(true);
+    } catch (err) {
+      console.warn('Could not send report', err);
+      showToast('⚠️ Could not send the report. Check your connection and try again.');
+    } finally {
+      setReportPersonBusy(false);
+    }
+  };
+
+  const toggleBlock = async (person: { id: string; name: string }) => {
+    const isBlocked = blockedUserIds.includes(person.id);
+    setChatActionBusy(true);
+    try {
+      if (isBlocked) await unblockUser(person.id);
+      else await blockUser(person.id);
+      setChatAction(null);
+    } catch (err) {
+      console.warn('Could not update block', err);
+      showToast('⚠️ Could not update. Check your connection and try again.');
+    } finally {
+      setChatActionBusy(false);
+    }
+  };
+
+  const renderReportPersonModal = () => {
+    if (!reportPerson) return null;
+    const close = () => {
+      if (reportPersonBusy) return;
+      setReportPerson(null);
+      setReportPersonReason('');
+      setReportPersonDetails('');
+      setReportPersonSent(false);
+    };
+    return (
+      <div className="fixed inset-0 z-[86] bg-slate-900/40 flex items-end justify-center" onClick={close}>
+        <div
+          className="w-full max-w-md bg-white rounded-t-3xl px-4 pt-3 pb-[calc(env(safe-area-inset-bottom,0px)+16px)] space-y-3 shadow-2xl max-h-[85%] overflow-y-auto"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="w-10 h-1.5 rounded-full bg-slate-200 mx-auto" />
+          {reportPersonSent ? (
+            <div className="text-center space-y-2 py-4">
+              <div className="w-12 h-12 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto">
+                <CheckCircle2 size={26} />
+              </div>
+              <p className="text-sm font-black text-slate-900">Thanks, we received your report</p>
+              <p className="text-xs text-slate-500 leading-relaxed px-4">
+                Haraka admins will review it. You can also block {reportPerson.name} so they can't message or call you.
+              </p>
+              <button type="button" onClick={close} className="w-full mt-2 py-3 rounded-2xl bg-slate-900 text-white text-sm font-bold cursor-pointer">
+                Done
+              </button>
+            </div>
+          ) : (
+            <>
+              <div>
+                <p className="text-sm font-black text-slate-900">Report {reportPerson.name}</p>
+                <p className="text-xs text-slate-500">Your report is private. Admins review every report.</p>
+              </div>
+              <div className="space-y-1.5">
+                {REPORT_PERSON_REASONS.map((reason) => (
+                  <button
+                    key={reason}
+                    type="button"
+                    onClick={() => setReportPersonReason(reason)}
+                    className={`w-full py-3 px-3.5 rounded-xl text-sm font-semibold text-left border cursor-pointer ${
+                      reportPersonReason === reason ? 'border-red-400 bg-red-50 text-red-700' : 'border-slate-200 text-slate-700'
+                    }`}
+                  >
+                    {reason}
+                  </button>
+                ))}
+              </div>
+              <textarea
+                value={reportPersonDetails}
+                onChange={(e) => setReportPersonDetails(e.target.value)}
+                rows={3}
+                maxLength={2000}
+                placeholder="Tell us what happened (optional)"
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none focus:border-red-400 focus:bg-white"
+              />
+              <div className="flex gap-2">
+                <button type="button" onClick={close} className="flex-1 py-3 rounded-2xl border border-slate-200 text-slate-600 text-sm font-bold cursor-pointer">
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={submitPersonReport}
+                  disabled={!reportPersonReason || reportPersonBusy}
+                  className="flex-1 py-3 rounded-2xl bg-red-600 text-white text-sm font-bold cursor-pointer disabled:opacity-50"
+                >
+                  {reportPersonBusy ? 'Sending…' : 'Send Report'}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   const runChatAction = async (action: 'everyone' | 'me' | 'chat' | 'copy') => {
     const target = chatAction;
-    if (!target) return;
+    if (!target || target.kind === 'person') return;
     if (action === 'copy' && target.kind === 'message') {
       navigator.clipboard?.writeText(target.text).catch(() => undefined);
       setChatAction(null);
@@ -2519,7 +2658,38 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
           onClick={(e) => e.stopPropagation()}
         >
           <div className="w-10 h-1.5 rounded-full bg-slate-200 mx-auto mb-2" />
-          {chatAction.kind === 'chat' ? (
+          {chatAction.kind === 'person' ? (
+            <>
+              <p className="text-sm font-black text-slate-900 px-1 pb-1">{chatAction.name}</p>
+              <button
+                type="button"
+                onClick={() => {
+                  setReportPerson({ id: chatAction.id, name: chatAction.name });
+                  setChatAction(null);
+                }}
+                className="w-full py-3.5 px-4 rounded-2xl text-sm font-bold text-left flex items-center gap-3 cursor-pointer text-slate-800 bg-slate-50 active:bg-slate-100"
+              >
+                <Flag size={18} />
+                <span>Report {chatAction.name}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => toggleBlock(chatAction)}
+                disabled={chatActionBusy}
+                className="w-full py-3.5 px-4 rounded-2xl text-sm font-bold text-left flex items-center gap-3 cursor-pointer text-red-600 bg-red-50 active:bg-red-100 disabled:opacity-60"
+              >
+                <Ban size={18} />
+                <span>
+                  {chatActionBusy ? 'Please wait…' : blockedUserIds.includes(chatAction.id) ? `Unblock ${chatAction.name}` : `Block ${chatAction.name}`}
+                </span>
+              </button>
+              {!blockedUserIds.includes(chatAction.id) && (
+                <p className="text-[11px] text-slate-500 px-1 leading-relaxed">
+                  Blocked people can't message or call you, and you won't see their ads.
+                </p>
+              )}
+            </>
+          ) : chatAction.kind === 'chat' ? (
             <>
               <p className="text-sm font-black text-slate-900 px-1">Delete chat with {chatAction.name}?</p>
               <p className="text-xs text-slate-500 px-1 pb-1 leading-relaxed">
@@ -2792,6 +2962,13 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
 
   // ---------- Real chat: conversations and messages live from Firestore ----------
   const [chatDocs, setChatDocs] = useState<ChatDoc[]>([]);
+  // People the user blocked (from their account): their ads are hidden and they cannot message or call
+  const [blockedUserIds, setBlockedUserIds] = useState<string[]>([]);
+  const blockedUserIdsRef = useRef<string[]>([]);
+  blockedUserIdsRef.current = blockedUserIds;
+  useEffect(() => {
+    if (!firebaseUid) setBlockedUserIds([]);
+  }, [firebaseUid]);
   const [chatsLoaded, setChatsLoaded] = useState(false);
   const [activeChatMessages, setActiveChatMessages] = useState<ChatMessageDoc[]>([]);
   const activeChatId = currentRoute.type === 'chat' ? currentRoute.id : '';
@@ -2892,14 +3069,23 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
 
   // Live marketplace listings from Firestore, shown above the built-in sample listings
   const [listingsLoaded, setListingsLoaded] = useState(false);
+  const remoteListingsRef = useRef<StoredListing[]>([]);
+  const showRemoteListings = (remote: StoredListing[]) => {
+    const remoteIds = new Set(remote.map((l) => l.id));
+    const visible = remote.filter((l) => !blockedUserIdsRef.current.includes(l.sellerId || ''));
+    setListings((prev) => [
+      ...visible,
+      ...prev.filter((l) => !remoteIds.has(l.id) && !l.id.startsWith('listing-new-')),
+    ]);
+  };
+  useEffect(() => {
+    if (remoteListingsRef.current.length) showRemoteListings(remoteListingsRef.current);
+  }, [blockedUserIds]);
   useEffect(() => {
     return watchListings((remote) => {
       setListingsLoaded(true);
-      const remoteIds = new Set(remote.map((l) => l.id));
-      setListings((prev) => [
-        ...remote,
-        ...prev.filter((l) => !remoteIds.has(l.id) && !l.id.startsWith('listing-new-')),
-      ]);
+      remoteListingsRef.current = remote;
+      showRemoteListings(remote);
       const uid = firebaseUidRef.current;
       if (!uid) return;
       const mine = remote.filter((l) => l.sellerId === uid);
@@ -12597,6 +12783,7 @@ export default function RootLayout() {
         }
         const activeChatDoc = chatDocs.find((c) => c.id === activeConv.id);
         const amBuyer = activeChatDoc?.buyerId === firebaseUid;
+        const chatBlocked = blockedUserIds.includes(activeConv.otherUser.id);
 
         const sellerFirstName = activeConv.otherUser.name.split(' ')[0] || 'Seller';
         const contactPhone = activeConv.otherUser.phone || '';
@@ -12653,7 +12840,8 @@ export default function RootLayout() {
                   <p className="text-[11px] text-slate-500 font-semibold">{amBuyer ? 'Seller' : 'Buyer'}</p>
                 </div>
               </div>
-              <div>
+              <div className="flex items-center gap-1.5">
+                {!chatBlocked && (
                 <button
                   type="button"
                   onClick={() => startCall(activeConv.otherUser.name, activeConv.otherUser.avatar, contactPhone, activeConv.otherUser.id)}
@@ -12661,6 +12849,16 @@ export default function RootLayout() {
                   title="Call"
                 >
                   <Phone size={15} />
+                </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setChatAction({ kind: 'person', id: activeConv.otherUser.id, name: activeConv.otherUser.name })}
+                  className="w-9 h-9 rounded-full text-slate-600 hover:bg-slate-100 active:bg-slate-100 flex items-center justify-center cursor-pointer"
+                  title="More"
+                  aria-label="More options"
+                >
+                  <MoreVertical size={18} />
                 </button>
               </div>
             </div>
@@ -12861,6 +13059,22 @@ export default function RootLayout() {
               <div ref={chatMessagesEndRef} />
             </div>
 
+            {chatBlocked ? (
+              <div className="bg-white border-t border-slate-200 px-4 py-3.5 text-center space-y-2">
+                <p className="text-xs text-slate-600">
+                  You blocked {activeConv.otherUser.name}. They can't message or call you.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => toggleBlock({ id: activeConv.otherUser.id, name: activeConv.otherUser.name })}
+                  disabled={chatActionBusy}
+                  className="px-4 py-2 rounded-full border border-slate-300 text-slate-800 text-xs font-bold cursor-pointer disabled:opacity-60"
+                >
+                  Unblock
+                </button>
+              </div>
+            ) : (
+            <>
             {/* Quick Action Chips above text field */}
             <div className="px-3.5 py-2 bg-white border-t border-slate-100 flex flex-col gap-1.5 shadow-2xs z-10">
               <div className="flex gap-2 overflow-x-auto no-scrollbar py-0.5">
@@ -12980,6 +13194,8 @@ export default function RootLayout() {
                 <Send size={17} />
               </button>
             </form>
+            </>
+            )}
 
             {/* Custom Offer Modal Sheet */}
             {showCustomOfferModal && (
@@ -23211,6 +23427,7 @@ export default function RootLayout() {
                 {renderCallModal()}
                 {renderDeleteAccountModal()}
                 {renderChatActionSheet()}
+                {renderReportPersonModal()}
                 {renderPolicyViewer()}
               </div>
 
@@ -23370,6 +23587,7 @@ export default function RootLayout() {
                   {renderCallModal()}
                   {renderDeleteAccountModal()}
                 {renderChatActionSheet()}
+                {renderReportPersonModal()}
                 </div>
 
                 {/* BOTTOM TAB BAR (Navigation) matching user screenshot */}
