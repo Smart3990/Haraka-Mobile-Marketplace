@@ -925,10 +925,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
           setEditArtisanForm((prev) => ({ ...prev, avatar: result }));
           if (firebaseUidRef.current) {
             saveUserProfile(firebaseUidRef.current, { avatar: result })
-              .then(() => showToast('Profile photo updated!'))
               .catch(() => showToast('⚠️ Profile photo could not be saved. Check your connection.'));
-          } else {
-            showToast('Profile photo added.');
           }
         }
       };
@@ -10600,11 +10597,29 @@ export default function RootLayout() {
                   </div>
                 )}
 
-                {/* User Identity Card - STRICTLY ZERO TEXT BACKGROUND COLORS */}
-                <div className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-2xs">
+                {/* Photo picker for the profile picture (camera or gallery) */}
+                <input
+                  type="file"
+                  ref={profilePhotoFileInputRef}
+                  accept="image/*"
+                  onChange={(e) => {
+                    handleProfilePhotoUpload(e);
+                    e.target.value = ''; // picking the same photo again still works
+                  }}
+                  className="hidden"
+                />
+
+                {/* User Identity Card: tap anywhere to see profile progress; tap the photo to change it */}
+                <div
+                  onClick={() => setShowProfileCompletionSheet(true)}
+                  className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-2xs cursor-pointer active:bg-slate-50/60 transition-colors"
+                >
                   <div className="flex items-center gap-3 mb-3">
                     <div
-                      onClick={() => profilePhotoFileInputRef.current?.click()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        profilePhotoFileInputRef.current?.click();
+                      }}
                       className="relative shrink-0 cursor-pointer group"
                       title="Tap to change profile photo"
                     >
@@ -10620,8 +10635,8 @@ export default function RootLayout() {
                           <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tight">Upload</span>
                         </div>
                       )}
-                      <div className="absolute -bottom-1 -right-1 w-5.5 h-5.5 rounded-full bg-slate-900 text-white flex items-center justify-center border-2 border-white shadow-xs group-hover:bg-[#FF6A00] transition-colors">
-                        <Camera size={10} className="stroke-[2.5]" />
+                      <div className="absolute -bottom-1.5 -right-1.5 w-6.5 h-6.5 rounded-full bg-slate-900 text-white flex items-center justify-center border-2 border-white shadow-xs group-hover:bg-[#FF6A00] transition-colors">
+                        <Camera size={12} className="stroke-[2.5]" />
                       </div>
                     </div>
 
@@ -10660,7 +10675,7 @@ export default function RootLayout() {
                       {currentUserRole === 'admin' && (
                         <p className="text-[11px] font-bold text-indigo-700 truncate mt-0.5 flex items-center gap-1">
                           <ShieldCheck size={12} className="text-indigo-600 shrink-0" />
-                          <span className="truncate">Haraka Platform Administrator</span>
+                          <span className="truncate">{adminAccess.isSystemAdmin ? 'System Admin' : 'Haraka Administrator'}</span>
                         </p>
                       )}
 
@@ -11276,15 +11291,6 @@ export default function RootLayout() {
               {/* Complete Edit Profile Modal - Border lines removed for clean modern UI */}
               {showEditProfileModal && (
                 <div className="absolute inset-0 z-50 bg-black/65 backdrop-blur-2xs flex items-center justify-center p-3 animate-in fade-in duration-150">
-                  {/* Hidden file input for native device image upload */}
-                  <input
-                    type="file"
-                    ref={profilePhotoFileInputRef}
-                    accept="image/*"
-                    onChange={handleProfilePhotoUpload}
-                    className="hidden"
-                  />
-
                   <div className="bg-white rounded-3xl max-w-[340px] w-full p-4 shadow-2xl space-y-3 max-h-[90%] flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
                     {/* Modal Header (Pinned) - Clean borderless */}
                     <div className="flex items-center justify-between pb-1.5 shrink-0">
@@ -23210,7 +23216,7 @@ export default function RootLayout() {
 
               {/* Bottom Tab Bar matching user screenshot */}
               {currentRoute.type === 'tabs' && !needsEmailVerification && !viewingApplicantDetails && !viewingArtisanBookingDetails && (
-                <div className="sticky bottom-0 left-0 right-0 shrink-0 bg-white border-t border-slate-200/80 py-2 px-3 flex items-center justify-around z-40 select-none shadow-lg">
+                <div className="sticky bottom-0 left-0 right-0 shrink-0 bg-white border-t border-slate-200/80 pt-2 pb-[calc(env(safe-area-inset-bottom,0px)+14px)] px-3 flex items-center justify-around z-40 select-none shadow-lg">
                   {/* 1. Explore */}
                   <button
                     onClick={() => handleTabPress('home')}
@@ -23368,7 +23374,7 @@ export default function RootLayout() {
 
                 {/* BOTTOM TAB BAR (Navigation) matching user screenshot */}
                 {currentRoute.type === 'tabs' && !needsEmailVerification && !viewingApplicantDetails && !viewingArtisanBookingDetails && (
-                  <div className="bg-white border-t border-slate-200/80 py-2 px-3 flex items-center justify-around z-40 select-none shadow-lg">
+                  <div className="bg-white border-t border-slate-200/80 pt-2 pb-[calc(env(safe-area-inset-bottom,0px)+14px)] px-3 flex items-center justify-around z-40 select-none shadow-lg">
                     {/* 1. Explore */}
                     <button
                       onClick={() => handleTabPress('home')}

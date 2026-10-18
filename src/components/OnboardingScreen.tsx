@@ -39,8 +39,8 @@ export default function OnboardingScreen({ onFinish, onSkip }: OnboardingScreenP
   };
 
   return (
-    <main className="flex-1 flex flex-col relative w-full bg-[#faf8ff] font-['Plus_Jakarta_Sans',sans-serif] text-[#131b2e] min-h-[580px] h-full overflow-y-auto no-scrollbar select-none">
-      <div className="flex flex-col w-full max-w-md mx-auto px-5 pt-3 pb-8 flex-1 justify-between">
+    <main className="flex-1 flex flex-col relative w-full bg-[#faf8ff] font-['Plus_Jakarta_Sans',sans-serif] text-[#131b2e] h-full overflow-y-auto no-scrollbar select-none">
+      <div className="flex flex-col w-full max-w-md mx-auto px-5 pt-3 pb-12 [@media(max-height:620px)]:pb-6 flex-1 justify-between">
         {/* Top Bar with Skip or Done */}
         <div className="flex items-center justify-end w-full py-2">
           {currentSlide === 2 ? (
@@ -82,7 +82,7 @@ export default function OnboardingScreen({ onFinish, onSkip }: OnboardingScreenP
         </div>
 
         {/* Center Visual Mockup Card */}
-        <div className="relative w-full flex items-center justify-center py-2 my-auto">
+        <div className="relative w-full flex items-center justify-center py-2 my-auto [@media(max-height:760px)]:scale-[0.85] [@media(max-height:760px)]:-my-[24px] [@media(max-height:620px)]:scale-[0.66]! [@media(max-height:620px)]:-my-[54px]!">
           {currentSlide === 0 ? (
             /* Onboarding 1 - Verified Deals Nearby Visual Card Mockup */
             <div className="relative w-full max-w-[280px] flex items-center justify-center">
@@ -231,9 +231,9 @@ export default function OnboardingScreen({ onFinish, onSkip }: OnboardingScreenP
           ) : (
             /* Slide 3 - Safe Meetups & Audio description (Exact Reference Design) */
             <div className="flex flex-col items-center justify-center my-2">
-              <div className="relative w-72 h-72 flex items-center justify-center">
+              <div className="relative w-[288px] h-[288px] flex items-center justify-center">
                 <div className="absolute inset-4 rounded-full bg-[#7ffaba]/30 filter blur-2xl animate-pulse" />
-                <div className="relative w-64 h-64 rounded-3xl bg-white shadow-xl flex flex-col items-center justify-between p-4 overflow-hidden border border-slate-100">
+                <div className="relative w-[256px] h-[256px] rounded-3xl bg-white shadow-xl flex flex-col items-center justify-between p-4 overflow-hidden border border-slate-100">
                   {/* Top Tags row */}
                   <div className="w-full flex items-center justify-between gap-1">
                     <div className="flex items-center gap-1.5 bg-[#eaedff] px-2.5 py-1 rounded-full whitespace-nowrap shrink-0">
@@ -281,7 +281,7 @@ export default function OnboardingScreen({ onFinish, onSkip }: OnboardingScreenP
         <div className="flex flex-col items-center text-center mt-3 px-2">
           {currentSlide === 0 ? (
             <>
-              <h1 className="text-2xl sm:text-[26px] font-black text-slate-900 tracking-tight">
+              <h1 className="text-2xl sm:text-[26px] [@media(max-height:620px)]:text-xl font-black text-slate-900 tracking-tight">
                 Find Verified Deals Nearby
               </h1>
               <p className="text-xs sm:text-sm text-slate-500 mt-2 max-w-[340px] leading-relaxed">
@@ -290,7 +290,7 @@ export default function OnboardingScreen({ onFinish, onSkip }: OnboardingScreenP
             </>
           ) : currentSlide === 1 ? (
             <>
-              <h1 className="text-2xl sm:text-[26px] font-black text-slate-900 tracking-tight">
+              <h1 className="text-2xl sm:text-[26px] [@media(max-height:620px)]:text-xl font-black text-slate-900 tracking-tight">
                 Snap, Record &amp; Sell in 60s
               </h1>
               <p className="text-xs sm:text-sm text-slate-500 mt-2 max-w-[340px] leading-relaxed">
@@ -299,7 +299,7 @@ export default function OnboardingScreen({ onFinish, onSkip }: OnboardingScreenP
             </>
           ) : (
             <>
-              <h1 className="text-2xl sm:text-[26px] font-black text-slate-900 tracking-tight">
+              <h1 className="text-2xl sm:text-[26px] [@media(max-height:620px)]:text-xl font-black text-slate-900 tracking-tight">
                 Safe Meetups &amp; Audio description
               </h1>
               <p className="text-xs sm:text-sm text-slate-500 mt-2 max-w-[340px] leading-relaxed">
@@ -310,7 +310,7 @@ export default function OnboardingScreen({ onFinish, onSkip }: OnboardingScreenP
         </div>
 
         {/* Bottom CTA Button matching reference */}
-        <div className="flex flex-col items-center gap-2 mt-5 w-full">
+        <div className="flex flex-col items-center gap-2 mt-5 [@media(max-height:620px)]:mt-3 w-full">
           <button
             type="button"
             onClick={handleNext}

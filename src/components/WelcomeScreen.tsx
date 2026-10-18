@@ -42,7 +42,7 @@ export default function WelcomeScreen({
       </div>
 
       {/* Bottom Actions */}
-      <div className="w-full shrink-0 flex flex-col items-center gap-3 pt-2 pb-2 sm:pb-3">
+      <div className="w-full shrink-0 flex flex-col items-center gap-3 pt-4 pb-10">
         {/* Sign Up Button */}
         <button
           type="button"
