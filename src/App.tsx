@@ -2826,6 +2826,143 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
   const clearPicked = (e: React.MouseEvent<HTMLInputElement>) => {
     e.currentTarget.value = ''; // picking the same file again still counts as a change
   };
+  // ---------- System admin: correct any seller's ad from the ad page ----------
+  const [adminEditAd, setAdminEditAd] = useState<{
+    id: string;
+    sellerId: string;
+    title: string;
+    price: string;
+    description: string;
+    condition: string;
+    city: string;
+    neighborhood: string;
+    isSold: boolean;
+  } | null>(null);
+  const [isSavingAdminEdit, setIsSavingAdminEdit] = useState(false);
+
+  const openAdminEditAd = (item: Listing) =>
+    setAdminEditAd({
+      id: item.id,
+      sellerId: (item as { sellerId?: string }).sellerId || item.seller?.id || '',
+      title: item.title || '',
+      price: String(item.price ?? ''),
+      description: item.description || '',
+      condition: item.condition || 'Used - Good',
+      city: item.location?.city || '',
+      neighborhood: item.location?.neighborhood || '',
+      isSold: Boolean(item.isSold),
+    });
+
+  const saveAdminEditAd = async () => {
+    const edit = adminEditAd;
+    if (!edit || isSavingAdminEdit) return;
+    const price = Number(edit.price);
+    if (!edit.title.trim() || !Number.isFinite(price) || price <= 0) {
+      showToast('⚠️ Enter a title and a price above GH₵ 0.');
+      return;
+    }
+    const changes = {
+      title: edit.title.trim(),
+      price,
+      description: edit.description.trim(),
+      condition: edit.condition as Listing['condition'],
+      location: { city: edit.city.trim(), neighborhood: edit.neighborhood.trim() },
+      isSold: edit.isSold,
+    };
+    setIsSavingAdminEdit(true);
+    try {
+      await updateRemoteListing(edit.id, changes);
+      setListings((prev) => prev.map((l) => (l.id === edit.id ? { ...l, ...changes } : l)));
+      notifyUser(edit.sellerId, 'Your ad was updated by Haraka', `"${changes.title}" was corrected by a Haraka admin.`, { type: 'listing', id: edit.id });
+      setAdminEditAd(null);
+      showToast('Ad updated');
+    } catch (err) {
+      console.warn('Could not update ad', err);
+      showToast('⚠️ The ad could not be updated. Try again.');
+    } finally {
+      setIsSavingAdminEdit(false);
+    }
+  };
+
+  const renderAdminEditAdSheet = () => {
+    if (!adminEditAd || !adminAccess.isSystemAdmin) return null;
+    const edit = adminEditAd;
+    const set = (patch: Partial<typeof edit>) => setAdminEditAd({ ...edit, ...patch });
+    const close = () => !isSavingAdminEdit && setAdminEditAd(null);
+    const field = 'w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none focus:border-orange-500 focus:bg-white';
+    const label = 'text-xs font-bold text-slate-700 block mb-1';
+    return (
+      <div className="fixed inset-0 z-[86] bg-slate-900/40 flex items-end justify-center" onClick={close}>
+        <div
+          className="w-full max-w-md bg-white rounded-t-3xl px-4 pt-3 pb-[calc(env(safe-area-inset-bottom,0px)+16px)] space-y-3 shadow-2xl max-h-[90%] overflow-y-auto"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="w-10 h-1.5 rounded-full bg-slate-200 mx-auto" />
+          <div>
+            <p className="text-base font-black text-slate-900">Edit Ad</p>
+            <p className="text-xs text-slate-500">System admin only. The seller is notified of the change.</p>
+          </div>
+          <div>
+            <label className={label} htmlFor="admin-ad-title">Title</label>
+            <input id="admin-ad-title" className={field} value={edit.title} maxLength={120} onChange={(e) => set({ title: e.target.value })} />
+          </div>
+          <div>
+            <label className={label} htmlFor="admin-ad-price">Price (GH₵)</label>
+            <input id="admin-ad-price" className={field} inputMode="decimal" value={edit.price} onChange={(e) => set({ price: e.target.value.replace(/[^0-9.]/g, '') })} />
+          </div>
+          <div>
+            <label className={label} htmlFor="admin-ad-description">Description</label>
+            <textarea id="admin-ad-description" className={field} rows={4} maxLength={3000} value={edit.description} onChange={(e) => set({ description: e.target.value })} />
+          </div>
+          <div>
+            <span className={label}>Condition</span>
+            <div className="flex flex-wrap gap-1.5">
+              {['Brand New', 'Like New', 'Used - Good', 'Refurbished'].map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => set({ condition: c })}
+                  className={`py-1.5 px-3 rounded-xl text-xs font-bold border cursor-pointer ${
+                    edit.condition === c ? 'border-orange-500 bg-orange-50 text-orange-700' : 'border-slate-200 bg-slate-50 text-slate-600'
+                  }`}
+                >
+                  {c}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className={label} htmlFor="admin-ad-area">Area</label>
+              <input id="admin-ad-area" className={field} value={edit.neighborhood} onChange={(e) => set({ neighborhood: e.target.value })} />
+            </div>
+            <div>
+              <label className={label} htmlFor="admin-ad-region">Region</label>
+              <input id="admin-ad-region" className={field} value={edit.city} onChange={(e) => set({ city: e.target.value })} />
+            </div>
+          </div>
+          <label className="flex items-center gap-2 text-sm font-semibold text-slate-700 cursor-pointer">
+            <input type="checkbox" checked={edit.isSold} onChange={(e) => set({ isSold: e.target.checked })} className="w-4 h-4 accent-orange-600" />
+            <span>Mark as sold</span>
+          </label>
+          <div className="flex gap-2 pt-1">
+            <button type="button" onClick={close} className="flex-1 py-3 rounded-2xl border border-slate-200 text-slate-600 text-sm font-bold cursor-pointer">
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={saveAdminEditAd}
+              disabled={isSavingAdminEdit}
+              className="flex-[1.4] py-3 rounded-2xl bg-slate-900 text-white text-sm font-bold cursor-pointer disabled:opacity-60"
+            >
+              {isSavingAdminEdit ? 'Saving…' : 'Save Changes'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   // ---------- Approved partners: send the Ghana Card later to get the Verified badge ----------
   const verifyIdInputRef = useRef<HTMLInputElement>(null);
   const verifyIdSideRef = useRef<'front' | 'back'>('front');
@@ -3414,24 +3551,27 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
       remoteListingsRef.current = remote;
       showRemoteListings(remote);
       const uid = firebaseUidRef.current;
-      if (!uid) return;
+      if (!uid) {
+        setMyOwnListings([]);
+        return;
+      }
+      // "My ads" is exactly this account's ads in the database (deleted or other accounts' ads drop out);
+      // details added on this screen, such as an accepted offer, are kept
       const mine = remote.filter((l) => l.sellerId === uid);
       setMyOwnListings((prev) => {
-        const known = new Set(prev.map((m) => m.id));
-        const missing = mine
-          .filter((l) => !known.has(l.id))
-          .map((l) => ({
-            id: l.id,
-            title: l.title,
-            price: l.price,
-            currency: l.currency,
-            image: l.images[0] || '',
-            category: l.categoryName || 'General',
-            status: (l.isSold ? 'Sold' : 'Active') as 'Active' | 'Sold',
-            views: l.views || 0,
-            date: new Date(l.createdAtISO).toLocaleDateString(),
-          }));
-        return missing.length ? [...prev, ...missing] : prev;
+        const before = new Map(prev.map((m) => [m.id, m]));
+        return mine.map((l) => ({
+          ...before.get(l.id),
+          id: l.id,
+          title: l.title,
+          price: l.price,
+          currency: l.currency,
+          image: l.images[0] || '',
+          category: l.categoryName || 'General',
+          status: (l.isSold ? 'Sold' : 'Active') as 'Active' | 'Sold',
+          views: l.views || 0,
+          date: new Date(l.createdAtISO).toLocaleDateString(),
+        }));
       });
     });
   }, [firebaseUid]);
@@ -12652,8 +12792,10 @@ export default function RootLayout() {
         const itemImages = (item.images && item.images.length > 0)
           ? item.images
           : [PLACEHOLDER_IMAGE];
+        // Same seller account only (names are not unique), ads that are still for sale
+        const itemSellerId = (item as { sellerId?: string }).sellerId || item.seller.id;
         const sellerActiveListings = listings.filter(
-          (l) => l.seller.id === item.seller.id || (l.seller.name && item.seller.name && l.seller.name.toLowerCase() === item.seller.name.toLowerCase())
+          (l) => ((l as { sellerId?: string }).sellerId || l.seller.id) === itemSellerId && !l.isSold
         );
         const sellerListingsCount = Math.max(sellerActiveListings.length, 1);
 
@@ -12974,7 +13116,9 @@ export default function RootLayout() {
                     <button
                       type="button"
                       onClick={() => item.seller?.id && toggleFollowSeller(item.seller.id)}
-                      className="shrink-0 text-xs font-bold text-blue-600 hover:text-blue-700 transition-colors cursor-pointer py-1 px-1.5"
+                      className={`shrink-0 text-xs font-bold bg-transparent transition-colors cursor-pointer py-1 px-1.5 ${
+                        isFollowing ? 'text-emerald-600 hover:text-emerald-700' : 'text-blue-600 hover:text-blue-700'
+                      }`}
                     >
                       {isFollowing ? 'Following' : 'Follow'}
                     </button>
@@ -13211,7 +13355,16 @@ export default function RootLayout() {
 
               {/* 7. Report & Listing ID Row matching attached image */}
               <div className="bg-[#F1F5F9]/80 rounded-2xl px-4 py-3 flex items-center justify-between flex-nowrap gap-2">
-                {isMyAd ? (
+                {adminAccess.isSystemAdmin && !isMyAd ? (
+                  <button
+                    type="button"
+                    onClick={() => openAdminEditAd(item)}
+                    className="text-xs text-slate-900 font-bold cursor-pointer active:scale-95 transition-transform whitespace-nowrap flex items-center gap-1"
+                  >
+                    <Edit3 size={13} />
+                    <span>Edit ad (Admin)</span>
+                  </button>
+                ) : isMyAd ? (
                   <span className="text-xs text-slate-500 font-semibold whitespace-nowrap">Your ad</span>
                 ) : (
                   <button
@@ -23204,7 +23357,7 @@ export default function RootLayout() {
                     views: 1,
                     date: 'Just now',
                   };
-                  setMyOwnListings((prev) => [myNewAd, ...prev]);
+                  setMyOwnListings((prev) => [myNewAd, ...prev.filter((l) => l.id !== myNewAd.id)]);
                   setUserProfile((prev) => ({ ...prev, activeAdsCount: prev.activeAdsCount + 1 }));
 
                   // Reset all search and region filters so the new ad is visible front and center at the top
@@ -23854,6 +24007,7 @@ export default function RootLayout() {
                 {renderChatActionSheet()}
                 {renderReportPersonModal()}
                 {renderGetVerifiedSheet()}
+                {renderAdminEditAdSheet()}
                 {renderPolicyViewer()}
               </div>
 
@@ -24016,6 +24170,7 @@ export default function RootLayout() {
                 {renderChatActionSheet()}
                 {renderReportPersonModal()}
                 {renderGetVerifiedSheet()}
+                {renderAdminEditAdSheet()}
                 </div>
 
                 {/* BOTTOM TAB BAR (Navigation) matching user screenshot */}

@@ -130,9 +130,10 @@ service cloud.firestore {
       allow create: if isVerifiedUser() && isValidId(listingId)
         && request.resource.data.sellerId == request.auth.uid
         && userRole() in ['seller', 'artisan'];
+      // The seller edits their own ad; only the system admin can correct someone else's ad
       allow update: if isSignedIn() && isValidId(listingId) && (
         (resource.data.sellerId == request.auth.uid && request.resource.data.sellerId == request.auth.uid)
-        || isAdmin()
+        || (isSystemAdmin() && request.resource.data.sellerId == resource.data.sellerId)
       );
       allow delete: if isSignedIn() && isValidId(listingId) && (
         resource.data.sellerId == request.auth.uid || isAdmin()
