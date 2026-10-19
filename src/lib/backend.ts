@@ -558,6 +558,8 @@ export async function decideApplication(app: StoredApplication, decision: Applic
     throw new Error('All required documents (Ghana Card number and both photos) are needed to verify.');
   }
   const approved = decision !== 'reject';
+  // The photo from the application becomes the account's profile photo (stored, not kept full size)
+  const avatar = approved && app.avatar ? ((await storeMedia(app.avatar, 'avatars', 120_000).catch(() => '')) || '') : '';
   const batch = writeBatch(db);
   batch.update(doc(db, 'applications', app.uid), {
     status: approved ? 'approved' : 'rejected',
@@ -573,6 +575,7 @@ export async function decideApplication(app: StoredApplication, decision: Applic
     storeName: approved ? app.name || '' : '',
     ...(approved && app.phone ? { phone: app.phone } : {}),
     ...(approved && app.location ? { location: app.location } : {}),
+    ...(avatar ? { avatar } : {}),
   });
   if (app.role === 'artisan') {
     const profileRef = doc(db, 'artisans', app.uid);
@@ -581,7 +584,7 @@ export async function decideApplication(app: StoredApplication, decision: Applic
       batch.set(profileRef, { verified: decision === 'verify' }, { merge: true });
     } else if (approved) {
       const profile = publicArtisanProfile(app, decision === 'verify');
-      profile.avatar = (await storeMedia(profile.avatar, 'avatars', 120_000)) || '';
+      profile.avatar = avatar || (await storeMedia(profile.avatar, 'avatars', 120_000)) || '';
       profile.voiceIntroUrl = (await storeMedia(profile.voiceIntroUrl, 'voice', 0)) || '';
       profile.verifiedWorkPortfolio = await Promise.all(
         profile.verifiedWorkPortfolio.map(async (w) => ({ ...w, img: (await storeMedia(w.img, 'portfolio', 100_000)) || '' }))
@@ -961,8 +964,13 @@ export async function createListing(listing: Listing): Promise<StoredListing> {
     throw new Error('Voice note is too long to save. Please record a shorter one.');
   }
 
+  // The seller's photo travels with the ad: store it like any photo (a full-size camera photo
+  // would otherwise push the ad over the 1 MB record limit and it could not be saved)
+  const sellerAvatar = ((await storeMedia(listing.seller?.avatar, 'avatars', 40_000).catch(() => '')) || '') as string;
+
   // Without Cloudinary, photos share what is left of the 1 MB document
-  const photoBudget = Math.floor((LISTING_MEDIA_BUDGET - (audio?.startsWith('data:') ? audio.length : 0)) / Math.max(1, listing.images.length));
+  const mediaLeft = LISTING_MEDIA_BUDGET - (audio?.startsWith('data:') ? audio.length : 0) - (sellerAvatar.startsWith('data:') ? sellerAvatar.length : 0);
+  const photoBudget = Math.floor(mediaLeft / Math.max(1, listing.images.length));
   const images = (await Promise.all(listing.images.map((src) => storeMedia(src, 'listings', photoBudget)))) as string[];
 
   const stored: StoredListing = stripUndefined({
@@ -970,10 +978,19 @@ export async function createListing(listing: Listing): Promise<StoredListing> {
     images,
     hasAudioDescription: Boolean(audio),
     audioDescriptionUrl: audio,
-    seller: { ...listing.seller, id: uid },
+    seller: { ...listing.seller, id: uid, avatar: sellerAvatar },
     sellerId: uid,
     createdAtISO: new Date().toISOString(),
   });
+  // Last safety net: if it is still too big, shrink the photos kept inside the ad and drop the seller photo
+  if (JSON.stringify(stored).length > 1_000_000) {
+    stored.seller.avatar = sellerAvatar.startsWith('data:') ? '' : sellerAvatar;
+    const inline = stored.images.filter((src) => src.startsWith('data:')).length || 1;
+    stored.images = await Promise.all(stored.images.map((src) => compressImage(src, Math.floor(mediaLeft / inline / 2))));
+    if (JSON.stringify(stored).length > 1_000_000) {
+      throw new Error('Your photos and voice note are too large together. Please remove a photo or record a shorter voice note.');
+    }
+  }
   await setDoc(doc(db, 'listings', listing.id), stored);
   return { ...stored, createdAt: 'Just now' };
 }

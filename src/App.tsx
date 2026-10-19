@@ -582,6 +582,11 @@ function blobToDataUrl(blob: Blob): Promise<string> {
   });
 }
 
+/** Reads a picked file: photos are shrunk (phone camera photos are several MB); PDFs are kept as they are. */
+function readPickedFile(file: File): Promise<string> {
+  return file.type.startsWith('image/') ? fileToPhotoDataUrl(file).catch(() => blobToDataUrl(file)) : blobToDataUrl(file);
+}
+
 let sharedAudioCtx: AudioContext | null = null;
 function getSharedAudioContext(): AudioContext {
   if (!sharedAudioCtx || sharedAudioCtx.state === 'closed') {
@@ -1005,9 +1010,9 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
         showToast('Image file too large (max 5MB)');
         return;
       }
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const result = event.target?.result as string;
+      readPickedFile(file)
+      .then((picked) => {
+        const result = picked;
         if (result) {
           setUserProfile((prev) => ({ ...prev, avatar: result }));
           setEditProfileForm((prev) => ({ ...prev, avatar: result }));
@@ -1017,8 +1022,8 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
               .catch(() => showToast('⚠️ Profile photo could not be saved. Check your connection.'));
           }
         }
-      };
-      reader.readAsDataURL(file);
+      })
+      .catch(() => showToast('⚠️ Could not read that file. Please choose another one.'));
     }
   };
 
@@ -3852,21 +3857,21 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
   const handleStoreLogoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        setUserProfile((prev) => ({ ...prev, avatar: ev.target?.result as string }));
+      readPickedFile(file)
+      .then((picked) => {
+        setUserProfile((prev) => ({ ...prev, avatar: picked }));
         showToast('✓ Store visual logo updated');
-      };
-      reader.readAsDataURL(file);
+      })
+      .catch(() => showToast('⚠️ Could not read that file. Please choose another one.'));
     }
   };
 
   const handlePublicMarketplaceAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        const result = ev.target?.result as string;
+      readPickedFile(file)
+      .then((picked) => {
+        const result = picked;
         if (result) {
           setSellerAvatarPhoto(result);
           setUserProfile((prev) => ({ ...prev, avatar: result }));
@@ -3877,44 +3882,44 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
           }
           showToast('✓ Profile image updated');
         }
-      };
-      reader.readAsDataURL(file);
+      })
+      .catch(() => showToast('⚠️ Could not read that file. Please choose another one.'));
     }
   };
 
   const handleStoreBannerChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        setStoreBannerImage(ev.target?.result as string);
+      readPickedFile(file)
+      .then((picked) => {
+        setStoreBannerImage(picked);
         showToast('✓ Custom storefront banner uploaded');
-      };
-      reader.readAsDataURL(file);
+      })
+      .catch(() => showToast('⚠️ Could not read that file. Please choose another one.'));
     }
   };
 
   const handleStorePhysicalChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        setStorePhysicalPhoto(ev.target?.result as string);
+      readPickedFile(file)
+      .then((picked) => {
+        setStorePhysicalPhoto(picked);
         showToast('✓ Physical shopfront photo uploaded');
-      };
-      reader.readAsDataURL(file);
+      })
+      .catch(() => showToast('⚠️ Could not read that file. Please choose another one.'));
     }
   };
 
   const handleStoreCounterChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        setStoreDisplayCounterPhoto(ev.target?.result as string);
+      readPickedFile(file)
+      .then((picked) => {
+        setStoreDisplayCounterPhoto(picked);
         showToast('✓ Display counter photo attached');
-      };
-      reader.readAsDataURL(file);
+      })
+      .catch(() => showToast('⚠️ Could not read that file. Please choose another one.'));
     }
   };
 
@@ -3922,12 +3927,12 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     const file = e.target.files?.[0];
     if (file) {
       setGhanaCardFrontName(`${file.name} • ${(file.size / (1024 * 1024)).toFixed(1)} MB`);
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        setGhanaCardFrontPreview(ev.target?.result as string);
+      readPickedFile(file)
+      .then((picked) => {
+        setGhanaCardFrontPreview(picked);
         showToast('✓ Front ID photo attached successfully');
-      };
-      reader.readAsDataURL(file);
+      })
+      .catch(() => showToast('⚠️ Could not read that file. Please choose another one.'));
     }
   };
 
@@ -3935,12 +3940,12 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     const file = e.target.files?.[0];
     if (file) {
       setGhanaCardBackName(`${file.name} • ${(file.size / (1024 * 1024)).toFixed(1)} MB`);
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        setGhanaCardBackPreview(ev.target?.result as string);
+      readPickedFile(file)
+      .then((picked) => {
+        setGhanaCardBackPreview(picked);
         showToast('✓ Back ID photo attached successfully');
-      };
-      reader.readAsDataURL(file);
+      })
+      .catch(() => showToast('⚠️ Could not read that file. Please choose another one.'));
     }
   };
 
@@ -3952,12 +3957,12 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     }
     if (file) {
       setBusinessCertName(`${file.name} • ${(file.size / (1024 * 1024)).toFixed(1)} MB`);
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        setBusinessCertPhoto(ev.target?.result as string);
+      readPickedFile(file)
+      .then((picked) => {
+        setBusinessCertPhoto(picked);
         showToast('✓ Business / Trade Certificate attached');
-      };
-      reader.readAsDataURL(file);
+      })
+      .catch(() => showToast('⚠️ Could not read that file. Please choose another one.'));
     }
   };
 
@@ -3969,25 +3974,25 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     }
     if (file) {
       setPoliceClearanceName(`${file.name} • ${(file.size / (1024 * 1024)).toFixed(1)} MB`);
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        setPoliceClearancePhoto(ev.target?.result as string);
+      readPickedFile(file)
+      .then((picked) => {
+        setPoliceClearancePhoto(picked);
         setIsPoliceClearanceSkipped(false);
         showToast('✓ Police Clearance certificate attached');
-      };
-      reader.readAsDataURL(file);
+      })
+      .catch(() => showToast('⚠️ Could not read that file. Please choose another one.'));
     }
   };
 
   const handlePortfolioPhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        setNewPortfolioImg(ev.target?.result as string);
+      readPickedFile(file)
+      .then((picked) => {
+        setNewPortfolioImg(picked);
         showToast('✓ Project photo attached');
-      };
-      reader.readAsDataURL(file);
+      })
+      .catch(() => showToast('⚠️ Could not read that file. Please choose another one.'));
     }
   };
 
