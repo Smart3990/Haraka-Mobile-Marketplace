@@ -1,5 +1,6 @@
 import React from 'react';
 import { HARAKA_LOGO } from '../lib/images';
+import { useBranding } from '../lib/branding';
 
 interface HarakaLogoProps {
   className?: string;
@@ -19,11 +20,13 @@ export default function HarakaLogo({
     xl: 'h-24 w-auto',
   };
 
+  // The system admin can replace the logo from the dashboard
+  const { logoUrl } = useBranding();
   const appliedClass = className || (size ? sizeClasses[size] : 'h-10 w-auto');
 
   return (
     <img
-      src={HARAKA_LOGO}
+      src={logoUrl || HARAKA_LOGO}
       alt="Haraka"
       className={`object-contain ${appliedClass}`}
     />

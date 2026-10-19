@@ -847,6 +847,27 @@ async function storeMedia(src: string | undefined, folder: string, inlinePhotoBu
 }
 
 /**
+ * System admin only: replaces the app bar logo or the Welcome page picture for everyone.
+ * Pass an empty image to go back to the built-in one.
+ */
+export async function saveBrandingImage(field: 'logoUrl' | 'welcomeImageUrl', image: string): Promise<void> {
+  const email = auth.currentUser?.email?.toLowerCase();
+  if (email !== SYSTEM_ADMIN_EMAIL) throw new Error('Only the system admin can change the app branding.');
+  let url = '';
+  if (image) {
+    // PNG logos are uploaded as they are so a transparent background stays transparent
+    const isPng = image.startsWith('data:image/png');
+    if (isPng && isCloudinaryConfigured()) url = await uploadMedia(image, 'branding').catch(() => '');
+    if (!url) url = isPng && image.length < 550_000 ? image : (await storeMedia(image, 'branding', 150_000)) || '';
+  }
+  await setDoc(
+    doc(db, 'settings', 'branding'),
+    { [field]: url, updatedAtISO: new Date().toISOString(), updatedBy: email },
+    { merge: true }
+  );
+}
+
+/**
  * Records why something failed on a user's phone (error text and device type only), so problems
  * that can't be reproduced elsewhere can be fixed. Admins read these in the database.
  */

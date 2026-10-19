@@ -1,5 +1,6 @@
 import React from 'react';
 import { WELCOME_HERO } from '../lib/images';
+import { useBranding } from '../lib/branding';
 
 interface WelcomeScreenProps {
   onSignIn: () => void;
@@ -14,6 +15,8 @@ export default function WelcomeScreen({
   onSignIn,
   onSignUp,
 }: WelcomeScreenProps) {
+  // The system admin can replace this picture from the dashboard
+  const { welcomeImageUrl } = useBranding();
   return (
     <main className="h-full w-full max-w-md mx-auto px-6 py-4 flex flex-col justify-between items-center bg-white font-['Plus_Jakarta_Sans',sans-serif] text-slate-800 antialiased select-none overflow-hidden box-border">
       {/* Top subtle spacing anchor */}
@@ -26,7 +29,7 @@ export default function WelcomeScreen({
           <img
             alt="Welcome to Haraka - Buy and sell items locally"
             className="max-h-full max-w-full w-auto h-auto object-contain pointer-events-none select-none"
-            src={WELCOME_HERO}
+            src={welcomeImageUrl || WELCOME_HERO}
           />
         </div>
 

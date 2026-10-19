@@ -91,6 +91,15 @@ service cloud.firestore {
       allow delete: if canAddAdmins();
     }
 
+    // App branding (app bar logo, Welcome page picture): everyone reads it, only the system admin changes it
+    match /settings/branding {
+      allow get: if true;
+      allow create, update: if isSystemAdmin()
+        && request.resource.data.keys().hasOnly(['logoUrl', 'welcomeImageUrl', 'updatedAtISO', 'updatedBy'])
+        && request.resource.data.get('logoUrl', '') is string && request.resource.data.get('logoUrl', '').size() < 600000
+        && request.resource.data.get('welcomeImageUrl', '') is string && request.resource.data.get('welcomeImageUrl', '').size() < 600000;
+    }
+
     // Why something failed on a user's phone (error text and device type), read only by admins
     match /clientErrors/{errorId} {
       allow create: if isSignedIn()

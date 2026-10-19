@@ -167,7 +167,7 @@ export default function SignInScreen({
             </p>
           )}
           {infoMessage && (
-            <p className="mb-4 text-xs font-semibold text-emerald-600">
+            <p className="mb-4 text-xs font-semibold text-[#1FA971]">
               {infoMessage}
             </p>
           )}

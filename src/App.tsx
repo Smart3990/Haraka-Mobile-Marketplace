@@ -148,6 +148,7 @@ import {
   declineVerification,
   requestVerification,
   reportClientError,
+  saveBrandingImage,
   deleteListing as deleteRemoteListing,
   fileToPhotoDataUrl,
   getPlatformStats,
@@ -203,7 +204,8 @@ import {
   watchListings,
 } from './lib/backend';
 import { HarakaLogo } from './components/HarakaLogo';
-import { HARAKA_MARK, WELCOME_HERO_TRANS } from './lib/images';
+import { HARAKA_LOGO, HARAKA_MARK, WELCOME_HERO, WELCOME_HERO_TRANS } from './lib/images';
+import { useBranding } from './lib/branding';
 import SplashScreen from './components/SplashScreen';
 import WelcomeScreen from './components/WelcomeScreen';
 import OnboardingScreen from './components/OnboardingScreen';
@@ -2333,7 +2335,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
           <div className="mt-3 flex-1 min-h-0 overflow-y-auto space-y-2.5 no-scrollbar">
             {shown.length === 0 ? (
               <div className="py-10 text-center">
-                <CheckCircle size={26} className="mx-auto text-emerald-500" />
+                <CheckCircle size={26} className="mx-auto text-[#1FA971]" />
                 <p className="text-xs font-bold text-slate-800 mt-2">
                   {reportsTab === 'open' ? 'No open reports' : 'No closed reports yet'}
                 </p>
@@ -2394,7 +2396,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
                       )}
                     </div>
                   ) : (
-                    <p className="text-[10.5px] font-semibold text-emerald-700">
+                    <p className="text-[10.5px] font-semibold text-[#1FA971]">
                       {r.action || (r.status === 'dismissed' ? 'Dismissed' : 'Resolved')}
                       {r.resolvedBy ? ` by ${r.resolvedBy}` : ''}
                       {r.resolvedAtISO ? ` • ${formatChatTime(r.resolvedAtISO)}` : ''}
@@ -2656,7 +2658,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
           <div className="w-10 h-1.5 rounded-full bg-slate-200 mx-auto" />
           {reportPersonSent ? (
             <div className="text-center space-y-2 py-4">
-              <div className="w-12 h-12 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto">
+              <div className="w-12 h-12 rounded-full bg-emerald-50 text-[#1FA971] flex items-center justify-center mx-auto">
                 <CheckCircle2 size={26} />
               </div>
               <p className="text-sm font-black text-slate-900">Thanks, we received your report</p>
@@ -2835,6 +2837,89 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
   const clearPicked = (e: React.MouseEvent<HTMLInputElement>) => {
     e.currentTarget.value = ''; // picking the same file again still counts as a change
   };
+  // ---------- System admin: app branding (app bar logo, Welcome page picture) ----------
+  const branding = useBranding();
+  const brandingInputRef = useRef<HTMLInputElement>(null);
+  const brandingFieldRef = useRef<'logoUrl' | 'welcomeImageUrl'>('logoUrl');
+  const [savingBranding, setSavingBranding] = useState<'' | 'logoUrl' | 'welcomeImageUrl'>('');
+
+  const pickBrandingImage = (field: 'logoUrl' | 'welcomeImageUrl') => {
+    brandingFieldRef.current = field;
+    brandingInputRef.current?.click();
+  };
+
+  const changeBranding = async (field: 'logoUrl' | 'welcomeImageUrl', image: string) => {
+    setSavingBranding(field);
+    try {
+      await saveBrandingImage(field, image);
+      showToast(image ? 'Updated for everyone' : 'Back to the original image');
+    } catch (err) {
+      console.warn('Could not save branding', err);
+      showToast(`⚠️ ${err instanceof Error && !/firebase|firestore/i.test(err.message) ? err.message : 'Could not save. Try again.'}`);
+    } finally {
+      setSavingBranding('');
+    }
+  };
+
+  const handleBrandingImage = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      showToast('⚠️ Please choose an image (PNG with a transparent background works best for the logo).');
+      return;
+    }
+    // PNG logos keep their transparent background; other photos are shrunk like any picture
+    const image = file.type === 'image/png' && file.size < 400_000 ? await blobToDataUrl(file) : await readPickedFile(file);
+    await changeBranding(brandingFieldRef.current, image);
+  };
+
+  const renderBrandingCard = () => {
+    if (!adminAccess.isSystemAdmin) return null;
+    const rows: { field: 'logoUrl' | 'welcomeImageUrl'; title: string; note: string; current: string; fallback: string }[] = [
+      { field: 'logoUrl', title: 'App bar logo', note: 'Top of Home, next to the location', current: branding.logoUrl, fallback: HARAKA_LOGO },
+      { field: 'welcomeImageUrl', title: 'Welcome page picture', note: 'Shown above "Welcome to Haraka!"', current: branding.welcomeImageUrl, fallback: WELCOME_HERO },
+    ];
+    return (
+      <div className="bg-white rounded-2xl p-3.5 border border-slate-200/80 shadow-2xs space-y-3">
+        <div>
+          <span className="text-xs font-black text-slate-900 block">App Branding</span>
+          <span className="text-[11px] text-slate-500">System admin only. Changes show for everyone straight away.</span>
+        </div>
+        {rows.map((row) => (
+          <div key={row.field} className="flex items-center gap-3">
+            <div className="w-20 h-14 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-center p-1.5 shrink-0">
+              <img src={row.current || row.fallback} alt={row.title} className="max-w-full max-h-full object-contain" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-bold text-slate-900">{row.title}</p>
+              <p className="text-[11px] text-slate-500 truncate">{row.current ? 'Custom image' : 'Original image'} • {row.note}</p>
+              <div className="flex gap-2 mt-1.5">
+                <button
+                  type="button"
+                  disabled={Boolean(savingBranding)}
+                  onClick={() => pickBrandingImage(row.field)}
+                  className="py-1.5 px-3 rounded-lg bg-slate-900 text-white text-[11px] font-bold cursor-pointer disabled:opacity-50"
+                >
+                  {savingBranding === row.field ? 'Saving…' : 'Change'}
+                </button>
+                {row.current && (
+                  <button
+                    type="button"
+                    disabled={Boolean(savingBranding)}
+                    onClick={() => changeBranding(row.field, '')}
+                    className="py-1.5 px-3 rounded-lg border border-slate-200 text-slate-600 text-[11px] font-bold cursor-pointer disabled:opacity-50"
+                  >
+                    Use Original
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
   // ---------- System admin: correct any seller's ad from the ad page ----------
   const [adminEditAd, setAdminEditAd] = useState<{
     id: string;
@@ -3058,7 +3143,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
       >
         <div
           className={`w-10 h-10 rounded-xl bg-white border flex items-center justify-center shrink-0 ${
-            inReview ? 'border-amber-200 text-amber-600' : declined ? 'border-red-200 text-red-600' : 'border-emerald-200 text-[#046A38]'
+            inReview ? 'border-amber-200 text-amber-600' : declined ? 'border-red-200 text-red-600' : 'border-emerald-200 text-[#1FA971]'
           }`}
         >
           {inReview ? <Clock size={19} /> : <ShieldCheck size={19} />}
@@ -3187,6 +3272,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
         <input type="file" ref={storeLogoInputRef} accept="image/*" className="hidden" onClick={clearPicked} onChange={handleStoreLogoChange} />
         <input type="file" ref={storePhysicalInputRef} accept="image/*" className="hidden" onClick={clearPicked} onChange={handleStorePhysicalChange} />
         <input type="file" ref={verifyIdInputRef} accept="image/*" className="hidden" onClick={clearPicked} onChange={handleVerifyIdPhoto} />
+        <input type="file" ref={brandingInputRef} accept="image/*" className="hidden" onClick={clearPicked} onChange={handleBrandingImage} />
     </div>
   );
 
@@ -6560,7 +6646,7 @@ export default function RootLayout() {
           <p className="text-[11px] font-bold text-slate-500 mt-0.5 text-center tracking-tight">Haraka voice call</p>
 
           {/* Call status in warm brownish-tan tone */}
-          <p className={`text-xs font-medium mt-1 text-center ${phase === 'connected' ? 'text-emerald-600 font-mono font-bold' : 'text-[#A88876]'}`}>
+          <p className={`text-xs font-medium mt-1 text-center ${phase === 'connected' ? 'text-[#1FA971] font-mono font-bold' : 'text-[#A88876]'}`}>
             {statusText}
           </p>
 
@@ -6845,9 +6931,9 @@ export default function RootLayout() {
                 }
                 showToast(`Opening phone dialer for ${rawPhone}...`, 'check');
               }}
-              className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-slate-800 hover:bg-emerald-50 hover:text-emerald-700 transition-colors text-left cursor-pointer font-bold no-underline"
+              className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-slate-800 hover:bg-emerald-50 hover:text-[#189462] transition-colors text-left cursor-pointer font-bold no-underline"
             >
-              <Phone size={14} className="text-emerald-600 shrink-0" />
+              <Phone size={14} className="text-[#1FA971] shrink-0" />
               <span>Dialer Call</span>
             </a>
           </div>
@@ -6900,7 +6986,7 @@ export default function RootLayout() {
               </div>
               <span
                 className={`text-[11px] mt-1.5 font-bold tracking-tight text-center ${
-                  step > 1 ? 'text-[#046A38]' : step === 1 ? 'text-[#FF6A00]' : 'text-slate-400 font-medium'
+                  step > 1 ? 'text-[#1FA971]' : step === 1 ? 'text-[#FF6A00]' : 'text-slate-400 font-medium'
                 }`}
               >
                 Item Details
@@ -6922,7 +7008,7 @@ export default function RootLayout() {
               </div>
               <span
                 className={`text-[11px] mt-1.5 font-bold tracking-tight text-center ${
-                  step > 2 ? 'text-[#046A38]' : step === 2 ? 'text-slate-900 font-extrabold' : 'text-slate-400 font-medium'
+                  step > 2 ? 'text-[#1FA971]' : step === 2 ? 'text-slate-900 font-extrabold' : 'text-slate-400 font-medium'
                 }`}
               >
                 Pricing & Delivery
@@ -7200,7 +7286,7 @@ export default function RootLayout() {
                     applicant.status === 'pending'
                       ? 'text-amber-600'
                       : applicant.status === 'approved'
-                      ? 'text-emerald-600'
+                      ? 'text-[#1FA971]'
                       : 'text-rose-600'
                   }`}
                 >
@@ -7226,8 +7312,8 @@ export default function RootLayout() {
               {/* Badges / Subtitle */}
               {applicant.role === 'artisan' ? (
                 <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 mt-1.5 text-[10.5px] font-bold">
-                  <span className="text-emerald-700 flex items-center gap-1">
-                    <ShieldCheck size={12} className="text-emerald-600" />
+                  <span className="text-[#1FA971] flex items-center gap-1">
+                    <ShieldCheck size={12} className="text-[#1FA971]" />
                     {!applicant.idVerificationSkipped ? 'Ghana Card Verified' : 'Ghana Card Pending'}
                   </span>
                   <span className="text-amber-700 flex items-center gap-1">
@@ -7314,7 +7400,7 @@ export default function RootLayout() {
               <div className="flex items-center justify-between py-1">
                 <span className="text-slate-500 font-medium">WhatsApp Support:</span>
                 {applicant.allowWhatsApp ? (
-                  <span className="font-mono font-bold text-emerald-700 flex items-center gap-1 text-right">
+                  <span className="font-mono font-bold text-[#1FA971] flex items-center gap-1 text-right">
                     <MessageCircle size={12} className="shrink-0" />
                     <span>{applicant.whatsapp || applicant.phone}</span>
                   </span>
@@ -7376,7 +7462,7 @@ export default function RootLayout() {
                   </div>
                   <div className="flex items-center justify-between py-1">
                     <span className="text-slate-500 font-medium">Availability Status:</span>
-                    <span className="font-bold text-emerald-700 text-right">Active now • Ready to inspect</span>
+                    <span className="font-bold text-[#1FA971] text-right">Active now • Ready to inspect</span>
                   </div>
                 </>
               ) : (
@@ -7391,7 +7477,7 @@ export default function RootLayout() {
                   </div>
                   <div className="flex items-center justify-between py-1 border-b border-slate-200/60">
                     <span className="text-slate-500 font-medium">Privacy Guard:</span>
-                    <span className="font-bold text-emerald-700 text-right">
+                    <span className="font-bold text-[#1FA971] text-right">
                       {applicant.neighborhoodPrivacyGuard !== false ? 'Active (Residential GPS hidden)' : 'Inactive'}
                     </span>
                   </div>
@@ -7433,7 +7519,7 @@ export default function RootLayout() {
               <div className="flex items-center justify-between py-1 border-b border-slate-100">
                 <span className="text-slate-500 font-medium">Ghana Card Status:</span>
                 {hasGhanaCard ? (
-                  <span className="text-emerald-700 font-bold flex items-center gap-1">
+                  <span className="text-[#1FA971] font-bold flex items-center gap-1">
                     <CheckCircle2 size={13} />
                     <span>Submitted</span>
                   </span>
@@ -7475,7 +7561,7 @@ export default function RootLayout() {
                       <div className="space-y-1.5">
                         <div className="flex items-center justify-between">
                           <span className="text-[10.5px] font-bold text-slate-700">Front ID Photo</span>
-                          <span className="text-[10.5px] text-emerald-600 font-bold">Attached Document</span>
+                          <span className="text-[10.5px] text-[#1FA971] font-bold">Attached Document</span>
                         </div>
                         <div
                           onClick={() =>
@@ -7509,7 +7595,7 @@ export default function RootLayout() {
                       <div className="space-y-1.5">
                         <div className="flex items-center justify-between">
                           <span className="text-[10.5px] font-bold text-slate-700">Back ID Photo</span>
-                          <span className="text-[10.5px] text-emerald-600 font-bold">Security Seal</span>
+                          <span className="text-[10.5px] text-[#1FA971] font-bold">Security Seal</span>
                         </div>
                         <div
                           onClick={() =>
@@ -7579,7 +7665,7 @@ export default function RootLayout() {
                 <div className="flex items-center justify-between">
                   <span className="text-slate-600 font-bold text-[11px]">Attached Business Certificate Document:</span>
                   {applicant.businessCertPhoto ? (
-                    <span className="text-xs font-bold text-emerald-700 flex items-center gap-1">
+                    <span className="text-xs font-bold text-[#1FA971] flex items-center gap-1">
                       <CheckCircle2 size={12} />
                       <span>Submitted</span>
                     </span>
@@ -7696,8 +7782,8 @@ export default function RootLayout() {
                       <span className="text-slate-500 font-medium text-[10.5px] block mb-1">Declared Customer Guarantees:</span>
                       <div className="flex flex-col gap-1">
                         {applicant.shopGuarantees.map((g) => (
-                          <span key={g} className="text-emerald-700 text-xs font-bold flex items-center gap-1.5">
-                            <span className="text-emerald-600 font-black">✓</span>
+                          <span key={g} className="text-[#1FA971] text-xs font-bold flex items-center gap-1.5">
+                            <span className="text-[#1FA971] font-black">✓</span>
                             <span>{g}</span>
                           </span>
                         ))}
@@ -7720,7 +7806,7 @@ export default function RootLayout() {
                   </div>
                   <div className="flex items-center justify-between py-0.5">
                     <span className="text-slate-500 font-medium">Diagnostic Inspection Fee:</span>
-                    <span className={`font-black text-right ${Number(applicant.inspectionFee ?? 0) === 0 ? 'text-emerald-700' : 'text-[#FF6A00]'}`}>
+                    <span className={`font-black text-right ${Number(applicant.inspectionFee ?? 0) === 0 ? 'text-[#1FA971]' : 'text-[#FF6A00]'}`}>
                       {Number(applicant.inspectionFee ?? 0) === 0 ? 'FREE on Arrival' : `GH₵ ${applicant.inspectionFee}.00`}
                     </span>
                   </div>
@@ -7808,11 +7894,11 @@ export default function RootLayout() {
                         <Languages size={12} className="text-slate-400" />
                         <span>Speaks: {applicant.languagesSpoken?.join(', ') || 'English, Twi, Ga'}</span>
                       </div>
-                      <span className="text-emerald-700 font-bold">Ready to inspect</span>
+                      <span className="text-[#1FA971] font-bold">Ready to inspect</span>
                     </div>
 
                     <div className="flex items-start gap-1.5 pt-1 text-[10.5px] text-slate-600 leading-snug">
-                      <ShieldCheck size={13} className="text-emerald-600 shrink-0 mt-0.5" />
+                      <ShieldCheck size={13} className="text-[#1FA971] shrink-0 mt-0.5" />
                       <span>
                         <strong className="text-slate-800 font-bold">Haraka 0% Fee Guarantee:</strong> Deal directly with {applicant.name.split(' ')[0]}. Inspection fee: {Number(applicant.inspectionFee) > 0 ? `GH₵ ${applicant.inspectionFee}` : 'FREE'}{applicant.cityNeighborhood ? `, in ${applicant.cityNeighborhood}` : ''}.
                       </span>
@@ -7841,7 +7927,7 @@ export default function RootLayout() {
                               <p className="text-[11px] text-slate-500 truncate">{srv.desc}</p>
                             </div>
                           </div>
-                          <span className={`text-[11px] font-black shrink-0 ${srv.price === 'Free' ? 'text-emerald-700' : 'text-orange-600'}`}>
+                          <span className={`text-[11px] font-black shrink-0 ${srv.price === 'Free' ? 'text-[#1FA971]' : 'text-orange-600'}`}>
                             {srv.price}
                           </span>
                         </div>
@@ -7855,7 +7941,7 @@ export default function RootLayout() {
                       <span className="text-slate-900 font-extrabold text-xs">
                         Verified Work <span className="text-slate-400 font-normal">({(applicant.verifiedWorkPortfolio || []).length})</span>
                       </span>
-                      <span className="text-[11px] text-emerald-700 font-bold">Tap photo to inspect</span>
+                      <span className="text-[11px] text-[#1FA971] font-bold">Tap photo to inspect</span>
                     </div>
 
                     <div className="grid grid-cols-2 gap-2">
@@ -7968,7 +8054,7 @@ export default function RootLayout() {
             // Approved without the badge: the admin can verify once the ID documents are in
             <div className="flex-1 space-y-2">
               <p className="text-[11px] font-semibold text-slate-600 flex items-center gap-1.5">
-                <CheckCircle2 size={13} className="text-emerald-600 shrink-0" />
+                <CheckCircle2 size={13} className="text-[#1FA971] shrink-0" />
                 <span>
                   {applicant.verificationRequestStatus === 'pending'
                     ? 'Approved • sent ID documents for verification'
@@ -8015,7 +8101,7 @@ export default function RootLayout() {
             </div>
           ) : applicant.status === 'approved' ? (
             <div className="flex-1 flex items-center justify-between">
-              <span className="text-xs font-bold text-emerald-700 flex items-center gap-1.5">
+              <span className="text-xs font-bold text-[#1FA971] flex items-center gap-1.5">
                 <CheckCircle2 size={14} />
                 <span>Approved with Verified Badge</span>
               </span>
@@ -8250,7 +8336,7 @@ export default function RootLayout() {
                     booking.status === 'Pending'
                       ? 'text-amber-600'
                       : booking.status === 'Confirmed'
-                      ? 'text-emerald-600'
+                      ? 'text-[#1FA971]'
                       : booking.status === 'Completed'
                       ? 'text-blue-600'
                       : 'text-rose-600'
@@ -8732,10 +8818,10 @@ export default function RootLayout() {
           </div>
 
           <div className="p-3 bg-emerald-50/70 border border-emerald-200/80 rounded-2xl flex items-center gap-2.5">
-            <Calendar size={20} className="text-emerald-700 shrink-0" />
+            <Calendar size={20} className="text-[#1FA971] shrink-0" />
             <div className="text-xs">
               <span className="font-bold text-emerald-900 block">Check Your Live Bookings</span>
-              <span className="text-[11px] text-emerald-700">
+              <span className="text-[11px] text-[#1FA971]">
                 You have {artisanBookings.filter((b) => b.status === 'Pending').length} pending client inspection requests waiting.
               </span>
             </div>
@@ -8881,7 +8967,7 @@ export default function RootLayout() {
                       <span className="text-xs font-black text-slate-900">Dispatch Status:</span>
                       <span
                         className={`inline-flex items-center gap-1.5 text-xs font-black ${
-                          isArtisanAvailableForHire ? 'text-emerald-700' : 'text-amber-700'
+                          isArtisanAvailableForHire ? 'text-[#1FA971]' : 'text-amber-700'
                         }`}
                       >
                         <span
@@ -8938,14 +9024,14 @@ export default function RootLayout() {
                 </div>
                 <div className="p-3.5 border border-slate-200/80 rounded-2xl bg-white shadow-2xs">
                   <span className="text-slate-500 text-[11px] font-semibold block">Repeat Hire Rate</span>
-                  <span className="text-xl font-black text-emerald-700 block mt-0.5">{(() => {
+                  <span className="text-xl font-black text-[#1FA971] block mt-0.5">{(() => {
                     const customers = artisanBookingDocs.map((b) => b.customerId);
                     const unique = new Set(customers);
                     if (unique.size === 0) return '—';
                     const repeat = [...unique].filter((c) => customers.filter((x) => x === c).length > 1).length;
                     return `${Math.round((repeat / unique.size) * 100)}%`;
                   })()}</span>
-                  <span className="text-[11px] text-emerald-700 font-medium block mt-1">Returning client retention</span>
+                  <span className="text-[11px] text-[#1FA971] font-medium block mt-1">Returning client retention</span>
                 </div>
               </div>
 
@@ -9247,7 +9333,7 @@ export default function RootLayout() {
                     className="p-3.5 border border-slate-200/80 rounded-2xl bg-white shadow-2xs text-left cursor-pointer active:scale-98 transition-transform"
                   >
                     <span className="text-slate-500 text-[11px] font-semibold block">Open User Reports</span>
-                    <span className={`text-xl font-black block mt-0.5 ${(platformStats?.openReports ?? 0) > 0 ? 'text-red-600' : 'text-emerald-700'}`}>
+                    <span className={`text-xl font-black block mt-0.5 ${(platformStats?.openReports ?? 0) > 0 ? 'text-red-600' : 'text-[#1FA971]'}`}>
                       {platformStats?.openReports ?? 0}
                     </span>
                     <span className="text-[11px] text-slate-500 font-medium block mt-1">Tap to review flagged ads</span>
@@ -9283,6 +9369,8 @@ export default function RootLayout() {
                     </div>
                   </div>
                 </div>
+
+                {renderBrandingCard()}
 
                 {/* Applications Section - Stacked Header & Below Statuses Bar */}
                 <div className="space-y-2.5">
@@ -9358,7 +9446,7 @@ export default function RootLayout() {
                                     applicant.status === 'pending'
                                       ? 'text-amber-600'
                                       : applicant.status === 'approved'
-                                      ? 'text-emerald-600'
+                                      ? 'text-[#1FA971]'
                                       : 'text-rose-600'
                                   }`}
                                 >
@@ -9424,7 +9512,7 @@ export default function RootLayout() {
                           </div>
                         ) : applicant.status === 'approved' && !applicant.verifiedBadge && hasRequiredDocuments(applicant) ? (
                           <div className="flex items-center justify-between gap-2 mt-2.5 pt-2 border-t border-slate-100 text-[11px]">
-                            <span className={`font-bold flex items-center gap-1 min-w-0 ${applicant.verificationRequestStatus === 'pending' ? 'text-amber-600' : 'text-emerald-700'}`}>
+                            <span className={`font-bold flex items-center gap-1 min-w-0 ${applicant.verificationRequestStatus === 'pending' ? 'text-amber-600' : 'text-[#1FA971]'}`}>
                               {applicant.verificationRequestStatus === 'pending' ? <ShieldAlert size={12} className="shrink-0" /> : <CheckCircle2 size={12} className="shrink-0" />}
                               <span className="truncate">{applicant.verificationRequestStatus === 'pending' ? 'Asked to be verified' : 'Standard Merchant'}</span>
                             </span>
@@ -9442,7 +9530,7 @@ export default function RootLayout() {
                           </div>
                         ) : applicant.status === 'approved' ? (
                           <div className="flex items-center justify-between mt-2.5 pt-2 border-t border-slate-100 text-[11px]">
-                            <span className="text-emerald-700 font-bold flex items-center gap-1">
+                            <span className="text-[#1FA971] font-bold flex items-center gap-1">
                               <CheckCircle2 size={12} />
                               <span>{applicant.verifiedBadge ? 'Verified Badge Active' : 'Standard Merchant'}</span>
                             </span>
@@ -9600,7 +9688,7 @@ export default function RootLayout() {
                         </h3>
                         <span
                           className={`text-[11px] font-black shrink-0 ${
-                            item.status === 'Active' ? 'text-emerald-700' : 'text-slate-500'
+                            item.status === 'Active' ? 'text-[#1FA971]' : 'text-slate-500'
                           }`}
                         >
                           • {item.status}
@@ -9803,12 +9891,12 @@ export default function RootLayout() {
                     <button
                       type="button"
                       onClick={() => setShowLocationFilterModal(true)}
-                      className="flex items-center gap-1 text-xs font-bold text-emerald-600 select-none hover:text-emerald-700 transition-colors cursor-pointer"
+                      className="flex items-center gap-1 text-xs font-bold text-[#1FA971] select-none hover:text-[#189462] transition-colors cursor-pointer"
                       title="Tap to change your location in Ghana"
                     >
-                      <MapPin size={15} className="text-emerald-600 shrink-0" />
+                      <MapPin size={15} className="text-[#1FA971] shrink-0" />
                       <span>{userProfile.city?.trim() || userProfile.location?.trim() || (selectedRegion === 'all' ? 'All Ghana' : selectedRegion)}</span>
-                      <ChevronDown size={11} className="text-emerald-500 shrink-0" />
+                      <ChevronDown size={11} className="text-[#1FA971] shrink-0" />
                     </button>
                   </div>
 
@@ -10237,7 +10325,7 @@ export default function RootLayout() {
                         }`}
                       >
                         {IconComp && (
-                          <IconComp size={12} className={isActive ? 'text-white' : 'text-emerald-600'} />
+                          <IconComp size={12} className={isActive ? 'text-white' : 'text-[#1FA971]'} />
                         )}
                         <span>{pill.label}</span>
                       </button>
@@ -10330,7 +10418,7 @@ export default function RootLayout() {
                               <span
                                 className={`text-[11px] font-bold shrink-0 ${
                                   item.condition === 'Brand New'
-                                    ? 'text-emerald-600'
+                                    ? 'text-[#1FA971]'
                                     : item.condition === 'Like New'
                                     ? 'text-sky-600'
                                     : item.condition === 'Refurbished'
@@ -10491,11 +10579,11 @@ export default function RootLayout() {
                             <div className="flex items-center gap-1.5 flex-wrap">
                               <h3 className="font-extrabold text-slate-900 text-sm truncate">{artisan.name}</h3>
                               {artisan.verified && (
-                                <CheckCircle size={14} className="text-emerald-600 shrink-0" />
+                                <CheckCircle size={14} className="text-[#1FA971] shrink-0" />
                               )}
                               <span
                                 className={`inline-flex items-center gap-1 text-[11px] font-extrabold ${
-                                  isAvailable ? 'text-emerald-700' : 'text-amber-700'
+                                  isAvailable ? 'text-[#1FA971]' : 'text-amber-700'
                                 }`}
                               >
                                 <span
@@ -10526,7 +10614,7 @@ export default function RootLayout() {
                         <div className="shrink-0 flex items-center gap-1.5">
                           <span
                             className={`text-xs font-black tracking-tight ${
-                              getArtisanDisplayRate(artisan).includes('FREE') ? 'text-emerald-600' : 'text-orange-600'
+                              getArtisanDisplayRate(artisan).includes('FREE') ? 'text-[#1FA971]' : 'text-orange-600'
                             }`}
                           >
                             {getArtisanDisplayRate(artisan)}
@@ -10553,17 +10641,17 @@ export default function RootLayout() {
                           {artisan.badges.map((badge, idx) => (
                             <span
                               key={idx}
-                              className="text-[11px] font-bold text-emerald-700 flex items-center gap-1"
+                              className="text-[11px] font-bold text-[#1FA971] flex items-center gap-1"
                             >
-                              <CheckCircle size={12} className="shrink-0 text-emerald-600" />
+                              <CheckCircle size={12} className="shrink-0 text-[#1FA971]" />
                               <span>{badge === 'Verified & Approved' ? 'Verified' : badge}</span>
                             </span>
                           ))}
                         </div>
                       ) : artisan.verified ? (
                         <div className="flex items-center gap-2 mb-2.5">
-                          <span className="text-[11px] font-bold text-emerald-700 flex items-center gap-1">
-                            <CheckCircle size={12} className="shrink-0 text-emerald-600" />
+                          <span className="text-[11px] font-bold text-[#1FA971] flex items-center gap-1">
+                            <CheckCircle size={12} className="shrink-0 text-[#1FA971]" />
                             <span>Verified</span>
                           </span>
                         </div>
@@ -10775,7 +10863,7 @@ export default function RootLayout() {
                         <span className="text-xs font-bold text-slate-900 flex items-center gap-1 truncate">
                           {conv.otherUser.name}
                           {conv.otherUser.isVerified && (
-                            <CheckCircle size={12} className="text-emerald-500 fill-emerald-100" />
+                            <CheckCircle size={12} className="text-[#1FA971] fill-emerald-100" />
                           )}
                         </span>
                         <div className="flex items-center gap-1.5 shrink-0">
@@ -10998,7 +11086,7 @@ export default function RootLayout() {
                                 </div>
                               )}
                               <div className="absolute -bottom-1 -right-1">
-                                <CheckCircle size={14} className="text-emerald-600" />
+                                <CheckCircle size={14} className="text-[#1FA971]" />
                               </div>
                             </div>
 
@@ -11010,7 +11098,7 @@ export default function RootLayout() {
                                 <div className="flex items-center gap-1.5 shrink-0">
                                   <span
                                     className={`text-xs font-black tracking-tight ${
-                                      getArtisanDisplayRate(art).includes('FREE') ? 'text-emerald-600' : 'text-orange-600'
+                                      getArtisanDisplayRate(art).includes('FREE') ? 'text-[#1FA971]' : 'text-orange-600'
                                     }`}
                                   >
                                     {getArtisanDisplayRate(art)}
@@ -11464,8 +11552,8 @@ export default function RootLayout() {
 
                       {/* Verified Tag: show ONLY for sellers/artisans/admins who are verified & approved. Applicants who skipped verification can sell but do NOT get verified tag */}
                       {currentUserRole !== 'buyer' && userProfile.isVerified === true && (userProfile.isApproved ?? true) && (
-                        <div className="flex items-center gap-1 text-emerald-600 font-bold text-xs mt-0.5">
-                          <ShieldCheck size={14} className="stroke-[2.5] shrink-0 text-emerald-600" />
+                        <div className="flex items-center gap-1 text-[#1FA971] font-bold text-xs mt-0.5">
+                          <ShieldCheck size={14} className="stroke-[2.5] shrink-0 text-[#1FA971]" />
                           <span>Verified</span>
                         </div>
                       )}
@@ -11725,7 +11813,7 @@ export default function RootLayout() {
                       <div className="space-y-2.5 divide-y divide-slate-100">
                         <div className="flex items-center justify-between pt-1">
                           <div className="flex items-center gap-2.5">
-                            <CheckCircle2 size={16} className={userProfile.ghanaCardId?.trim() ? "text-emerald-600 shrink-0" : "text-slate-400 shrink-0"} />
+                            <CheckCircle2 size={16} className={userProfile.ghanaCardId?.trim() ? "text-[#1FA971] shrink-0" : "text-slate-400 shrink-0"} />
                             <div>
                               <span className="text-xs font-bold text-slate-900 block">Ghana National Card / ID</span>
                               <span className="text-[10.5px] text-slate-500">
@@ -11733,14 +11821,14 @@ export default function RootLayout() {
                               </span>
                             </div>
                           </div>
-                          <span className={`text-[11px] font-bold ${userProfile.ghanaCardId?.trim() ? 'text-emerald-600' : 'text-slate-400'}`}>
+                          <span className={`text-[11px] font-bold ${userProfile.ghanaCardId?.trim() ? 'text-[#1FA971]' : 'text-slate-400'}`}>
                             {userProfile.ghanaCardId?.trim() ? 'Verified' : 'Unverified'}
                           </span>
                         </div>
 
                         <div className="flex items-center justify-between pt-2.5">
                           <div className="flex items-center gap-2.5">
-                            <CheckCircle2 size={16} className={userProfile.phone?.trim() ? "text-emerald-600 shrink-0" : "text-slate-400 shrink-0"} />
+                            <CheckCircle2 size={16} className={userProfile.phone?.trim() ? "text-[#1FA971] shrink-0" : "text-slate-400 shrink-0"} />
                             <div>
                               <span className="text-xs font-bold text-slate-900 block">Ghana Phone Number (+233)</span>
                               <span className="text-[10.5px] text-slate-500">
@@ -11748,7 +11836,7 @@ export default function RootLayout() {
                               </span>
                             </div>
                           </div>
-                          <span className={`text-[11px] font-bold ${userProfile.phone?.trim() ? 'text-emerald-600' : 'text-slate-400'}`}>
+                          <span className={`text-[11px] font-bold ${userProfile.phone?.trim() ? 'text-[#1FA971]' : 'text-slate-400'}`}>
                             {userProfile.phone?.trim() ? 'Verified' : 'Unverified'}
                           </span>
                         </div>
@@ -11795,11 +11883,11 @@ export default function RootLayout() {
                       </div>
                       <div className="space-y-2 text-[11px] text-slate-600 leading-relaxed font-normal">
                         <div className="flex items-start gap-2">
-                          <CheckCircle2 size={14} className="text-emerald-700 shrink-0 mt-0.5 stroke-[2.5]" />
+                          <CheckCircle2 size={14} className="text-[#1FA971] shrink-0 mt-0.5 stroke-[2.5]" />
                           <span>Meet in safe, busy public physical locations in person.</span>
                         </div>
                         <div className="flex items-start gap-2">
-                          <CheckCircle2 size={14} className="text-emerald-700 shrink-0 mt-0.5 stroke-[2.5]" />
+                          <CheckCircle2 size={14} className="text-[#1FA971] shrink-0 mt-0.5 stroke-[2.5]" />
                           <span>Inspect the item thoroughly before releasing cash or mobile money.</span>
                         </div>
                         <div className="flex items-start gap-2">
@@ -11937,11 +12025,11 @@ export default function RootLayout() {
                       </div>
                       <div className="space-y-2 text-[11px] text-slate-600 leading-relaxed font-normal">
                         <div className="flex items-start gap-2">
-                          <CheckCircle2 size={14} className="text-emerald-700 shrink-0 mt-0.5 stroke-[2.5]" />
+                          <CheckCircle2 size={14} className="text-[#1FA971] shrink-0 mt-0.5 stroke-[2.5]" />
                           <span>Meet in safe, busy public physical locations in person.</span>
                         </div>
                         <div className="flex items-start gap-2">
-                          <CheckCircle2 size={14} className="text-emerald-700 shrink-0 mt-0.5 stroke-[2.5]" />
+                          <CheckCircle2 size={14} className="text-[#1FA971] shrink-0 mt-0.5 stroke-[2.5]" />
                           <span>Inspect the item thoroughly before releasing cash or mobile money.</span>
                         </div>
                         <div className="flex items-start gap-2">
@@ -12060,7 +12148,7 @@ export default function RootLayout() {
                               </div>
                               <div className="min-w-0">
                                 <p className="font-bold text-xs truncate text-slate-900">{it.title}</p>
-                                <p className={`text-[10.5px] truncate font-medium ${it.done ? 'text-emerald-700' : 'text-slate-400'}`}>
+                                <p className={`text-[10.5px] truncate font-medium ${it.done ? 'text-[#1FA971]' : 'text-slate-400'}`}>
                                   {it.desc}
                                 </p>
                               </div>
@@ -12234,7 +12322,7 @@ export default function RootLayout() {
                             <button
                               type="button"
                               onClick={() => setEditProfileForm((prev) => ({ ...prev, inspectionFee: 0 }))}
-                              className="text-[11px] font-bold text-emerald-600 hover:underline cursor-pointer"
+                              className="text-[11px] font-bold text-[#1FA971] hover:underline cursor-pointer"
                             >
                               Set to Free (GH₵ 0)
                             </button>
@@ -12251,7 +12339,7 @@ export default function RootLayout() {
                             />
                           </div>
                           {(Number(editProfileForm.inspectionFee) === 0 || editProfileForm.inspectionFee === 0) && (
-                            <p className="text-[11px] font-bold text-emerald-600 mt-1 flex items-center gap-1">
+                            <p className="text-[11px] font-bold text-[#1FA971] mt-1 flex items-center gap-1">
                               ✓ Shows &quot;FREE INSPECTION&quot; on cards
                             </p>
                           )}
@@ -12394,7 +12482,7 @@ export default function RootLayout() {
                             onClick={() => setEditingAd({ ...editingAd, status: 'Active' })}
                             className={`flex-1 py-1.5 rounded-xl text-xs font-bold border cursor-pointer transition-all ${
                               editingAd.status === 'Active'
-                                ? 'bg-emerald-50 border-emerald-500 text-emerald-700'
+                                ? 'bg-emerald-50 border-emerald-500 text-[#1FA971]'
                                 : 'bg-slate-50 border-slate-200 text-slate-600'
                             }`}
                           >
@@ -12546,11 +12634,11 @@ export default function RootLayout() {
 
                     <div className="space-y-2.5 text-xs text-slate-700 leading-relaxed">
                       <div className="flex items-start gap-2">
-                        <CheckCircle2 size={15} className="text-emerald-700 shrink-0 mt-0.5 stroke-[2.5]" />
+                        <CheckCircle2 size={15} className="text-[#1FA971] shrink-0 mt-0.5 stroke-[2.5]" />
                         <span>Meet in safe, busy public physical location.</span>
                       </div>
                       <div className="flex items-start gap-2">
-                        <CheckCircle2 size={15} className="text-emerald-700 shrink-0 mt-0.5 stroke-[2.5]" />
+                        <CheckCircle2 size={15} className="text-[#1FA971] shrink-0 mt-0.5 stroke-[2.5]" />
                         <span>Inspect the item thoroughly before releasing cash or mobile money.</span>
                       </div>
                       <div className="flex items-start gap-2">
@@ -12703,7 +12791,7 @@ export default function RootLayout() {
                             <span
                               className={`text-[11px] font-bold shrink-0 ${
                                 item.condition === 'Brand New'
-                                  ? 'text-emerald-600'
+                                  ? 'text-[#1FA971]'
                                   : item.condition === 'Like New'
                                   ? 'text-sky-600'
                                   : item.condition === 'Refurbished'
@@ -12719,7 +12807,7 @@ export default function RootLayout() {
                           {item.title}
                         </h3>
                         <div className="flex items-center justify-between text-[10.5px] text-slate-500 pt-1.5 border-t border-slate-50">
-                          <span className="flex items-center gap-0.5 truncate text-emerald-700 font-medium">
+                          <span className="flex items-center gap-0.5 truncate text-[#1FA971] font-medium">
                             <MapPin size={11} className="shrink-0" />
                             {item.location.city}
                           </span>
@@ -13037,7 +13125,7 @@ export default function RootLayout() {
                       SOLD OUT
                     </span>
                   ) : item.negotiable ? (
-                    <span className="text-xs font-bold text-emerald-600 whitespace-nowrap shrink-0">
+                    <span className="text-xs font-bold text-[#1FA971] whitespace-nowrap shrink-0">
                       Negotiable
                     </span>
                   ) : null}
@@ -13049,8 +13137,8 @@ export default function RootLayout() {
 
                 <div className="flex items-center gap-3.5 text-xs text-slate-500 pt-1 font-medium flex-wrap">
                   {(item.location?.neighborhood || item.location?.city) && (
-                    <span className="flex items-center gap-1 text-emerald-700 font-semibold">
-                      <MapPin size={13} className="text-emerald-600" />
+                    <span className="flex items-center gap-1 text-[#1FA971] font-semibold">
+                      <MapPin size={13} className="text-[#1FA971]" />
                       {[item.location.neighborhood, item.location.city].filter(Boolean).join(', ')}
                     </span>
                   )}
@@ -13096,7 +13184,7 @@ export default function RootLayout() {
                           {item.seller?.name || ''}
                         </span>
                         {item.seller?.isVerified && (
-                          <span className="text-emerald-600 text-xs font-extrabold tracking-wide shrink-0">
+                          <span className="text-[#1FA971] text-xs font-extrabold tracking-wide shrink-0">
                             VERIFIED
                           </span>
                         )}
@@ -13117,7 +13205,7 @@ export default function RootLayout() {
                       type="button"
                       onClick={() => item.seller?.id && toggleFollowSeller(item.seller.id)}
                       className={`shrink-0 text-xs font-bold bg-transparent transition-colors cursor-pointer py-1 px-1.5 ${
-                        isFollowing ? 'text-emerald-600 hover:text-emerald-700' : 'text-blue-600 hover:text-blue-700'
+                        isFollowing ? 'text-[#1FA971] hover:text-[#189462]' : 'text-blue-600 hover:text-blue-700'
                       }`}
                     >
                       {isFollowing ? 'Following' : 'Follow'}
@@ -13130,7 +13218,7 @@ export default function RootLayout() {
                   <div className="bg-[#F4F7FD] rounded-2xl p-2.5 flex items-center justify-between text-xs font-semibold text-slate-700">
                     {item.seller?.memberSince && (
                       <div className="flex items-center gap-1.5">
-                        <Calendar size={14} className="text-emerald-600" />
+                        <Calendar size={14} className="text-[#1FA971]" />
                         <span>{item.seller.memberSince}</span>
                       </div>
                     )}
@@ -13152,12 +13240,12 @@ export default function RootLayout() {
                       setSearchQuery(item.seller.name || '');
                       navigateTo({ type: 'search' });
                     }}
-                    className="text-emerald-700 font-bold flex items-center gap-1 hover:underline cursor-pointer"
+                    className="text-[#1FA971] font-bold flex items-center gap-1 hover:underline cursor-pointer"
                   >
                     <span>
                       View all {sellerListingsCount} active {sellerListingsCount === 1 ? 'listing' : 'listings'}
                     </span>
-                    <ArrowRight size={13} className="text-emerald-600" />
+                    <ArrowRight size={13} className="text-[#1FA971]" />
                   </button>
                 </div>
               </div>
@@ -13167,7 +13255,7 @@ export default function RootLayout() {
                 <div className="bg-white rounded-3xl p-4 border border-slate-100 shadow-xs space-y-3">
                   <div className="flex items-center gap-2.5">
                     <div className="w-8 h-8 rounded-full bg-[#E6F7EF] flex items-center justify-center shrink-0">
-                      <Mic size={16} className="text-[#0B6B46]" />
+                      <Mic size={16} className="text-[#1FA971]" />
                     </div>
                     <h3 className="text-[15px] font-bold text-slate-900 leading-tight">
                       Audio Description by Seller
@@ -13275,7 +13363,7 @@ export default function RootLayout() {
                 <div className="flex items-center justify-between">
                   <h3 className="text-base font-bold text-slate-900">Item Specifications</h3>
                   {item.quantity !== undefined && (
-                    <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full">
+                    <span className="text-xs font-bold text-[#1FA971] bg-emerald-50 px-2.5 py-1 rounded-full">
                       {item.quantity} {item.quantity === 1 ? 'unit available' : 'units available'}
                     </span>
                   )}
@@ -13286,7 +13374,7 @@ export default function RootLayout() {
                   {item.condition && !item.specifications?.['Condition'] && (
                     <div>
                       <span className="text-slate-500 block text-[11px] mb-0.5">Condition</span>
-                      <span className="font-bold text-emerald-700">{item.condition}</span>
+                      <span className="font-bold text-[#1FA971]">{item.condition}</span>
                     </div>
                   )}
 
@@ -13299,7 +13387,7 @@ export default function RootLayout() {
                   {/* Real delivery terms */}
                   <div>
                     <span className="text-slate-500 block text-[11px] mb-0.5">Delivery</span>
-                    <span className={`font-bold ${item.deliveryAvailable ? 'text-emerald-700' : 'text-slate-700'}`}>
+                    <span className={`font-bold ${item.deliveryAvailable ? 'text-[#1FA971]' : 'text-slate-700'}`}>
                       {item.deliveryAvailable ? 'Available Countrywide' : 'Direct Pickup Only'}
                     </span>
                   </div>
@@ -13311,7 +13399,7 @@ export default function RootLayout() {
                     return (
                       <div key={key} className={isFullWidth ? 'col-span-2 pt-1 border-t border-slate-100' : ''}>
                         <span className="text-slate-500 block text-[11px] mb-0.5">{key}</span>
-                        <span className={`font-bold leading-relaxed ${isHighlight ? 'text-emerald-700' : 'text-slate-900'}`}>
+                        <span className={`font-bold leading-relaxed ${isHighlight ? 'text-[#1FA971]' : 'text-slate-900'}`}>
                           {val}
                         </span>
                       </div>
@@ -13339,11 +13427,11 @@ export default function RootLayout() {
 
                 <div className="space-y-2.5 text-xs text-slate-700 leading-relaxed">
                   <div className="flex items-start gap-2.5">
-                    <CheckCircle2 size={16} className="text-emerald-600 shrink-0 mt-0.5 stroke-[2.5]" />
+                    <CheckCircle2 size={16} className="text-[#1FA971] shrink-0 mt-0.5 stroke-[2.5]" />
                     <span>Meet in safe, busy public physical location.</span>
                   </div>
                   <div className="flex items-start gap-2.5">
-                    <CheckCircle2 size={16} className="text-emerald-600 shrink-0 mt-0.5 stroke-[2.5]" />
+                    <CheckCircle2 size={16} className="text-[#1FA971] shrink-0 mt-0.5 stroke-[2.5]" />
                     <span>Inspect the item thoroughly before releasing cash or mobile money.</span>
                   </div>
                   <div className="flex items-start gap-2.5">
@@ -13507,7 +13595,7 @@ export default function RootLayout() {
                   <div className="flex items-center gap-1">
                     <h2 className="text-xs font-black text-slate-900">{activeConv.otherUser.name}</h2>
                     {activeConv.otherUser.isVerified && (
-                      <CheckCircle size={12} className="text-emerald-500 fill-emerald-100" />
+                      <CheckCircle size={12} className="text-[#1FA971] fill-emerald-100" />
                     )}
                   </div>
                   <p className="text-[11px] text-slate-500 font-semibold">{amBuyer ? 'Seller' : 'Buyer'}</p>
@@ -13626,11 +13714,11 @@ export default function RootLayout() {
                         {/* Seller Acceptance Actions (Image 4 Integration in Chat) */}
                         {isOfferAccepted ? (
                           <div className="bg-emerald-50 border border-emerald-300 rounded-2xl p-3 text-xs text-emerald-900 space-y-2">
-                            <div className="flex items-center gap-1.5 font-black text-emerald-800">
-                              <CheckCircle2 size={16} className="text-emerald-600" />
+                            <div className="flex items-center gap-1.5 font-black text-[#1FA971]">
+                              <CheckCircle2 size={16} className="text-[#1FA971]" />
                               <span>Offer Accepted: GH₵ {currentOfferVal.toLocaleString()}</span>
                             </div>
-                            <p className="text-[11px] text-emerald-700 leading-snug">
+                            <p className="text-[11px] text-[#1FA971] leading-snug">
                               {m.senderId === 'me'
                                 ? 'Your offer was accepted! Agree on a safe, busy public meetup point.'
                                 : 'You accepted this offer! Deal locked. Coordinate meetup and cash on pickup below.'}
@@ -13659,7 +13747,7 @@ export default function RootLayout() {
                                   }
                                   handleSendChatMessage(`📱 Payment via Mobile Money: ${userProfile.phone} (${userProfile.name}) or cash on pickup.`, false);
                                 }}
-                                className="px-3 py-1.5 rounded-xl border border-emerald-300 bg-white hover:bg-emerald-50 text-emerald-800 font-bold text-[11px] cursor-pointer active:scale-95 transition-all"
+                                className="px-3 py-1.5 rounded-xl border border-emerald-300 bg-white hover:bg-emerald-50 text-[#1FA971] font-bold text-[11px] cursor-pointer active:scale-95 transition-all"
                               >
                                 Share Payment Info
                               </button>
@@ -14068,7 +14156,7 @@ export default function RootLayout() {
                   switch (item.type) {
                     case 'price_drop':
                       return {
-                        icon: <TrendingDown size={16} className="text-emerald-600" />,
+                        icon: <TrendingDown size={16} className="text-[#1FA971]" />,
                         bg: 'bg-emerald-50 border-emerald-100/80',
                       };
                     case 'message':
@@ -14345,7 +14433,7 @@ export default function RootLayout() {
                               </h3>
                             </div>
                             <div className="flex items-center gap-1 text-[10.5px] text-slate-400 pt-2 border-t border-slate-50 mt-2">
-                              <MapPin size={11} className="shrink-0 text-emerald-600" />
+                              <MapPin size={11} className="shrink-0 text-[#1FA971]" />
                               <span className="truncate">{item.location.neighborhood || item.location.city}</span>
                             </div>
                           </div>
@@ -14518,7 +14606,7 @@ export default function RootLayout() {
                               </h3>
                             </div>
                             <div className="flex items-center gap-1 text-[10.5px] text-slate-400 pt-2 border-t border-slate-50 mt-2">
-                              <MapPin size={11} className="shrink-0 text-emerald-600" />
+                              <MapPin size={11} className="shrink-0 text-[#1FA971]" />
                               <span className="truncate">{item.location.neighborhood || item.location.city}</span>
                             </div>
                           </div>
@@ -14623,11 +14711,11 @@ export default function RootLayout() {
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <h3 className="font-extrabold text-slate-900 text-sm truncate">{artisan.name}</h3>
                           {artisan.verified && (
-                            <CheckCircle size={14} className="text-emerald-600 shrink-0" />
+                            <CheckCircle size={14} className="text-[#1FA971] shrink-0" />
                           )}
                           <span
                             className={`inline-flex items-center gap-1 text-[11px] font-extrabold ${
-                              isAvailable ? 'text-emerald-700' : 'text-amber-700'
+                              isAvailable ? 'text-[#1FA971]' : 'text-amber-700'
                             }`}
                           >
                             <span
@@ -14657,7 +14745,7 @@ export default function RootLayout() {
                     {/* Price / Rate & Bookmark Action */}
                     <div className="shrink-0 flex items-center gap-1.5">
                       <span className={`text-xs font-black tracking-tight ${
-                        getArtisanDisplayRate(artisan).includes('FREE') ? 'text-emerald-600' : 'text-orange-600'
+                        getArtisanDisplayRate(artisan).includes('FREE') ? 'text-[#1FA971]' : 'text-orange-600'
                       }`}>
                         {getArtisanDisplayRate(artisan)}
                       </span>
@@ -14683,17 +14771,17 @@ export default function RootLayout() {
                       {artisan.badges.map((badge, idx) => (
                         <span
                           key={idx}
-                          className="text-[11px] font-bold text-emerald-700 flex items-center gap-1"
+                          className="text-[11px] font-bold text-[#1FA971] flex items-center gap-1"
                         >
-                          <CheckCircle size={12} className="shrink-0 text-emerald-600" />
+                          <CheckCircle size={12} className="shrink-0 text-[#1FA971]" />
                           <span>{badge === 'Verified & Approved' ? 'Verified' : badge}</span>
                         </span>
                       ))}
                     </div>
                   ) : artisan.verified ? (
                     <div className="flex items-center gap-2 mb-2.5">
-                      <span className="text-[11px] font-bold text-emerald-700 flex items-center gap-1">
-                        <CheckCircle size={12} className="shrink-0 text-emerald-600" />
+                      <span className="text-[11px] font-bold text-[#1FA971] flex items-center gap-1">
+                        <CheckCircle size={12} className="shrink-0 text-[#1FA971]" />
                         <span>Verified</span>
                       </span>
                     </div>
@@ -14875,7 +14963,7 @@ export default function RootLayout() {
 
                     <div className="flex items-center gap-1.5">
                       <h2 className="text-base font-black text-slate-900 truncate">{artisan.name}</h2>
-                      <CheckCircle size={15} className="text-emerald-600 shrink-0" />
+                      <CheckCircle size={15} className="text-[#1FA971] shrink-0" />
                     </div>
 
                     <div className="flex items-center gap-1.5 mt-1">
@@ -14888,8 +14976,8 @@ export default function RootLayout() {
                     {/* Verification Badges - Admin sees full breakdown (Ghana Card Verified, Police Cleared, Verified). All other roles see ONLY "Verified" for verified artisans, and NO tag for unverified users */}
                     {currentUserRole === 'admin' ? (
                       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2">
-                        <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700">
-                          <ShieldCheck size={13} className="text-emerald-600" />
+                        <span className="inline-flex items-center gap-1 text-[11px] font-bold text-[#1FA971]">
+                          <ShieldCheck size={13} className="text-[#1FA971]" />
                           Ghana Card Verified
                         </span>
                         <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-700">
@@ -14904,8 +14992,8 @@ export default function RootLayout() {
                     ) : (
                       artisan.verified ? (
                         <div className="flex items-center gap-2 mt-2">
-                          <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700">
-                            <CheckCircle size={13} className="text-emerald-600" />
+                          <span className="inline-flex items-center gap-1 text-[11px] font-bold text-[#1FA971]">
+                            <CheckCircle size={13} className="text-[#1FA971]" />
                             Verified
                           </span>
                         </div>
@@ -14942,7 +15030,7 @@ export default function RootLayout() {
                     </span>
                   </div>
                   <div className="px-1">
-                    <span className="text-emerald-600 font-black text-xs block">
+                    <span className="text-[#1FA971] font-black text-xs block">
                       {artisanReviews.filter((r) => r.artisanId === artisan.id).length}
                     </span>
                     <span className="text-[10.5px] text-slate-400 font-medium block mt-0.5">
@@ -15079,7 +15167,7 @@ export default function RootLayout() {
 
                 {/* Haraka Guarantee */}
                 <div className="flex items-start gap-1.5 pt-1 text-[11px] text-slate-600 leading-snug">
-                  <ShieldCheck size={13} className="text-emerald-600 shrink-0 mt-0.5" />
+                  <ShieldCheck size={13} className="text-[#1FA971] shrink-0 mt-0.5" />
                   <span>
                     <strong className="text-slate-800 font-bold">Haraka 0% Fee Guarantee:</strong>{' '}
                     Deal directly with {firstName}. {profileData.calloutLabel} {profileData.calloutPrice} upon arrival in {profileData.guaranteeLocation}.
@@ -15132,7 +15220,7 @@ export default function RootLayout() {
                   </h3>
                   <button
                     onClick={() => openGallery(profileData.portfolio, 0)}
-                    className="text-[11px] font-bold text-emerald-700 hover:text-emerald-800 flex items-center gap-0.5 cursor-pointer"
+                    className="text-[11px] font-bold text-[#1FA971] hover:text-[#189462] flex items-center gap-0.5 cursor-pointer"
                   >
                     <span>View all ({profileData.portfolio.length})</span>
                     <ChevronRight size={13} />
@@ -15213,7 +15301,7 @@ export default function RootLayout() {
                 </span>
                 <div className="flex items-baseline gap-1 mt-0.5">
                   <span className="text-base font-black text-slate-900">{profileData.calloutPrice}</span>
-                  <span className="text-[11px] font-bold text-emerald-700">{profileData.arrivalNote}</span>
+                  <span className="text-[11px] font-bold text-[#1FA971]">{profileData.arrivalNote}</span>
                 </div>
               </div>
 
@@ -15360,8 +15448,8 @@ export default function RootLayout() {
                 {bookingStep === 1 ? (
                   <span className="text-orange-600 font-bold">50%</span>
                 ) : (
-                  <span className="inline-flex items-center gap-1 text-emerald-700 font-bold text-[11px]">
-                    <CheckCircle size={13} className="text-emerald-600 fill-emerald-100" />
+                  <span className="inline-flex items-center gap-1 text-[#1FA971] font-bold text-[11px]">
+                    <CheckCircle size={13} className="text-[#1FA971] fill-emerald-100" />
                     <span>Ready to Send</span>
                   </span>
                 )}
@@ -15414,13 +15502,13 @@ export default function RootLayout() {
                       <div className="flex items-center gap-1.5 min-w-0">
                         <h2 className="text-base font-black text-slate-900 truncate">{artisan.name}</h2>
                         {artisan.verified && (
-                          <CheckCircle size={15} className="text-emerald-600 shrink-0" />
+                          <CheckCircle size={15} className="text-[#1FA971] shrink-0" />
                         )}
                       </div>
                       <div className="shrink-0 flex items-center gap-1.5">
                         <span
                           className={`text-xs font-black tracking-tight ${
-                            artisan.rate.includes('FREE') ? 'text-emerald-600' : 'text-orange-600'
+                            artisan.rate.includes('FREE') ? 'text-[#1FA971]' : 'text-orange-600'
                           }`}
                         >
                           {artisan.rate}
@@ -15449,8 +15537,8 @@ export default function RootLayout() {
                     {/* Verification Badges - Admin sees full breakdown (Ghana Card Verified, Police Cleared, Verified). All other roles see ONLY "Verified" for verified artisans, and NO tag for unverified users */}
                     {currentUserRole === 'admin' ? (
                       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2">
-                        <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700">
-                          <ShieldCheck size={13} className="text-emerald-600" />
+                        <span className="inline-flex items-center gap-1 text-[11px] font-bold text-[#1FA971]">
+                          <ShieldCheck size={13} className="text-[#1FA971]" />
                           Ghana Card Verified
                         </span>
                         <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-700">
@@ -15465,8 +15553,8 @@ export default function RootLayout() {
                     ) : (
                       artisan.verified ? (
                         <div className="flex items-center gap-2 mt-2">
-                          <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700">
-                            <CheckCircle size={13} className="text-emerald-600" />
+                          <span className="inline-flex items-center gap-1 text-[11px] font-bold text-[#1FA971]">
+                            <CheckCircle size={13} className="text-[#1FA971]" />
                             Verified
                           </span>
                         </div>
@@ -15503,7 +15591,7 @@ export default function RootLayout() {
                     </span>
                   </div>
                   <div className="px-1">
-                    <span className="text-emerald-600 font-black text-xs block">
+                    <span className="text-[#1FA971] font-black text-xs block">
                       {artisanReviews.filter((r) => r.artisanId === artisan.id).length}
                     </span>
                     <span className="text-[10.5px] text-slate-400 font-medium block mt-0.5">
@@ -15985,7 +16073,7 @@ export default function RootLayout() {
                     <div className="flex items-center justify-between text-xs py-1 border-b border-slate-100">
                       <div>
                         <span className="text-slate-700 font-medium block">Base Inspection / Consultation</span>
-                        <span className="text-[11px] text-emerald-700 font-bold">Direct to Artisan</span>
+                        <span className="text-[11px] text-[#1FA971] font-bold">Direct to Artisan</span>
                       </div>
                       <span className="font-bold text-slate-900">{baseRateFormatted}</span>
                     </div>
@@ -15993,9 +16081,9 @@ export default function RootLayout() {
                     <div className="flex items-center justify-between text-xs py-1 border-b border-slate-100">
                       <span className="text-slate-700 font-medium flex items-center gap-1">
                         Platform Connection Fee
-                        <ShieldCheck size={12} className="text-emerald-600" />
+                        <ShieldCheck size={12} className="text-[#1FA971]" />
                       </span>
-                      <span className="font-bold text-emerald-700">FREE (GH₵ 0.00)</span>
+                      <span className="font-bold text-[#1FA971]">FREE (GH₵ 0.00)</span>
                     </div>
 
                     <div className="bg-white rounded-xl p-3 border border-slate-200 flex items-center justify-between shadow-2xs">
@@ -16088,8 +16176,8 @@ export default function RootLayout() {
                         ) : (
                           artisan.verified ? (
                             <div className="flex items-center gap-2 mt-2">
-                              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700">
-                                <CheckCircle size={12} className="text-emerald-600" />
+                              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-[#1FA971]">
+                                <CheckCircle size={12} className="text-[#1FA971]" />
                                 Verified
                               </span>
                             </div>
@@ -16234,7 +16322,7 @@ export default function RootLayout() {
                   <div className="bg-white rounded-3xl p-4 border border-slate-100 shadow-2xs space-y-3">
                     <div>
                       <h3 className="text-sm font-black text-slate-900">100% Direct Transaction</h3>
-                      <span className="text-xs font-bold text-emerald-600 block">Zero Platform Handling Fee</span>
+                      <span className="text-xs font-bold text-[#1FA971] block">Zero Platform Handling Fee</span>
                     </div>
 
                     <div className="bg-[#F1F4FD] rounded-2xl p-3 text-xs leading-relaxed text-slate-700 border border-slate-100/60">
@@ -16254,7 +16342,7 @@ export default function RootLayout() {
 
                       <div className="flex items-center justify-between">
                         <span className="text-slate-700 font-medium">Haraka Linkage Fee</span>
-                        <span className="font-bold text-emerald-600">FREE (GH₵ 0.00)</span>
+                        <span className="font-bold text-[#1FA971]">FREE (GH₵ 0.00)</span>
                       </div>
 
                       <div className="border-t border-slate-100 pt-2 flex items-center justify-between">
@@ -17050,7 +17138,7 @@ export default function RootLayout() {
                         <span
                           className={`text-xs font-extrabold shrink-0 ${
                             selectedBookingForDetails.status === 'Confirmed'
-                              ? 'text-emerald-600'
+                              ? 'text-[#1FA971]'
                               : selectedBookingForDetails.status === 'In Progress'
                               ? 'text-amber-600'
                               : selectedBookingForDetails.status === 'Completed'
@@ -17135,7 +17223,7 @@ export default function RootLayout() {
 
                       <div className="flex items-center justify-between py-1">
                         <span className="text-slate-500 font-medium">Platform Linkage Fee:</span>
-                        <span className="font-bold text-emerald-600">FREE (GH₵ 0.00)</span>
+                        <span className="font-bold text-[#1FA971]">FREE (GH₵ 0.00)</span>
                       </div>
                     </div>
                   </div>
@@ -17255,7 +17343,7 @@ export default function RootLayout() {
                 {selectedBookingForDetails.status === 'Completed' && (
                   <div className="px-4 py-3 border-t border-slate-100 bg-white space-y-2">
                     {artisanReviews.some((r) => r.bookingId === selectedBookingForDetails.id) ? (
-                      <p className="text-xs font-semibold text-emerald-700">✓ You reviewed this job. Thank you!</p>
+                      <p className="text-xs font-semibold text-[#1FA971]">✓ You reviewed this job. Thank you!</p>
                     ) : (
                       <>
                         <p className="text-xs font-black text-slate-900">Rate {selectedBookingForDetails.artisanName}</p>
@@ -17298,7 +17386,7 @@ export default function RootLayout() {
                 {/* Modal Action Footer matching Artisan Dashboard */}
                 <div className="px-4 py-3 border-t border-slate-100 bg-white flex items-center gap-2">
                   {selectedBookingForDetails.status === 'Completed' ? (
-                    <span className="flex-1 text-[11px] font-semibold text-emerald-700">Job completed</span>
+                    <span className="flex-1 text-[11px] font-semibold text-[#1FA971]">Job completed</span>
                   ) : selectedBookingForDetails.status !== 'Cancelled' ? (
                     <button
                       type="button"
@@ -17317,7 +17405,7 @@ export default function RootLayout() {
                         changeBookingStatus(selectedBookingForDetails.id, 'Pending', 'Booking request sent again');
                         setSelectedBookingForDetails((prev) => (prev ? { ...prev, status: 'Pending' } : null));
                       }}
-                      className="py-2.5 px-3 rounded-xl border border-emerald-200 text-emerald-700 hover:bg-emerald-50 font-bold text-xs cursor-pointer active:scale-98 transition-all"
+                      className="py-2.5 px-3 rounded-xl border border-emerald-200 text-[#1FA971] hover:bg-emerald-50 font-bold text-xs cursor-pointer active:scale-98 transition-all"
                     >
                       Restore Job
                     </button>
@@ -17694,8 +17782,8 @@ export default function RootLayout() {
                     className="text-left cursor-pointer group"
                     title="Click to edit personal info in Step 1"
                   >
-                    <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-800">
-                      <CheckCircle2 size={14} className="text-emerald-600 fill-emerald-100 shrink-0" />
+                    <div className="flex items-center gap-1.5 text-xs font-bold text-[#1FA971]">
+                      <CheckCircle2 size={14} className="text-[#1FA971] fill-emerald-100 shrink-0" />
                       <span>Step 1 Completed</span>
                     </div>
                     <div className="w-full h-1 bg-[#0B6640] rounded-full mt-1.5" />
@@ -17738,8 +17826,8 @@ export default function RootLayout() {
                       className="text-left cursor-pointer group flex-1 min-w-0"
                       title="Review / edit Step 1 Personal Info"
                     >
-                      <div className="flex items-center gap-1 text-[11px] font-bold text-emerald-800 truncate">
-                        <CheckCircle2 size={13} className="text-emerald-600 fill-emerald-100 shrink-0" />
+                      <div className="flex items-center gap-1 text-[11px] font-bold text-[#1FA971] truncate">
+                        <CheckCircle2 size={13} className="text-[#1FA971] fill-emerald-100 shrink-0" />
                         <span>Step 1: Info</span>
                       </div>
                       <div className="w-full h-1 bg-[#0B6640] rounded-full mt-1" />
@@ -17750,8 +17838,8 @@ export default function RootLayout() {
                       className="text-left cursor-pointer group flex-1 min-w-0"
                       title="Review / edit Step 2 Storefront & ID"
                     >
-                      <div className="flex items-center gap-1 text-[11px] font-bold text-emerald-800 truncate">
-                        <CheckCircle2 size={13} className="text-emerald-600 fill-emerald-100 shrink-0" />
+                      <div className="flex items-center gap-1 text-[11px] font-bold text-[#1FA971] truncate">
+                        <CheckCircle2 size={13} className="text-[#1FA971] fill-emerald-100 shrink-0" />
                         <span>
                           {sellerRegType === 'storefront' || sellerRegForm.sellerAccountType === 'shop'
                             ? 'Step 2: Shop'
@@ -18333,17 +18421,17 @@ export default function RootLayout() {
                             type="button"
                             onClick={detectUserLocation}
                             disabled={isDetectingLocation}
-                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-emerald-700 text-[11px] font-extrabold hover:bg-slate-100 transition-colors cursor-pointer shrink-0 border border-slate-200"
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[#1FA971] text-[11px] font-extrabold hover:bg-slate-100 transition-colors cursor-pointer shrink-0 border border-slate-200"
                             title="Auto-detect current GPS location in Ghana"
                           >
-                            <Crosshair size={13} className={`text-emerald-700 ${isDetectingLocation ? 'animate-spin' : ''}`} />
+                            <Crosshair size={13} className={`text-[#1FA971] ${isDetectingLocation ? 'animate-spin' : ''}`} />
                             <span>{isDetectingLocation ? 'Detecting...' : 'Auto-detect'}</span>
                           </button>
                         </div>
 
                         {locationDetectSuccess && (
                           <div className="flex items-center gap-2 py-1 text-[11.5px] text-emerald-900 font-semibold animate-in fade-in">
-                            <CheckCircle2 size={15} className="text-emerald-600 shrink-0" />
+                            <CheckCircle2 size={15} className="text-[#1FA971] shrink-0" />
                             <span>
                               Location set:{' '}
                               <strong className="text-emerald-950 font-extrabold">
@@ -18864,7 +18952,7 @@ export default function RootLayout() {
                                     className="w-20 h-13 object-cover rounded-lg border border-slate-300 mb-2 shadow-xs z-10"
                                   />
                                 ) : (
-                                  <div className="w-8 h-8 rounded-full bg-white shadow-sm flex items-center justify-center text-emerald-600 mb-1 z-10">
+                                  <div className="w-8 h-8 rounded-full bg-white shadow-sm flex items-center justify-center text-[#1FA971] mb-1 z-10">
                                     <CheckCircle2 size={22} className="stroke-[2.5]" />
                                   </div>
                                 )}
@@ -19002,7 +19090,7 @@ export default function RootLayout() {
                           <h3 className="text-sm font-black text-slate-900">
                             Trade Specialization <span className="text-red-500 font-bold">*</span>
                           </h3>
-                          <span className="text-xs font-bold text-emerald-700">Skilled Trade</span>
+                          <span className="text-xs font-bold text-[#1FA971]">Skilled Trade</span>
                         </div>
 
                         {/* Professional Headline / Title */}
@@ -19060,8 +19148,8 @@ export default function RootLayout() {
                             </div>
                           </div>
                           {sellerRegForm.tradeSkill && (
-                            <div className="mt-1.5 flex items-center gap-1.5 text-[11px] font-bold text-emerald-700">
-                              <CheckCircle2 size={12} className="text-emerald-600 shrink-0" />
+                            <div className="mt-1.5 flex items-center gap-1.5 text-[11px] font-bold text-[#1FA971]">
+                              <CheckCircle2 size={12} className="text-[#1FA971] shrink-0" />
                               <span>Selected: {sellerRegForm.tradeSkill}</span>
                             </div>
                           )}
@@ -19140,9 +19228,9 @@ export default function RootLayout() {
                             type="button"
                             onClick={detectUserLocation}
                             disabled={isDetectingLocation}
-                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-emerald-700 text-[11px] font-extrabold hover:bg-slate-100 transition-colors cursor-pointer shrink-0 border border-slate-200"
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[#1FA971] text-[11px] font-extrabold hover:bg-slate-100 transition-colors cursor-pointer shrink-0 border border-slate-200"
                           >
-                            <Crosshair size={13} className={`text-emerald-700 ${isDetectingLocation ? 'animate-spin' : ''}`} />
+                            <Crosshair size={13} className={`text-[#1FA971] ${isDetectingLocation ? 'animate-spin' : ''}`} />
                             <span>{isDetectingLocation ? 'Detecting...' : 'Auto-detect'}</span>
                           </button>
                         </div>
@@ -19397,7 +19485,7 @@ export default function RootLayout() {
                               Voice Note Intro &amp; Languages
                             </h3>
                           </div>
-                          <span className="text-[11px] font-bold text-emerald-700 shrink-0">Audio Greeting</span>
+                          <span className="text-[11px] font-bold text-[#1FA971] shrink-0">Audio Greeting</span>
                         </div>
 
                         <p className="text-xs text-slate-500 leading-relaxed">
@@ -19647,7 +19735,7 @@ export default function RootLayout() {
                                 </div>
                               </div>
                               <div className="flex items-center gap-2 shrink-0">
-                                <span className={`text-xs font-black ${srv.price === 'Free' ? 'text-emerald-700' : 'text-[#FF6A00]'}`}>
+                                <span className={`text-xs font-black ${srv.price === 'Free' ? 'text-[#1FA971]' : 'text-[#FF6A00]'}`}>
                                   {srv.price}
                                 </span>
                                 <button
@@ -20148,7 +20236,7 @@ export default function RootLayout() {
                                     className="w-20 h-13 object-cover rounded-lg border border-slate-300 mb-2 shadow-xs z-10"
                                   />
                                 ) : (
-                                  <div className="w-8 h-8 rounded-full bg-white shadow-sm flex items-center justify-center text-emerald-600 mb-1 z-10">
+                                  <div className="w-8 h-8 rounded-full bg-white shadow-sm flex items-center justify-center text-[#1FA971] mb-1 z-10">
                                     <CheckCircle2 size={22} className="stroke-[2.5]" />
                                   </div>
                                 )}
@@ -20317,17 +20405,17 @@ export default function RootLayout() {
                             type="button"
                             onClick={detectUserLocation}
                             disabled={isDetectingLocation}
-                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-emerald-700 text-[11px] font-extrabold hover:bg-slate-100 transition-colors cursor-pointer shrink-0 border border-slate-200"
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[#1FA971] text-[11px] font-extrabold hover:bg-slate-100 transition-colors cursor-pointer shrink-0 border border-slate-200"
                             title="Auto-detect current GPS location in Ghana"
                           >
-                            <Crosshair size={13} className={`text-emerald-700 ${isDetectingLocation ? 'animate-spin' : ''}`} />
+                            <Crosshair size={13} className={`text-[#1FA971] ${isDetectingLocation ? 'animate-spin' : ''}`} />
                             <span>{isDetectingLocation ? 'Detecting...' : 'Auto-detect'}</span>
                           </button>
                         </div>
 
                         {locationDetectSuccess && (
                           <div className="flex items-center gap-2 py-1 text-[11.5px] text-emerald-900 font-semibold animate-in fade-in">
-                            <CheckCircle2 size={15} className="text-emerald-600 shrink-0" />
+                            <CheckCircle2 size={15} className="text-[#1FA971] shrink-0" />
                             <span>
                               Location set:{' '}
                               <strong className="text-emerald-950 font-extrabold">
@@ -20755,7 +20843,7 @@ export default function RootLayout() {
                                     className="w-20 h-13 object-cover rounded-lg border border-slate-300 mb-2 shadow-xs z-10"
                                   />
                                 ) : (
-                                  <div className="w-8 h-8 rounded-full bg-white shadow-sm flex items-center justify-center text-emerald-600 mb-1 z-10">
+                                  <div className="w-8 h-8 rounded-full bg-white shadow-sm flex items-center justify-center text-[#1FA971] mb-1 z-10">
                                     <CheckCircle2 size={22} className="stroke-[2.5]" />
                                   </div>
                                 )}
@@ -20941,7 +21029,7 @@ export default function RootLayout() {
                                     Voice Note Intro ({artisanLanguages.slice(0, 2).join(' & ') || 'Recorded'})
                                   </span>
                                 </div>
-                                <span className="text-[11px] font-bold text-emerald-700">
+                                <span className="text-[11px] font-bold text-[#1FA971]">
                                   0:{artisanAudioDuration < 10 ? '0' : ''}{artisanAudioDuration}
                                 </span>
                               </div>
@@ -20985,11 +21073,11 @@ export default function RootLayout() {
                               <Languages size={12} className="text-slate-400" />
                               <span>Speaks: {artisanLanguages.length > 0 ? artisanLanguages.join(', ') : 'Not specified'}</span>
                             </div>
-                            <span className="text-emerald-700 font-bold">Ready to inspect</span>
+                            <span className="text-[#1FA971] font-bold">Ready to inspect</span>
                           </div>
 
                           <div className="flex items-start gap-1.5 pt-1 text-[10.5px] text-slate-600 leading-snug">
-                            <ShieldCheck size={13} className="text-emerald-600 shrink-0 mt-0.5" />
+                            <ShieldCheck size={13} className="text-[#1FA971] shrink-0 mt-0.5" />
                             <span>
                               <strong className="text-slate-800 font-bold">Haraka 0% Fee Guarantee:</strong> Deal directly with {sellerRegForm.fullName?.split(' ')[0] || 'Artisan'}. Inspection &amp; Diagnostics {Number(sellerRegForm.inspectionFee ?? 0) === 0 && (sellerRegForm.inspectionFee !== '' && sellerRegForm.inspectionFee !== undefined) ? 'FREE upon arrival' : sellerRegForm.inspectionFee ? `GH₵ ${sellerRegForm.inspectionFee}.00` : 'To be confirmed'} in {artisanCoverageAreas.slice(0, 2).join(' & ') || sellerRegForm.cityNeighborhood || (sellerRegForm.region || 'Service Area')}.
                             </span>
@@ -21030,7 +21118,7 @@ export default function RootLayout() {
                                   <p className="text-[11px] text-slate-500 truncate">{srv.desc}</p>
                                 </div>
                               </div>
-                              <span className={`text-[11px] font-black shrink-0 ${srv.price === 'Free' ? 'text-emerald-700' : 'text-orange-600'}`}>
+                              <span className={`text-[11px] font-black shrink-0 ${srv.price === 'Free' ? 'text-[#1FA971]' : 'text-orange-600'}`}>
                                 {srv.price}
                               </span>
                             </div>
@@ -21119,7 +21207,7 @@ export default function RootLayout() {
                           {/* Diagnostic Inspection Fee */}
                           <div className="flex items-center justify-between py-1 border-b border-slate-100">
                             <span className="text-slate-500 font-medium">Diagnostic Inspection Fee:</span>
-                            <span className={`font-black text-right ${Number(sellerRegForm.inspectionFee ?? 0) === 0 && (sellerRegForm.inspectionFee !== '' && sellerRegForm.inspectionFee !== undefined) ? 'text-emerald-700' : 'text-[#FF6A00]'}`}>
+                            <span className={`font-black text-right ${Number(sellerRegForm.inspectionFee ?? 0) === 0 && (sellerRegForm.inspectionFee !== '' && sellerRegForm.inspectionFee !== undefined) ? 'text-[#1FA971]' : 'text-[#FF6A00]'}`}>
                               {Number(sellerRegForm.inspectionFee ?? 0) === 0 && (sellerRegForm.inspectionFee !== '' && sellerRegForm.inspectionFee !== undefined)
                                 ? 'FREE on Arrival'
                                 : sellerRegForm.inspectionFee ? `GH₵ ${sellerRegForm.inspectionFee}.00` : 'Not set'}
@@ -21176,7 +21264,7 @@ export default function RootLayout() {
                             <span className="text-slate-500 font-medium">Ghana Card (Identity):</span>
                             <span className="font-bold text-slate-800">
                               {!isIdVerificationSkipped && sellerRegForm.ghanaCardPin ? (
-                                <span className="text-emerald-700 font-bold">Submitted ({sellerRegForm.ghanaCardPin})</span>
+                                <span className="text-[#1FA971] font-bold">Submitted ({sellerRegForm.ghanaCardPin})</span>
                               ) : (
                                 'Skipped'
                               )}
@@ -21188,7 +21276,7 @@ export default function RootLayout() {
                             <span className="text-slate-500 font-medium">Trade / Guild Certificate:</span>
                             <span className="font-bold text-slate-800">
                               {!isCertVerificationSkipped && (businessCertNumber || businessCertPhoto) ? (
-                                <span className="text-emerald-700 font-bold">Submitted ({businessCertNumber || 'Verified'})</span>
+                                <span className="text-[#1FA971] font-bold">Submitted ({businessCertNumber || 'Verified'})</span>
                               ) : (
                                 'Skipped'
                               )}
@@ -21252,7 +21340,7 @@ export default function RootLayout() {
                       {/* Card 1: Private Seller Profile */}
                       <div className="rounded-3xl p-5 border border-slate-200/80 space-y-2.5">
                         <div className="flex items-start gap-3">
-                          <div className="w-12 h-12 rounded-2xl text-emerald-800 flex items-center justify-center shrink-0">
+                          <div className="w-12 h-12 rounded-2xl text-[#1FA971] flex items-center justify-center shrink-0">
                             <ShieldCheck size={28} className="text-[#065F46] stroke-[2.4]" />
                           </div>
                           <div className="flex-1 min-w-0">
@@ -21260,7 +21348,7 @@ export default function RootLayout() {
                               <h3 className="text-base font-black text-slate-900 leading-tight">
                                 Private Seller Profile
                               </h3>
-                              <span className="text-emerald-800 text-[10.5px] font-extrabold px-2.5 py-0.5 rounded-full">
+                              <span className="text-[#1FA971] text-[10.5px] font-extrabold px-2.5 py-0.5 rounded-full">
                                 {sellerRegForm.sellerAccountType === 'shop' || sellerRegType === 'storefront'
                                   ? 'Commercial Hub • 0% Commission'
                                   : '0% Commission'}
@@ -21286,7 +21374,7 @@ export default function RootLayout() {
                               Review all details entered across Steps 1 & 2 before final activation.
                             </span>
                           </div>
-                          <span className="text-emerald-800 text-[11px] font-extrabold px-2.5 py-1 rounded-full flex items-center gap-1 shrink-0">
+                          <span className="text-[#1FA971] text-[11px] font-extrabold px-2.5 py-1 rounded-full flex items-center gap-1 shrink-0">
                             <Check size={12} className="stroke-[3]" />
                             <span>Ready</span>
                           </span>
@@ -21296,7 +21384,7 @@ export default function RootLayout() {
                     <div className="rounded-2xl p-3.5 space-y-2.5">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
-                          <User size={15} className="text-emerald-700 stroke-[2.4]" />
+                          <User size={15} className="text-[#1FA971] stroke-[2.4]" />
                           <span className="text-xs font-black text-slate-800 uppercase tracking-wide">
                             Step 1: Personal & Account
                           </span>
@@ -21319,7 +21407,7 @@ export default function RootLayout() {
                         </div>
                         <div className="rounded-xl p-2.5">
                           <span className="text-[10.5px] font-semibold text-slate-500 block">Account Role</span>
-                          <span className="font-extrabold text-emerald-800 truncate block mt-0.5">
+                          <span className="font-extrabold text-[#1FA971] truncate block mt-0.5">
                             {sellerRegForm.sellerAccountType === 'shop' || sellerRegType === 'storefront'
                               ? 'Shop / Store Commercial Hub'
                               : 'Individual Private Seller'}
@@ -21350,7 +21438,7 @@ export default function RootLayout() {
                             </span>
                           </div>
                         </div>
-                        <CheckCircle2 size={16} className="text-emerald-600 fill-emerald-100 shrink-0" />
+                        <CheckCircle2 size={16} className="text-[#1FA971] fill-emerald-100 shrink-0" />
                       </div>
                     </div>
 
@@ -21358,7 +21446,7 @@ export default function RootLayout() {
                     <div className="rounded-2xl p-3.5 space-y-2.5">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
-                          <Store size={15} className="text-emerald-700 stroke-[2.4]" />
+                          <Store size={15} className="text-[#1FA971] stroke-[2.4]" />
                           <span className="text-xs font-black text-slate-800 uppercase tracking-wide">
                             {sellerRegForm.sellerAccountType === 'shop' || sellerRegType === 'storefront'
                               ? 'Step 2: Storefront & Shop Details'
@@ -21430,7 +21518,7 @@ export default function RootLayout() {
                               : '📍 Local Town Meetup & Delivery'}
                           </span>
                         </div>
-                        <CheckCircle2 size={16} className="text-emerald-600 fill-emerald-100 shrink-0" />
+                        <CheckCircle2 size={16} className="text-[#1FA971] fill-emerald-100 shrink-0" />
                       </div>
                     </div>
 
@@ -21438,7 +21526,7 @@ export default function RootLayout() {
                     <div className="rounded-2xl p-3.5 space-y-2.5">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
-                          <ShieldCheck size={15} className="text-emerald-700 stroke-[2.4]" />
+                          <ShieldCheck size={15} className="text-[#1FA971] stroke-[2.4]" />
                           <span className="text-xs font-black text-slate-800 uppercase tracking-wide">
                             Identity & Compliance Verification
                           </span>
@@ -21489,13 +21577,13 @@ export default function RootLayout() {
                                   className="w-8 h-8 rounded-lg object-cover border border-slate-200 shrink-0"
                                 />
                               ) : (
-                                <div className="w-8 h-8 rounded-lg text-emerald-800 flex items-center justify-center shrink-0">
+                                <div className="w-8 h-8 rounded-lg text-[#1FA971] flex items-center justify-center shrink-0">
                                   <Camera size={14} />
                                 </div>
                               )}
                               <div className="min-w-0">
                                 <span className="text-[11px] font-semibold text-slate-500 block">Front ID Photo</span>
-                                <span className="font-extrabold text-emerald-800 text-[11px] truncate block">
+                                <span className="font-extrabold text-[#1FA971] text-[11px] truncate block">
                                   {ghanaCardFrontPreview ? 'Attached ✓' : 'Front ID Ready ✓'}
                                 </span>
                               </div>
@@ -21509,13 +21597,13 @@ export default function RootLayout() {
                                   className="w-8 h-8 rounded-lg object-cover border border-slate-200 shrink-0"
                                 />
                               ) : (
-                                <div className="w-8 h-8 rounded-lg text-emerald-800 flex items-center justify-center shrink-0">
+                                <div className="w-8 h-8 rounded-lg text-[#1FA971] flex items-center justify-center shrink-0">
                                   <Camera size={14} />
                                 </div>
                               )}
                               <div className="min-w-0">
                                 <span className="text-[11px] font-semibold text-slate-500 block">Back ID Photo</span>
-                                <span className="font-extrabold text-emerald-800 text-[11px] truncate block">
+                                <span className="font-extrabold text-[#1FA971] text-[11px] truncate block">
                                   {ghanaCardBackPreview ? 'Attached ✓' : 'Back ID Ready ✓'}
                                 </span>
                               </div>
@@ -21527,12 +21615,12 @@ export default function RootLayout() {
                       {/* Direct Buyer Inquiries Consent */}
                       <div className="rounded-xl p-2.5 flex items-center justify-between">
                         <div className="flex items-center gap-2 min-w-0">
-                          <MessageSquare size={15} className="text-emerald-700 shrink-0" />
+                          <MessageSquare size={15} className="text-[#1FA971] shrink-0" />
                           <span className="text-xs font-bold text-slate-800 truncate">
                             Direct Buyer Inquiries Consent: Granted
                           </span>
                         </div>
-                        <CheckCircle2 size={16} className="text-emerald-600 fill-emerald-100 shrink-0" />
+                        <CheckCircle2 size={16} className="text-[#1FA971] fill-emerald-100 shrink-0" />
                       </div>
                     </div>
                   </div>
@@ -22109,7 +22197,7 @@ export default function RootLayout() {
               {/* Status Section: Approved */}
               {isApproved && (
                 <div className="bg-white rounded-3xl p-6 border border-emerald-200 shadow-2xs text-center space-y-3">
-                  <div className="w-16 h-16 rounded-full bg-emerald-50 border border-emerald-200 flex items-center justify-center mx-auto text-emerald-600">
+                  <div className="w-16 h-16 rounded-full bg-emerald-50 border border-emerald-200 flex items-center justify-center mx-auto text-[#1FA971]">
                     <CheckCircle2 size={34} className="stroke-[2.5]" />
                   </div>
                   <div>
@@ -22500,7 +22588,7 @@ export default function RootLayout() {
                     </div>
                   </div>
                   {adDraft.hasAudioDescription && (
-                    <span className="text-[10.5px] font-bold text-emerald-600 flex items-center gap-1 shrink-0">
+                    <span className="text-[10.5px] font-bold text-[#1FA971] flex items-center gap-1 shrink-0">
                       <CheckCircle size={12} />
                       Attached
                     </span>
@@ -22737,7 +22825,7 @@ export default function RootLayout() {
                 <div className="flex items-center gap-2 py-0.5 text-xs">
                   <span className="text-base">🔥</span>
                   <div>
-                    <span className="font-extrabold text-emerald-700 block">
+                    <span className="font-extrabold text-[#1FA971] block">
                       Great Deal: Save GH₵ {((adDraft.originalPrice || 0) - (adDraft.price || 0)).toLocaleString()} (
                       {Math.round((((adDraft.originalPrice || 0) - (adDraft.price || 0)) / (adDraft.originalPrice || 1)) * 100)}% OFF)
                     </span>
@@ -23017,7 +23105,7 @@ export default function RootLayout() {
                       <span className="line-through text-xs font-semibold text-slate-400">
                         GH₵ {adDraft.originalPrice?.toLocaleString()}
                       </span>
-                      <span className="text-xs font-extrabold text-emerald-600">
+                      <span className="text-xs font-extrabold text-[#1FA971]">
                         Save GH₵ {((adDraft.originalPrice || 0) - (adDraft.price || 0)).toLocaleString()} ({Math.round((((adDraft.originalPrice || 0) - (adDraft.price || 0)) / (adDraft.originalPrice || 1)) * 100)}% OFF)
                       </span>
                     </>
@@ -23029,7 +23117,7 @@ export default function RootLayout() {
                 </h3>
 
                 <div className="flex items-center gap-1.5 pt-1 text-xs text-slate-600">
-                  <span className={`font-bold ${adDraft.negotiable ? 'text-emerald-700' : 'text-slate-700'}`}>
+                  <span className={`font-bold ${adDraft.negotiable ? 'text-[#1FA971]' : 'text-slate-700'}`}>
                     • {adDraft.negotiable ? 'Price is Negotiable (Counter-offers welcome)' : 'Fixed Price (Non-negotiable)'}
                   </span>
                 </div>
@@ -23079,8 +23167,8 @@ export default function RootLayout() {
 
                   <div className="col-span-2">
                     <span className="text-[10.5px] text-slate-500 font-semibold block">Delivery & Logistics</span>
-                    <span className={`font-bold flex items-center gap-1.5 ${adDraft.deliveryAvailable ? 'text-emerald-700' : 'text-slate-700'}`}>
-                      <Truck size={14} className={adDraft.deliveryAvailable ? 'text-emerald-600' : 'text-slate-400'} />
+                    <span className={`font-bold flex items-center gap-1.5 ${adDraft.deliveryAvailable ? 'text-[#1FA971]' : 'text-slate-700'}`}>
+                      <Truck size={14} className={adDraft.deliveryAvailable ? 'text-[#1FA971]' : 'text-slate-400'} />
                       <span>{adDraft.deliveryAvailable ? 'Nationwide Courier Delivery Available' : 'In-Person Inspection / Local Pickup Only'}</span>
                     </span>
                   </div>
@@ -23089,7 +23177,7 @@ export default function RootLayout() {
                     <span className="text-[10.5px] text-slate-500 font-semibold block">Seller Contact & Direct Inquiries</span>
                     <span className="font-bold text-slate-800 flex items-center gap-2">
                       <span>{userProfile.phone || (sellerRegForm.phoneNumber ? `+233 ${sellerRegForm.phoneNumber}` : '+233 Direct Contact')}</span>
-                      <span className="text-[10.5px] font-bold text-emerald-700">• In-App Chat Active</span>
+                      <span className="text-[10.5px] font-bold text-[#1FA971]">• In-App Chat Active</span>
                     </span>
                   </div>
                 </div>
@@ -23112,7 +23200,7 @@ export default function RootLayout() {
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2.5">
                     <div className="w-8 h-8 rounded-full bg-[#E6F7EF] flex items-center justify-center shrink-0">
-                      <Mic size={16} className="text-[#0B6B46]" />
+                      <Mic size={16} className="text-[#1FA971]" />
                     </div>
                     <div>
                       <h3 className="text-xs font-bold text-slate-900 tracking-tight">
@@ -23123,7 +23211,7 @@ export default function RootLayout() {
                       </p>
                     </div>
                   </div>
-                  <span className="text-[10.5px] font-bold text-emerald-600 flex items-center gap-1 shrink-0">
+                  <span className="text-[10.5px] font-bold text-[#1FA971] flex items-center gap-1 shrink-0">
                     <CheckCircle size={12} />
                     Attached
                   </span>
@@ -23226,7 +23314,7 @@ export default function RootLayout() {
               <div className="bg-transparent p-2">
                 <div className="flex items-start gap-2.5">
                   <div className="w-5 h-5 flex items-center justify-center shrink-0 mt-0.5">
-                    <ShieldCheck size={16} className="text-emerald-700 stroke-[2.2]" />
+                    <ShieldCheck size={16} className="text-[#1FA971] stroke-[2.2]" />
                   </div>
                   <p className="text-[11.5px] text-slate-700 leading-relaxed font-normal">
                     Haraka does not process or escrow payments. You deal directly with buyers and receive full payment upon inspection via cash or direct mobile money (<strong>MTN MoMo / Telecel Cash</strong>). Always meet in safe, busy public physical location.
@@ -23430,7 +23518,7 @@ export default function RootLayout() {
                 </button>
                 <div>
                   <h1 className="text-sm font-black text-slate-900 leading-tight flex items-center gap-1.5">
-                    <ShieldCheck size={16} className="text-emerald-600" />
+                    <ShieldCheck size={16} className="text-[#1FA971]" />
                     <span>Haraka Trust &amp; Safety Guide</span>
                   </h1>
                   <p className="text-[10.5px] text-slate-500 font-medium">Safe trading protocols across Greater Accra &amp; Ghana</p>
@@ -23482,7 +23570,7 @@ export default function RootLayout() {
               {/* Rule 2: Zero Upfront Deposits */}
               <div className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-2xs space-y-2">
                 <div className="flex items-center gap-2.5">
-                  <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center font-black text-sm shrink-0 border border-emerald-100">
+                  <div className="w-9 h-9 rounded-xl bg-emerald-50 text-[#1FA971] flex items-center justify-center font-black text-sm shrink-0 border border-emerald-100">
                     2
                   </div>
                   <div>
@@ -23507,7 +23595,7 @@ export default function RootLayout() {
                   </div>
                 </div>
                 <p className="text-xs text-slate-600 leading-relaxed font-normal pt-1">
-                  Accounts displaying the green <strong className="text-emerald-700 font-bold">&quot;Verified&quot;</strong> badge have submitted their official National Identification Authority (NIA) Ghana Card PIN and identity photos for admin review. While unverified members can also list items, verified merchants carry confirmed identity credentials.
+                  Accounts displaying the green <strong className="text-[#1FA971] font-bold">&quot;Verified&quot;</strong> badge have submitted their official National Identification Authority (NIA) Ghana Card PIN and identity photos for admin review. While unverified members can also list items, verified merchants carry confirmed identity credentials.
                 </p>
               </div>
 
@@ -23592,7 +23680,7 @@ export default function RootLayout() {
             <div>
               <span className="text-sm font-extrabold text-slate-900 tracking-tight">Filter Listings by Region</span>
               <p className="text-[11px] text-slate-500 mt-0.5">
-                Detected Location: <strong className="text-emerald-700 font-bold">{detectedUserCity} ({detectedUserRegion})</strong>
+                Detected Location: <strong className="text-[#1FA971] font-bold">{detectedUserCity} ({detectedUserRegion})</strong>
               </p>
             </div>
             <button
@@ -23625,7 +23713,7 @@ export default function RootLayout() {
                         {reg.name}
                       </span>
                       {isDetected && (
-                        <span className="ml-1.5 text-[11px] font-semibold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-md">
+                        <span className="ml-1.5 text-[11px] font-semibold text-[#1FA971] bg-emerald-50 px-1.5 py-0.5 rounded-md">
                           Detected
                         </span>
                       )}
@@ -23667,7 +23755,7 @@ export default function RootLayout() {
             <div>
               <span className="text-sm font-extrabold text-slate-900 tracking-tight">Select Region in Ghana</span>
               <p className="text-[11px] text-slate-500 mt-0.5">
-                Detected Location: <strong className="text-emerald-700 font-bold">{detectedUserCity} ({detectedUserRegion})</strong>
+                Detected Location: <strong className="text-[#1FA971] font-bold">{detectedUserCity} ({detectedUserRegion})</strong>
               </p>
             </div>
             <button
@@ -23710,7 +23798,7 @@ export default function RootLayout() {
                         {reg.name} Region
                       </span>
                       {isDetected && (
-                        <span className="ml-1.5 text-[10.5px] font-bold text-emerald-600">
+                        <span className="ml-1.5 text-[10.5px] font-bold text-[#1FA971]">
                           Detected
                         </span>
                       )}
@@ -23751,7 +23839,7 @@ export default function RootLayout() {
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all active:scale-95 shadow-xs cursor-pointer ${
               currentRoute.type === 'register-partner'
                 ? 'bg-[#065F46] text-white shadow-sm ring-2 ring-emerald-400/40'
-                : 'bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 border border-emerald-500/30'
+                : 'bg-emerald-500/10 text-[#1FA971] hover:bg-emerald-500/20 border border-emerald-500/30'
             }`}
           >
             <Users size={14} />
@@ -23865,7 +23953,7 @@ export default function RootLayout() {
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all active:scale-95 shadow-xs cursor-pointer ${
               currentRoute.type === 'onboarding'
                 ? 'bg-[#006c45] text-white shadow-sm ring-2 ring-emerald-500/40'
-                : 'bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 border border-emerald-500/30'
+                : 'bg-emerald-500/10 text-[#1FA971] hover:bg-emerald-500/20 border border-emerald-500/30'
             }`}
             title="Preview Onboarding 1"
           >
@@ -23893,7 +23981,7 @@ export default function RootLayout() {
 
           <button
             onClick={() => setShowExportModal(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 border border-emerald-500/30 transition-all active:scale-95 shadow-xs cursor-pointer"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-emerald-500/10 text-[#1FA971] hover:bg-emerald-500/20 border border-emerald-500/30 transition-all active:scale-95 shadow-xs cursor-pointer"
           >
             <Rocket size={14} />
             <span className="hidden sm:inline">iOS / Android Production Guide</span>
