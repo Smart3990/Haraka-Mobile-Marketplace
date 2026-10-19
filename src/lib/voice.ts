@@ -9,7 +9,36 @@ export interface VoiceRecording {
 }
 
 /** Recordings stop automatically past this size so they still fit in one Firestore document. */
-const MAX_RECORDING_BYTES = 350_000;
+export const MAX_RECORDING_BYTES = 300_000;
+
+/**
+ * Voice notes are speech only, so they are recorded small to save data: one channel, with the
+ * phone's noise and echo cleanup, at 16 kbps (about 120 KB per minute with Opus on Android).
+ */
+export const VOICE_BITS_PER_SECOND = 16_000;
+export const VOICE_MIC: MediaTrackConstraints = {
+  channelCount: 1,
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+};
+
+/** Best small format the phone can record: WebM/Opus (Android), else MP4/AAC (iPhone). */
+export function voiceMimeType(): string | undefined {
+  return ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg'].find((t) =>
+    MediaRecorder.isTypeSupported(t)
+  );
+}
+
+/** Microphone stream for a voice note (falls back to plain audio if the phone rejects the settings). */
+export async function openVoiceMic(): Promise<MediaStream> {
+  try {
+    return await navigator.mediaDevices.getUserMedia({ audio: VOICE_MIC });
+  } catch (error) {
+    if ((error as { name?: string })?.name === 'NotAllowedError') throw error;
+    return navigator.mediaDevices.getUserMedia({ audio: true });
+  }
+}
 
 function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -30,16 +59,13 @@ export async function startVoiceRecording(onLimitReached?: () => void): Promise<
   }
   let stream: MediaStream;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream = await openVoiceMic();
   } catch {
     throw new Error('Microphone access is needed. Allow it in your phone settings and try again.');
   }
 
-  // WebM/Opus honours the low bitrate (Android); iPhones fall back to MP4
-  const mimeType = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg'].find((t) =>
-    MediaRecorder.isTypeSupported(t)
-  );
-  const recorder = new MediaRecorder(stream, { ...(mimeType ? { mimeType } : {}), audioBitsPerSecond: 24000 });
+  const mimeType = voiceMimeType();
+  const recorder = new MediaRecorder(stream, { ...(mimeType ? { mimeType } : {}), audioBitsPerSecond: VOICE_BITS_PER_SECOND });
   const chunks: Blob[] = [];
   let bytes = 0;
   const startedAt = Date.now();

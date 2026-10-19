@@ -211,7 +211,15 @@ import SignUpScreen from './components/SignUpScreen';
 import SignInScreen from './components/SignInScreen';
 import ForgotPasswordScreen from './components/ForgotPasswordScreen';
 import type { ArtisanProfileDetails } from './lib/artisanProfileData';
-import { playVoice, startVoiceRecording, type VoiceRecording } from './lib/voice';
+import {
+  MAX_RECORDING_BYTES,
+  VOICE_BITS_PER_SECOND,
+  openVoiceMic,
+  playVoice,
+  startVoiceRecording,
+  voiceMimeType,
+  type VoiceRecording,
+} from './lib/voice';
 import {
   answerVoiceCall,
   declineVoiceCall,
@@ -5164,7 +5172,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
 
     let stream: MediaStream;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream = await openVoiceMic();
     } catch (err) {
       console.warn('Microphone access denied:', err);
       showToast('⚠️ Microphone access is needed. Allow it in your phone settings and try again.');
@@ -5174,19 +5182,23 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     adAudioStreamRef.current = stream;
     adAudioChunksRef.current = [];
 
-    // Prefer WebM/Opus (Android): it honours the low bitrate, keeping a one-minute note
-    // around 190 KB. iPhones can't record WebM and fall back to MP4.
-    const mimeType = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg'].find((type) =>
-      MediaRecorder.isTypeSupported(type)
-    );
+    // Small speech-only recording (see voice.ts): about 120 KB for a full minute on Android
+    const mimeType = voiceMimeType();
     const recorder = new MediaRecorder(stream, {
       ...(mimeType ? { mimeType } : {}),
-      audioBitsPerSecond: 24000,
+      audioBitsPerSecond: VOICE_BITS_PER_SECOND,
     });
     adAudioMediaRecorderRef.current = recorder;
 
+    // Ad voice notes are at most one minute
+    setTimeout(() => {
+      if (adAudioMediaRecorderRef.current === recorder && recorder.state === 'recording') {
+        showToast('Maximum voice note length reached (1 minute)');
+        stopAdAudioRecording(true);
+      }
+    }, 60_000);
+
     // Stop before the note gets too big to save with the listing (some phones ignore the bitrate)
-    const MAX_RECORDING_BYTES = 350_000;
     let recordedBytes = 0;
     recorder.ondataavailable = (event) => {
       if (event.data && event.data.size > 0) {
