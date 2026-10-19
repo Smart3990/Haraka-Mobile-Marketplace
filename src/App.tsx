@@ -162,6 +162,7 @@ import {
   signOutUser,
   submitApplication,
   submitReport,
+  MAX_APPLICATION_PDF_BYTES,
   reportUser,
   blockUser,
   unblockUser,
@@ -3662,6 +3663,10 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
 
   const handleBusinessCertChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    if (file && file.type === 'application/pdf' && file.size > MAX_APPLICATION_PDF_BYTES) {
+      showToast('⚠️ This PDF is too large. Please take a photo of the document instead (or use a PDF under 350 KB).');
+      return;
+    }
     if (file) {
       setBusinessCertName(`${file.name} • ${(file.size / (1024 * 1024)).toFixed(1)} MB`);
       const reader = new FileReader();
@@ -3675,6 +3680,10 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
 
   const handlePoliceClearanceChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    if (file && file.type === 'application/pdf' && file.size > MAX_APPLICATION_PDF_BYTES) {
+      showToast('⚠️ This PDF is too large. Please take a photo of the document instead (or use a PDF under 350 KB).');
+      return;
+    }
     if (file) {
       setPoliceClearanceName(`${file.name} • ${(file.size / (1024 * 1024)).toFixed(1)} MB`);
       const reader = new FileReader();
@@ -17956,12 +17965,6 @@ export default function RootLayout() {
                                   maxLength={15}
                                   className="text-xs font-mono font-bold text-slate-900 bg-transparent flex-1 outline-none tracking-wider"
                                 />
-                                {sellerRegForm.ghanaCardPin.length === 15 ? (
-                                  <span className="text-[11px] font-bold text-emerald-700 flex items-center gap-1 shrink-0">
-                                    <CheckCircle2 size={13} className="text-emerald-600" />
-                                    <span>Valid PIN</span>
-                                  </span>
-                                ) : null}
                               </div>
                             </div>
 
@@ -19856,12 +19859,6 @@ export default function RootLayout() {
                                   maxLength={15}
                                   className="text-xs font-mono font-bold text-slate-900 bg-transparent flex-1 outline-none tracking-wider"
                                 />
-                                {sellerRegForm.ghanaCardPin.length === 15 ? (
-                                  <span className="text-[11px] font-bold text-emerald-700 flex items-center gap-1 shrink-0">
-                                    <CheckCircle2 size={13} className="text-emerald-600" />
-                                    <span>Valid PIN</span>
-                                  </span>
-                                ) : null}
                               </div>
                             </div>
 
@@ -20831,11 +20828,6 @@ export default function RootLayout() {
                                 </span>
                               </div>
                             </div>
-                            {sellerRegForm.ghanaCardPin ? (
-                              <span className="text-[10.5px] font-bold text-emerald-800 px-2 py-0.5 rounded-full">
-                                Valid PIN ✓
-                              </span>
-                            ) : null}
                           </div>
 
                           {/* Photos Upload Status */}
@@ -21309,7 +21301,8 @@ export default function RootLayout() {
                       setSubmittedSellerApplicantId(saved.id);
                     } catch (err) {
                       console.warn('Could not submit application', err);
-                      showToast('⚠️ Your application could not be sent. Check your connection and try again.');
+                      const message = err instanceof Error && !/firebase|firestore|internal/i.test(err.message) ? err.message : '';
+                      showToast(`⚠️ ${message || 'Your application could not be sent. Check your connection and try again.'}`);
                       return;
                     } finally {
                       setIsSubmittingApplication(false);

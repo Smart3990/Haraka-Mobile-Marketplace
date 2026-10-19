@@ -411,6 +411,48 @@ function findPhotos(value: any, found: { holder: any; key: string }[] = []) {
   return found;
 }
 
+/** Largest PDF an application can include (photos are shrunk automatically; PDFs cannot be). */
+export const MAX_APPLICATION_PDF_BYTES = 350_000;
+
+/**
+ * An application is stored as one database record, which is limited to 1 MB. Shrinks the photos
+ * until everything fits, and explains clearly what to change if it still cannot fit.
+ */
+async function fitApplicationInOneDocument(app: Record<string, any>) {
+  const LIMIT = 950_000;
+  const photos = findPhotos(app);
+  const pdfs = findDataUrls(app, 'data:application/pdf');
+  for (const { holder, key } of pdfs) {
+    if (holder[key].length * 0.75 > MAX_APPLICATION_PDF_BYTES) {
+      throw new Error('Your PDF document is too large. Please upload a photo of the document instead (or a PDF under 350 KB).');
+    }
+  }
+  const originals = photos.map(({ holder, key }) => holder[key] as string);
+  const photoChars = originals.reduce((sum, p) => sum + p.length, 0);
+  const otherChars = JSON.stringify(app).length - photoChars;
+  let budget = Math.floor(Math.max(60_000, LIMIT - otherChars) / Math.max(1, photos.length));
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      await Promise.all(photos.map(async ({ holder, key }, i) => (holder[key] = await compressImage(originals[i], budget))));
+    } catch {
+      throw new Error('One of your photos could not be read. Please choose a JPG or PNG photo and try again.');
+    }
+    if (JSON.stringify(app).length <= LIMIT) return;
+    budget = Math.floor(budget * 0.6);
+  }
+  throw new Error('Your application has too many large files. Please remove a document or use smaller photos and try again.');
+}
+
+function findDataUrls(value: any, prefix: string, found: { holder: any; key: string }[] = []) {
+  if (value && typeof value === 'object') {
+    for (const [key, v] of Object.entries(value)) {
+      if (typeof v === 'string' && v.startsWith(prefix)) found.push({ holder: value, key });
+      else findDataUrls(v, prefix, found);
+    }
+  }
+  return found;
+}
+
 /** Saves (or re-submits) the signed-in user's partner application for admin review. */
 export async function submitApplication(record: Record<string, any>): Promise<StoredApplication> {
   const user = auth.currentUser;
@@ -419,10 +461,7 @@ export async function submitApplication(record: Record<string, any>): Promise<St
   const app = JSON.parse(
     JSON.stringify(record, (_key, value) => (typeof value === 'string' && value.startsWith('blob:') ? undefined : value))
   );
-  const photos = findPhotos(app);
-  const voiceIntroSize = typeof app.voiceIntroUrl === 'string' ? app.voiceIntroUrl.length : 0;
-  const budget = Math.floor(Math.max(200_000, 850_000 - voiceIntroSize) / Math.max(1, photos.length));
-  await Promise.all(photos.map(async ({ holder, key }) => (holder[key] = await compressImage(holder[key], budget))));
+  await fitApplicationInOneDocument(app);
 
   const stored: StoredApplication = {
     ...app,
