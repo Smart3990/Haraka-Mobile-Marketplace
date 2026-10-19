@@ -91,6 +91,16 @@ service cloud.firestore {
       allow delete: if canAddAdmins();
     }
 
+    // Why something failed on a user's phone (error text and device type), read only by admins
+    match /clientErrors/{errorId} {
+      allow create: if isSignedIn()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.keys().hasOnly(['uid', 'where', 'code', 'message', 'userAgent', 'atISO'])
+        && request.resource.data.message is string && request.resource.data.message.size() <= 500
+        && request.resource.data.userAgent is string && request.resource.data.userAgent.size() <= 300;
+      allow read, delete: if isAdmin();
+    }
+
     // Partner applications (become a seller or artisan), one per user.
     // The applicant can submit or re-submit while it is pending; only an admin decides.
     match /applications/{userId} {
@@ -102,6 +112,15 @@ service cloud.firestore {
         && request.resource.data.status == 'pending'
         && request.resource.data.verifiedBadge == false
       );
+      // An approved partner sends ID documents to ask for the Verified badge (only an admin grants it)
+      allow update: if isOwner(userId) && isVerifiedUser()
+        && resource.data.status == 'approved'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'ghanaCardId', 'frontPhoto', 'backPhoto', 'idVerificationSkipped',
+          'verificationRequestStatus', 'verificationRequestedAtISO', 'verificationDeclineReason'])
+        && request.resource.data.verificationRequestStatus == 'pending'
+        && request.resource.data.idVerificationSkipped == false
+        && request.resource.data.ghanaCardId is string && request.resource.data.ghanaCardId.size() >= 10;
       allow delete: if isAdmin() || isOwner(userId);
     }
 

@@ -19,6 +19,7 @@ import {
   type User,
 } from 'firebase/auth';
 import {
+  addDoc,
   arrayRemove,
   arrayUnion,
   collection,
@@ -393,6 +394,10 @@ export type StoredApplication = Record<string, any> & {
   verifiedBadge?: boolean;
   rejectionReason?: string;
   submittedAtISO: string;
+  /** An approved partner asking for the Verified badge after sending their ID documents */
+  verificationRequestStatus?: '' | 'pending' | 'declined';
+  verificationRequestedAtISO?: string;
+  verificationDeclineReason?: string;
 };
 
 /** Ghana Card number and both card photos are required for the verified badge. */
@@ -499,6 +504,47 @@ export function watchAllApplications(callback: (apps: StoredApplication[]) => vo
   );
 }
 
+/**
+ * An approved partner (without the badge) sends their Ghana Card for verification. The photos
+ * are shrunk so the whole application still fits in its one database record.
+ */
+export async function requestVerification(
+  app: StoredApplication,
+  docs: { ghanaCardId: string; frontPhoto: string; backPhoto: string }
+): Promise<void> {
+  const user = auth.currentUser;
+  if (!user || user.uid !== app.uid) throw new Error('Please log in again.');
+  const { id: _id, dateSubmitted: _date, frontPhoto: _f, backPhoto: _b, ...rest } = app;
+  const budget = Math.floor(Math.max(60_000, Math.min(250_000, (950_000 - JSON.stringify(rest).length) / 2)));
+  let frontPhoto: string;
+  let backPhoto: string;
+  try {
+    [frontPhoto, backPhoto] = await Promise.all([compressImage(docs.frontPhoto, budget), compressImage(docs.backPhoto, budget)]);
+  } catch {
+    throw new Error('One of your photos could not be read. Please choose a JPG or PNG photo and try again.');
+  }
+  await updateDoc(doc(db, 'applications', app.uid), {
+    ghanaCardId: docs.ghanaCardId,
+    frontPhoto,
+    backPhoto,
+    idVerificationSkipped: false,
+    verificationRequestStatus: 'pending',
+    verificationRequestedAtISO: new Date().toISOString(),
+    verificationDeclineReason: '',
+  });
+}
+
+/** Admin turns down a verification request (the partner stays approved and can send new documents). */
+export async function declineVerification(app: StoredApplication, reason: string): Promise<void> {
+  if (!auth.currentUser?.email) throw new Error('Please log in again.');
+  await updateDoc(doc(db, 'applications', app.uid), {
+    verificationRequestStatus: 'declined',
+    verificationDeclineReason: reason,
+    decidedAtISO: new Date().toISOString(),
+    decidedBy: auth.currentUser.email,
+  });
+}
+
 export type ApplicationDecision = 'approve' | 'verify' | 'reject';
 
 /**
@@ -517,6 +563,7 @@ export async function decideApplication(app: StoredApplication, decision: Applic
     status: approved ? 'approved' : 'rejected',
     verifiedBadge: decision === 'verify',
     rejectionReason: approved ? '' : reason,
+    ...(app.verificationRequestStatus ? { verificationRequestStatus: '' } : {}),
     decidedAtISO: new Date().toISOString(),
     decidedBy: admin!.email,
   });
@@ -529,7 +576,10 @@ export async function decideApplication(app: StoredApplication, decision: Applic
   });
   if (app.role === 'artisan') {
     const profileRef = doc(db, 'artisans', app.uid);
-    if (approved) {
+    if (approved && app.status === 'approved') {
+      // Already listed: only the badge changes (keeps their jobs, reviews and availability)
+      batch.set(profileRef, { verified: decision === 'verify' }, { merge: true });
+    } else if (approved) {
       const profile = publicArtisanProfile(app, decision === 'verify');
       profile.avatar = (await storeMedia(profile.avatar, 'avatars', 120_000)) || '';
       profile.voiceIntroUrl = (await storeMedia(profile.voiceIntroUrl, 'voice', 0)) || '';
@@ -782,9 +832,33 @@ async function storeMedia(src: string | undefined, folder: string, inlinePhotoBu
   if (!src.startsWith('data:')) return src; // already a URL
   const isImage = src.startsWith('data:image');
   if (isCloudinaryConfigured()) {
-    return uploadMedia(isImage ? await compressImage(src, 450_000) : src, folder);
+    try {
+      return await uploadMedia(isImage ? await compressImage(src, 450_000) : src, folder);
+    } catch (error) {
+      // Some phone networks block the media server: keep the file in the record itself instead
+      console.warn('Media upload failed; saving it inline instead', error);
+      reportClientError(`upload-${folder}`, error);
+    }
   }
   return isImage ? compressImage(src, inlinePhotoBudget) : src;
+}
+
+/**
+ * Records why something failed on a user's phone (error text and device type only), so problems
+ * that can't be reproduced elsewhere can be fixed. Admins read these in the database.
+ */
+export function reportClientError(where: string, error: unknown): void {
+  const user = auth.currentUser;
+  if (!user) return;
+  const e = error as { code?: unknown; message?: unknown } | null;
+  addDoc(collection(db, 'clientErrors'), {
+    uid: user.uid,
+    where: where.slice(0, 60),
+    code: String(e?.code ?? '').slice(0, 100),
+    message: String(e?.message ?? error).slice(0, 500),
+    userAgent: (typeof navigator !== 'undefined' ? navigator.userAgent : '').slice(0, 300),
+    atISO: new Date().toISOString(),
+  }).catch(() => undefined);
 }
 
 export type StoredListing = Listing & { sellerId: string; createdAtISO: string };
@@ -882,10 +956,10 @@ export async function createListing(listing: Listing): Promise<StoredListing> {
 
   let audio = listing.audioDescriptionUrl;
   if (audio?.startsWith('blob:')) audio = await blobToDataUrl(await (await fetch(audio)).blob());
-  if (!isCloudinaryConfigured() && audio && audio.length > LISTING_MEDIA_BUDGET * 0.55) {
-    throw new Error('Voice note is too long. Please record a shorter one.');
-  }
   audio = await storeMedia(audio, 'voice', 0);
+  if (audio?.startsWith('data:') && audio.length > LISTING_MEDIA_BUDGET * 0.55) {
+    throw new Error('Voice note is too long to save. Please record a shorter one.');
+  }
 
   // Without Cloudinary, photos share what is left of the 1 MB document
   const photoBudget = Math.floor((LISTING_MEDIA_BUDGET - (audio?.startsWith('data:') ? audio.length : 0)) / Math.max(1, listing.images.length));

@@ -27,14 +27,32 @@ export async function uploadMedia(file: string | Blob, folder: string): Promise<
   form.append('file', blob, `upload.${extension}`);
   form.append('upload_preset', CLOUDINARY_UPLOAD_PRESET);
   form.append('folder', `haraka/${folder}`);
-  // "auto" accepts images and audio (Cloudinary stores audio as a video resource)
-  const response = await fetch(`https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/auto/upload`, {
-    method: 'POST',
-    body: form,
-  });
+  // "auto" accepts images and audio (Cloudinary stores audio as a video resource).
+  // Slow mobile connections get a time limit and one more try.
+  const send = async () => {
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = setTimeout(() => controller?.abort(), 45_000);
+    try {
+      return await fetch(`https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/auto/upload`, {
+        method: 'POST',
+        body: form,
+        signal: controller?.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  let response: Response;
+  try {
+    response = await send();
+    if (response.status >= 500) response = await send();
+  } catch {
+    response = await send();
+  }
   if (!response.ok) {
-    console.warn('Cloudinary upload failed', response.status, await response.text().catch(() => ''));
-    throw new Error('Upload failed. Check your connection and try again.');
+    const detail = await response.text().catch(() => '');
+    console.warn('Cloudinary upload failed', response.status, detail);
+    throw new Error(`Upload failed (${response.status}): ${detail.slice(0, 200)}`);
   }
   const data: { secure_url: string; resource_type: string } = await response.json();
   return data.resource_type === 'image'

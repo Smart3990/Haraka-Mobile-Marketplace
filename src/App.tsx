@@ -145,6 +145,9 @@ import {
   createBooking,
   createListing,
   decideApplication,
+  declineVerification,
+  requestVerification,
+  reportClientError,
   deleteListing as deleteRemoteListing,
   fileToPhotoDataUrl,
   getPlatformStats,
@@ -657,6 +660,85 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
       window.removeEventListener('resize', fit);
       window.removeEventListener('orientationchange', fit);
       window.visualViewport?.removeEventListener('resize', fit);
+    };
+  }, [native]);
+
+  // On-screen keyboard (phones only): keep the box being typed in visible above the keyboard,
+  // and hide the bottom tab bar while typing so small phones still have room for the screen
+  useEffect(() => {
+    if (!native || !window.matchMedia?.('(pointer: coarse)').matches) return;
+    const html = document.documentElement;
+    const NOT_TYPED = ['checkbox', 'radio', 'file', 'button', 'submit', 'range', 'color', 'image', 'reset'];
+    const isTextField = (el: Element | null): el is HTMLElement =>
+      el instanceof HTMLElement &&
+      (el.tagName === 'TEXTAREA' || el.isContentEditable || (el.tagName === 'INPUT' && !NOT_TYPED.includes((el as HTMLInputElement).type)));
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // Scrolling areas given extra room at the bottom while typing (removed when typing ends)
+    const padded = new Map<HTMLElement, string>();
+    const unpad = () => {
+      padded.forEach((original, area) => (area.style.paddingBottom = original));
+      padded.clear();
+    };
+    // Scroll only the screen's own scrolling area (never the whole page) so the box sits above the keyboard
+    const reveal = () => {
+      const field = document.activeElement;
+      if (!isTextField(field)) return;
+      const screenBottom = window.visualViewport?.height ?? window.innerHeight;
+      // The nearest area that really scrolls (some are marked scrollable but just grow with their content)
+      const scrolls = (el: HTMLElement) =>
+        /(auto|scroll)/.test(getComputedStyle(el).overflowY) &&
+        (el.scrollHeight > el.clientHeight + 1 || el.getBoundingClientRect().bottom <= screenBottom + 1);
+      let area = field.parentElement;
+      while (area && !scrolls(area)) area = area.parentElement;
+      if (!area) return;
+      // Some browsers shift the whole screen to show the field, pushing headers out of sight: undo that
+      for (let outer = area.parentElement; outer; outer = outer.parentElement) if (outer.scrollTop) outer.scrollTop = 0;
+      if (document.scrollingElement?.scrollTop) document.scrollingElement.scrollTop = 0;
+      const box = field.getBoundingClientRect();
+      const visible = area.getBoundingClientRect();
+      const bottom = Math.min(visible.bottom, screenBottom);
+      const below = box.bottom - (bottom - 12);
+      if (below > 0) {
+        const wanted = Math.min(below + Math.min(72, (bottom - visible.top) / 4), Math.max(0, box.top - visible.top - 8));
+        // A box at the very end of a screen can't scroll up any further: add room under it
+        const room = area.scrollHeight - area.clientHeight - area.scrollTop;
+        if (room < wanted) {
+          if (!padded.has(area)) padded.set(area, area.style.paddingBottom);
+          area.style.paddingBottom = `${parseFloat(getComputedStyle(area).paddingBottom) + wanted - room}px`;
+        }
+        area.scrollTop += wanted;
+      } else if (box.top < visible.top + 8) {
+        area.scrollTop -= visible.top + 8 - box.top;
+      }
+    };
+    const later = (ms: number) => {
+      clearTimeout(timer);
+      timer = setTimeout(reveal, ms);
+    };
+    const onFocusIn = (e: FocusEvent) => {
+      if (!isTextField(e.target as Element)) return;
+      html.classList.add('haraka-typing');
+      later(350); // after the keyboard has opened
+    };
+    const onFocusOut = () =>
+      setTimeout(() => {
+        if (isTextField(document.activeElement)) return;
+        html.classList.remove('haraka-typing');
+        unpad();
+      }, 60);
+    const onResize = () => later(120);
+    document.addEventListener('focusin', onFocusIn);
+    document.addEventListener('focusout', onFocusOut);
+    window.addEventListener('resize', onResize);
+    window.visualViewport?.addEventListener('resize', onResize);
+    return () => {
+      clearTimeout(timer);
+      html.classList.remove('haraka-typing');
+      unpad();
+      document.removeEventListener('focusin', onFocusIn);
+      document.removeEventListener('focusout', onFocusOut);
+      window.removeEventListener('resize', onResize);
+      window.visualViewport?.removeEventListener('resize', onResize);
     };
   }, [native]);
   const [phoneFrame, setPhoneFrame] = useState(true);
@@ -2723,6 +2805,206 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
   const clearPicked = (e: React.MouseEvent<HTMLInputElement>) => {
     e.currentTarget.value = ''; // picking the same file again still counts as a change
   };
+  // ---------- Approved partners: send the Ghana Card later to get the Verified badge ----------
+  const verifyIdInputRef = useRef<HTMLInputElement>(null);
+  const verifyIdSideRef = useRef<'front' | 'back'>('front');
+  const [showGetVerifiedSheet, setShowGetVerifiedSheet] = useState(false);
+  const [verifyIdForm, setVerifyIdForm] = useState({ pin: '', front: '', back: '' });
+  const [isSendingVerification, setIsSendingVerification] = useState(false);
+
+  /** The signed-in partner's own application, when it is approved without the badge. */
+  const myUnverifiedApplication = () => {
+    if (currentUserRole !== 'seller' && currentUserRole !== 'artisan') return null;
+    const app = adminApplicants.find((a) => a.id === firebaseUid);
+    return app && app.status === 'approved' && !app.verifiedBadge ? app : null;
+  };
+
+  const openGetVerifiedSheet = () => {
+    const app = myUnverifiedApplication();
+    if (!app) return;
+    // Start from what they already sent, so only the missing or rejected parts need redoing
+    setVerifyIdForm({
+      pin: app.ghanaCardId && app.ghanaCardId !== 'Pending Verification' ? app.ghanaCardId : '',
+      front: app.verificationRequestStatus === 'declined' ? '' : app.frontPhoto || '',
+      back: app.verificationRequestStatus === 'declined' ? '' : app.backPhoto || '',
+    });
+    setShowGetVerifiedSheet(true);
+  };
+
+  const pickVerifyIdPhoto = (side: 'front' | 'back') => {
+    verifyIdSideRef.current = side;
+    verifyIdInputRef.current?.click();
+  };
+
+  const handleVerifyIdPhoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const side = verifyIdSideRef.current;
+    try {
+      const dataUrl = await fileToPhotoDataUrl(file);
+      setVerifyIdForm((f) => ({ ...f, [side]: dataUrl }));
+    } catch {
+      showToast('⚠️ That photo could not be read. Please choose a JPG or PNG photo.');
+    }
+  };
+
+  const sendVerificationDocuments = async () => {
+    const app = myUnverifiedApplication();
+    if (!app || isSendingVerification) return;
+    if (verifyIdForm.pin.replace(/[^0-9]/g, '').length !== 10) {
+      showToast('⚠️ Enter your full Ghana Card number (10 digits).');
+      return;
+    }
+    if (!verifyIdForm.front || !verifyIdForm.back) {
+      showToast('⚠️ Add photos of the front and back of your Ghana Card.');
+      return;
+    }
+    setIsSendingVerification(true);
+    try {
+      await requestVerification(app as unknown as StoredApplication, {
+        ghanaCardId: verifyIdForm.pin,
+        frontPhoto: verifyIdForm.front,
+        backPhoto: verifyIdForm.back,
+      });
+      setShowGetVerifiedSheet(false);
+      showToast('Documents sent. An admin will review them shortly.');
+    } catch (err) {
+      console.warn('Could not send verification documents', err);
+      const message = err instanceof Error && !/firebase|firestore|internal|permission/i.test(err.message) ? err.message : '';
+      showToast(`⚠️ ${message || 'Your documents could not be sent. Check your connection and try again.'}`);
+    } finally {
+      setIsSendingVerification(false);
+    }
+  };
+
+  /** Profile card inviting an approved partner to get verified (or showing that it is in review). */
+  const renderGetVerifiedCard = () => {
+    const app = myUnverifiedApplication();
+    if (!app || userProfile.isVerified) return null;
+    const inReview = app.verificationRequestStatus === 'pending';
+    const declined = app.verificationRequestStatus === 'declined';
+    return (
+      <div
+        className={`rounded-2xl p-3.5 border shadow-2xs flex items-start gap-3 ${
+          inReview ? 'bg-amber-50 border-amber-200' : declined ? 'bg-red-50/70 border-red-200' : 'bg-emerald-50/70 border-emerald-200'
+        }`}
+      >
+        <div
+          className={`w-10 h-10 rounded-xl bg-white border flex items-center justify-center shrink-0 ${
+            inReview ? 'border-amber-200 text-amber-600' : declined ? 'border-red-200 text-red-600' : 'border-emerald-200 text-[#046A38]'
+          }`}
+        >
+          {inReview ? <Clock size={19} /> : <ShieldCheck size={19} />}
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-black text-slate-900">
+            {inReview ? 'Verification in review' : declined ? 'Verification not approved' : 'Get the Verified badge'}
+          </p>
+          <p className="text-xs text-slate-600 leading-relaxed mt-0.5">
+            {inReview
+              ? 'An admin is checking your Ghana Card. We will let you know when it is done.'
+              : declined
+              ? `Reason: ${app.verificationDeclineReason || 'not given'}. Please send clear photos again.`
+              : 'Buyers trust verified partners more. Send your Ghana Card and an admin will verify you.'}
+          </p>
+          {!inReview && (
+            <button
+              type="button"
+              onClick={openGetVerifiedSheet}
+              className="mt-2.5 py-2.5 px-4 rounded-xl bg-[#046A38] hover:bg-[#035a2f] text-white text-xs font-bold cursor-pointer shadow-2xs inline-flex items-center gap-1.5 active:scale-98 transition-transform"
+            >
+              <ShieldCheck size={14} />
+              <span>{declined ? 'Send Documents Again' : 'Get Verified'}</span>
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const renderGetVerifiedSheet = () => {
+    if (!showGetVerifiedSheet) return null;
+    const close = () => !isSendingVerification && setShowGetVerifiedSheet(false);
+    const photoTile = (side: 'front' | 'back', label: string) => {
+      const src = verifyIdForm[side];
+      return (
+        <button
+          type="button"
+          onClick={() => pickVerifyIdPhoto(side)}
+          aria-label={`${src ? 'Change' : 'Upload'} ${label}`}
+          className={`relative flex-1 aspect-[1.58] rounded-xl overflow-hidden border-2 cursor-pointer flex flex-col items-center justify-center gap-1 ${
+            src ? 'border-emerald-300' : 'border-dashed border-slate-300 bg-slate-50 text-slate-500'
+          }`}
+        >
+          {src ? (
+            <>
+              <img src={src} alt={label} className="absolute inset-0 w-full h-full object-cover" />
+              <span className="absolute bottom-1 right-1 bg-black/60 text-white text-[10.5px] font-bold px-1.5 py-0.5 rounded-md">Change</span>
+            </>
+          ) : (
+            <>
+              <Camera size={20} />
+              <span className="text-[11px] font-bold">{label}</span>
+            </>
+          )}
+        </button>
+      );
+    };
+    return (
+      <div className="fixed inset-0 z-[86] bg-slate-900/40 flex items-end justify-center" onClick={close}>
+        <div
+          className="w-full max-w-md bg-white rounded-t-3xl px-4 pt-3 pb-[calc(env(safe-area-inset-bottom,0px)+16px)] space-y-3.5 shadow-2xl max-h-[90%] overflow-y-auto"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="w-10 h-1.5 rounded-full bg-slate-200 mx-auto" />
+          <div>
+            <p className="text-base font-black text-slate-900">Get Verified</p>
+            <p className="text-xs text-slate-500 leading-relaxed">
+              Your Ghana Card is only seen by Haraka admins. It is never shown to buyers.
+            </p>
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor="verify-ghana-pin" className="text-xs font-bold text-slate-800 block">
+              Ghana Card Number
+            </label>
+            <input
+              id="verify-ghana-pin"
+              type="text"
+              inputMode="numeric"
+              autoComplete="off"
+              value={verifyIdForm.pin}
+              onFocus={() => !verifyIdForm.pin && setVerifyIdForm((f) => ({ ...f, pin: 'GHA-' }))}
+              onChange={(e) => setVerifyIdForm((f) => ({ ...f, pin: formatGhanaCardPin(e.target.value) }))}
+              placeholder="GHA-000000000-0"
+              className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3 text-sm font-mono text-slate-900 outline-none focus:border-emerald-500 focus:bg-white"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <p className="text-xs font-bold text-slate-800">Photos of your Ghana Card</p>
+            <div className="flex gap-2.5">
+              {photoTile('front', 'Front of card')}
+              {photoTile('back', 'Back of card')}
+            </div>
+            <p className="text-[11px] text-slate-500">Make sure your name, photo and number are clear and readable.</p>
+          </div>
+          <div className="flex gap-2 pt-1">
+            <button type="button" onClick={close} className="flex-1 py-3 rounded-2xl border border-slate-200 text-slate-600 text-sm font-bold cursor-pointer">
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={sendVerificationDocuments}
+              disabled={isSendingVerification}
+              className="flex-[1.4] py-3 rounded-2xl bg-[#046A38] text-white text-sm font-bold cursor-pointer disabled:opacity-60"
+            >
+              {isSendingVerification ? 'Sending…' : 'Send for Verification'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const renderFilePickers = () => (
     <div className="hidden" aria-hidden="true">
         <input type="file" ref={adPhotoInputRef} accept="image/*" multiple className="hidden" onClick={clearPicked} onChange={handleAdPhotosSelected} />
@@ -2737,6 +3019,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
         <input type="file" ref={storeCounterInputRef} accept="image/*" className="hidden" onClick={clearPicked} onChange={handleStoreCounterChange} />
         <input type="file" ref={storeLogoInputRef} accept="image/*" className="hidden" onClick={clearPicked} onChange={handleStoreLogoChange} />
         <input type="file" ref={storePhysicalInputRef} accept="image/*" className="hidden" onClick={clearPicked} onChange={handleStorePhysicalChange} />
+        <input type="file" ref={verifyIdInputRef} accept="image/*" className="hidden" onClick={clearPicked} onChange={handleVerifyIdPhoto} />
     </div>
   );
 
@@ -4319,6 +4602,9 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     idVerificationSkipped: boolean;
     frontPhoto?: string;
     backPhoto?: string;
+    verificationRequestStatus?: '' | 'pending' | 'declined';
+    verificationRequestedAtISO?: string;
+    verificationDeclineReason?: string;
     phone: string;
     whatsapp?: string;
     allowWhatsApp?: boolean;
@@ -4414,6 +4700,29 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     );
   };
 
+  /** Admin turns down an approved partner's verification documents; they stay approved and can send new ones. */
+  const declineVerificationRequest = async (applicantId: string, reason: string) => {
+    const applicant = adminApplicants.find((a) => a.id === applicantId);
+    if (!applicant) return;
+    try {
+      await declineVerification(applicant as unknown as StoredApplication, reason);
+    } catch (err) {
+      console.warn('Could not decline verification', err);
+      showToast('⚠️ Could not save the decision. Try again.');
+      return;
+    }
+    notifyUser(
+      (applicant as any).uid,
+      'Verification not approved',
+      `Reason: ${reason || 'not given'}. You can send new documents from your profile.`,
+      { type: 'application', id: (applicant as any).uid }
+    );
+    const update = { verificationRequestStatus: 'declined' as const, verificationDeclineReason: reason };
+    setAdminApplicants((prev) => prev.map((a) => (a.id === applicantId ? { ...a, ...update } : a)));
+    setViewingApplicantDetails((prev) => (prev && prev.id === applicantId ? { ...prev, ...update } : prev));
+    showToast(`Verification declined for ${applicant.name}`);
+  };
+
   // Notifications are built only from real events
   useEffect(() => {
     if (!firebaseUid) {
@@ -4466,6 +4775,18 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
         target: 'application',
         atISO,
       });
+      if (myApplication.status === 'approved' && !myApplication.verifiedBadge && myApplication.verificationRequestStatus === 'declined') {
+        const declinedAt = myApplication.decidedAtISO || '';
+        items.push({
+          id: `verify-declined-${declinedAt}`,
+          type: 'safety',
+          title: 'Verification not approved',
+          body: `Reason: ${myApplication.verificationDeclineReason || 'Not given'}. You can send new documents from your profile.`,
+          time: formatChatTime(declinedAt),
+          read: isRead(declinedAt),
+          atISO: declinedAt,
+        });
+      }
     }
 
     // New ads from sellers the user follows (posted in the last 7 days)
@@ -4495,6 +4816,20 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
           type: 'safety',
           title: `${pending.length} application${pending.length === 1 ? '' : 's'} waiting for review`,
           body: 'Open the Admin Control Dashboard to approve, verify or reject.',
+          time: formatChatTime(atISO),
+          read: isRead(atISO),
+          target: 'dashboard',
+          atISO,
+        });
+      }
+      const verifyRequests = adminApplicants.filter((a) => a.status === 'approved' && a.verificationRequestStatus === 'pending');
+      if (verifyRequests.length > 0) {
+        const atISO = verifyRequests.map((a) => a.verificationRequestedAtISO || '').sort().pop() || '';
+        items.push({
+          id: `admin-verify-${atISO}`,
+          type: 'safety',
+          title: `${verifyRequests.length} verification request${verifyRequests.length === 1 ? '' : 's'}`,
+          body: 'Approved partners sent their Ghana Card. Open Approved in the Admin Control Dashboard to verify.',
           time: formatChatTime(atISO),
           read: isRead(atISO),
           target: 'dashboard',
@@ -4635,7 +4970,8 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
   };
 
   const [adminApplicantFilter, setAdminApplicantFilter] = useState<'pending' | 'approved' | 'rejected'>('pending');
-  const [rejectModalApplicant, setRejectModalApplicant] = useState<{ id: string; name: string; role: string } | null>(null);
+  // `declineVerification`: turning down an approved partner's ID documents instead of rejecting the application
+  const [rejectModalApplicant, setRejectModalApplicant] = useState<{ id: string; name: string; role: string; declineVerification?: boolean } | null>(null);
   const [selectedRejectReason, setSelectedRejectReason] = useState<string>('Blurry or unreadable Ghana Card ID photos');
   const [customRejectReason, setCustomRejectReason] = useState<string>('');
 
@@ -6463,6 +6799,15 @@ export default function RootLayout() {
       'Prohibited goods or restricted commercial activity',
       'Other / Custom reason',
     ];
+    const isDecline = Boolean(rejectModalApplicant.declineVerification);
+    const presetReasons = isDecline
+      ? [
+          'Blurry or unreadable Ghana Card ID photos',
+          'Name on Ghana Card does not match application details',
+          'Invalid or unverified Ghana Card PIN',
+          'Other / Custom reason',
+        ]
+      : rejectionPresetReasons;
 
     return (
       <div
@@ -6480,7 +6825,7 @@ export default function RootLayout() {
               </div>
               <div>
                 <h3 className="text-sm font-black text-slate-900">
-                  Reject Application
+                  {isDecline ? 'Decline Verification' : 'Reject Application'}
                 </h3>
                 <p className="text-[11px] text-slate-500 truncate max-w-[200px]">
                   {rejectModalApplicant.name} ({rejectModalApplicant.role})
@@ -6497,10 +6842,10 @@ export default function RootLayout() {
 
           <div className="space-y-2">
             <label className="text-xs font-bold text-slate-800 block">
-              Reason for Rejection:
+              {isDecline ? 'Why the documents were not accepted (they stay approved):' : 'Reason for Rejection:'}
             </label>
             <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
-              {rejectionPresetReasons.map((reason) => (
+              {presetReasons.map((reason) => (
                 <label
                   key={reason}
                   className={`flex items-center gap-2.5 p-2 rounded-xl border text-xs cursor-pointer transition-all ${
@@ -6547,12 +6892,13 @@ export default function RootLayout() {
                   selectedRejectReason === 'Other / Custom reason' && customRejectReason.trim()
                     ? customRejectReason.trim()
                     : selectedRejectReason;
-                decideOnApplicant(rejectModalApplicant.id, 'reject', finalReason);
+                if (isDecline) declineVerificationRequest(rejectModalApplicant.id, finalReason);
+                else decideOnApplicant(rejectModalApplicant.id, 'reject', finalReason);
                 setRejectModalApplicant(null);
               }}
               className="flex-1 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-xs shadow-xs cursor-pointer"
             >
-              Confirm Rejection
+              {isDecline ? 'Decline Documents' : 'Confirm Rejection'}
             </button>
           </div>
         </div>
@@ -7444,11 +7790,60 @@ export default function RootLayout() {
                 Reject
               </button>
             </>
+          ) : applicant.status === 'approved' && !applicant.verifiedBadge ? (
+            // Approved without the badge: the admin can verify once the ID documents are in
+            <div className="flex-1 space-y-2">
+              <p className="text-[11px] font-semibold text-slate-600 flex items-center gap-1.5">
+                <CheckCircle2 size={13} className="text-emerald-600 shrink-0" />
+                <span>
+                  {applicant.verificationRequestStatus === 'pending'
+                    ? 'Approved • sent ID documents for verification'
+                    : hasRequiredDocuments(applicant)
+                    ? 'Approved Standard Merchant • ID documents on file'
+                    : 'Approved Standard Merchant • no ID documents yet'}
+                </span>
+              </p>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={!hasRequiredDocuments(applicant)}
+                  title={hasRequiredDocuments(applicant) ? 'Give the Verified badge' : 'Needs Ghana Card number and both card photos'}
+                  onClick={() => decideOnApplicant(applicant.id, 'verify')}
+                  className="flex-1 py-2.5 px-3 rounded-xl bg-[#046A38] hover:bg-[#035a2f] text-white font-bold text-xs cursor-pointer shadow-2xs transition-colors flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <ShieldCheck size={15} />
+                  <span>Verify</span>
+                </button>
+                {applicant.verificationRequestStatus === 'pending' && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setRejectModalApplicant({
+                        id: applicant.id,
+                        name: applicant.name,
+                        role: applicant.role === 'artisan' ? 'Artisan' : 'Seller',
+                        declineVerification: true,
+                      })
+                    }
+                    className="py-2.5 px-3 rounded-xl border border-amber-200 text-amber-700 hover:bg-amber-50 font-bold text-xs cursor-pointer"
+                  >
+                    Decline
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => decideOnApplicant(applicant.id, 'reject', 'Approval revoked by admin')}
+                  className="py-2.5 px-3 rounded-xl border border-slate-200 text-slate-600 hover:text-red-600 font-bold text-xs cursor-pointer"
+                >
+                  Revoke
+                </button>
+              </div>
+            </div>
           ) : applicant.status === 'approved' ? (
             <div className="flex-1 flex items-center justify-between">
               <span className="text-xs font-bold text-emerald-700 flex items-center gap-1.5">
                 <CheckCircle2 size={14} />
-                <span>{applicant.verifiedBadge ? 'Approved with Verified Badge' : 'Approved Standard Merchant'}</span>
+                <span>Approved with Verified Badge</span>
               </span>
               <button
                 onClick={() => decideOnApplicant(applicant.id, 'reject', 'Approval revoked by admin')}
@@ -8642,7 +9037,10 @@ export default function RootLayout() {
             const artisanPct = totalUsersCalculated > 0 ? ((tradeArtisansTotal / totalUsersCalculated) * 100).toFixed(1) : '0.0';
             const userPct = totalUsersCalculated > 0 ? ((activeUsersTotal / totalUsersCalculated) * 100).toFixed(1) : '0.0';
             const adminPct = totalUsersCalculated > 0 ? ((platformAdminsTotal / totalUsersCalculated) * 100).toFixed(1) : '0.0';
-            const pendingCount = adminApplicants.filter((a) => a.status === 'pending').length;
+            // New applications plus approved partners who sent ID documents for the badge
+            const pendingCount = adminApplicants.filter(
+              (a) => a.status === 'pending' || (a.status === 'approved' && a.verificationRequestStatus === 'pending')
+            ).length;
             const liveAdsTotal = listings.length;
 
             return (
@@ -8738,7 +9136,14 @@ export default function RootLayout() {
                         {filter === 'pending'
                           ? `Pending (${adminApplicants.filter((a) => a.status === 'pending').length})`
                           : filter === 'approved'
-                          ? `Approved (${adminApplicants.filter((a) => a.status === 'approved').length})`
+                          ? (
+                              <span className="inline-flex items-center gap-1">
+                                {`Approved (${adminApplicants.filter((a) => a.status === 'approved').length})`}
+                                {adminApplicants.some((a) => a.status === 'approved' && a.verificationRequestStatus === 'pending') && (
+                                  <span className="w-1.5 h-1.5 rounded-full bg-[#FF6A00]" aria-label="Verification requests waiting" />
+                                )}
+                              </span>
+                            )
                           : `Rejected (${adminApplicants.filter((a) => a.status === 'rejected').length})`}
                       </button>
                     ))}
@@ -8841,6 +9246,24 @@ export default function RootLayout() {
                               className="py-1.5 px-3.5 rounded-xl border border-red-200 text-red-600 hover:bg-red-50 font-bold text-xs cursor-pointer transition-colors"
                             >
                               Reject
+                            </button>
+                          </div>
+                        ) : applicant.status === 'approved' && !applicant.verifiedBadge && hasRequiredDocuments(applicant) ? (
+                          <div className="flex items-center justify-between gap-2 mt-2.5 pt-2 border-t border-slate-100 text-[11px]">
+                            <span className={`font-bold flex items-center gap-1 min-w-0 ${applicant.verificationRequestStatus === 'pending' ? 'text-amber-600' : 'text-emerald-700'}`}>
+                              {applicant.verificationRequestStatus === 'pending' ? <ShieldAlert size={12} className="shrink-0" /> : <CheckCircle2 size={12} className="shrink-0" />}
+                              <span className="truncate">{applicant.verificationRequestStatus === 'pending' ? 'Asked to be verified' : 'Standard Merchant'}</span>
+                            </span>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                decideOnApplicant(applicant.id, 'verify');
+                              }}
+                              className="shrink-0 py-1.5 px-3 rounded-xl bg-[#046A38] hover:bg-[#035a2f] text-white font-bold text-xs cursor-pointer shadow-2xs flex items-center gap-1"
+                            >
+                              <ShieldCheck size={13} className="stroke-[2.5]" />
+                              <span>Verify</span>
                             </button>
                           </div>
                         ) : applicant.status === 'approved' ? (
@@ -10987,6 +11410,8 @@ export default function RootLayout() {
                     </div>
                   )}
                 </div>
+
+                {renderGetVerifiedCard()}
 
                 {/* SELLER ONLY: Full Marketplace Offers & Listings, Activity & Trades */}
                 {currentUserRole === 'seller' ? (
@@ -19261,9 +19686,6 @@ export default function RootLayout() {
                                         Remove
                                       </button>
                                     </div>
-                                    <span className="absolute bottom-2 left-2 bg-emerald-600 text-white text-[11px] font-bold px-2 py-0.5 rounded-full shadow-xs">
-                                      ✓ Photo Selected (Preview)
-                                    </span>
                                   </div>
                                 ) : (
                                   <div
@@ -20210,9 +20632,11 @@ export default function RootLayout() {
                             <span>Applicant Profile Picture</span>
                             <span className="text-red-500 font-black text-sm">*</span>
                           </span>
-                          <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full border ${sellerAvatarPhoto ? 'text-emerald-700 bg-emerald-50 border-emerald-200' : 'text-red-500 bg-red-50 border-red-200'}`}>
-                            {sellerAvatarPhoto ? '✓ Uploaded' : 'Required *'}
-                          </span>
+                          {!sellerAvatarPhoto && (
+                            <span className="text-[11px] font-bold px-2 py-0.5 rounded-full border text-red-500 bg-red-50 border-red-200">
+                              Required *
+                            </span>
+                          )}
                         </div>
                         <div className="flex items-start gap-3.5">
                           <div
@@ -20900,9 +21324,11 @@ export default function RootLayout() {
                           Required for verification and buyer credibility in chat.
                         </p>
                       </div>
-                      <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full border ${sellerAvatarPhoto ? 'text-emerald-700 bg-emerald-50 border-emerald-200' : 'text-red-500 bg-red-50 border-red-200'}`}>
-                        {sellerAvatarPhoto ? '✓ Uploaded' : 'Required *'}
-                      </span>
+                      {!sellerAvatarPhoto && (
+                        <span className="text-[11px] font-bold px-2 py-0.5 rounded-full border text-red-500 bg-red-50 border-red-200">
+                          Required *
+                        </span>
+                      )}
                     </div>
 
 
@@ -21187,7 +21613,7 @@ export default function RootLayout() {
 
             {/* Bottom Sticky Action Bar for Step 2 */}
             {sellerRegStep === 2 && (
-              <div className="sticky bottom-0 z-30 bg-white/95 backdrop-blur-md px-4 py-3 border-t border-slate-100 flex items-center gap-3">
+              <div data-kb-hide-short className="sticky bottom-0 z-30 bg-white/95 backdrop-blur-md px-4 py-3 border-t border-slate-100 flex items-center gap-3">
                 <button
                   type="button"
                   onClick={() => {
@@ -21206,7 +21632,7 @@ export default function RootLayout() {
 
             {/* Bottom Sticky Action Bar for Step 3 for both Shop and Individual */}
             {sellerRegStep === 3 && (
-              <div className="sticky bottom-0 z-30 bg-white/95 backdrop-blur-md px-4 py-3 border-t border-slate-100 flex items-center gap-3 shadow-lg">
+              <div data-kb-hide-short className="sticky bottom-0 z-30 bg-white/95 backdrop-blur-md px-4 py-3 border-t border-slate-100 flex items-center gap-3 shadow-lg">
                 <button
                   type="button"
                   disabled={isSubmittingApplication}
@@ -22678,7 +23104,17 @@ export default function RootLayout() {
                     setListings((prev) => [saved, ...prev.filter((l) => l.id !== saved.id)]);
                   } catch (err) {
                     console.warn('Could not save listing', err);
-                    showToast('⚠️ Your ad could not be published. Check your connection and try again.');
+                    reportClientError('post-ad', err);
+                    const code = (err as { code?: string })?.code || '';
+                    const message = err instanceof Error && !code && !/firebase|firestore|internal|upload failed/i.test(err.message) ? err.message : '';
+                    showToast(
+                      `⚠️ ${
+                        message ||
+                        (code === 'permission-denied'
+                          ? 'Your account is not allowed to post yet. Please log out and log in again.'
+                          : 'Your ad could not be published. Check your connection and try again.')
+                      }`
+                    );
                     return;
                   } finally {
                     setIsPublishingAd(false);
@@ -23345,12 +23781,13 @@ export default function RootLayout() {
                 {renderFilePickers()}
                 {renderChatActionSheet()}
                 {renderReportPersonModal()}
+                {renderGetVerifiedSheet()}
                 {renderPolicyViewer()}
               </div>
 
               {/* Bottom Tab Bar matching user screenshot */}
               {currentRoute.type === 'tabs' && !needsEmailVerification && !viewingApplicantDetails && !viewingArtisanBookingDetails && (
-                <div className="sticky bottom-0 left-0 right-0 shrink-0 bg-white border-t border-slate-200/80 pt-2 pb-[calc(env(safe-area-inset-bottom,0px)+14px)] px-3 flex items-center justify-around z-40 select-none shadow-lg">
+                <div data-kb-hide className="sticky bottom-0 left-0 right-0 shrink-0 bg-white border-t border-slate-200/80 pt-2 pb-[calc(env(safe-area-inset-bottom,0px)+14px)] px-3 flex items-center justify-around z-40 select-none shadow-lg">
                   {/* 1. Explore */}
                   <button
                     onClick={() => handleTabPress('home')}
@@ -23506,11 +23943,12 @@ export default function RootLayout() {
                 {renderFilePickers()}
                 {renderChatActionSheet()}
                 {renderReportPersonModal()}
+                {renderGetVerifiedSheet()}
                 </div>
 
                 {/* BOTTOM TAB BAR (Navigation) matching user screenshot */}
                 {currentRoute.type === 'tabs' && !needsEmailVerification && !viewingApplicantDetails && !viewingArtisanBookingDetails && (
-                  <div className="bg-white border-t border-slate-200/80 pt-2 pb-[calc(env(safe-area-inset-bottom,0px)+14px)] px-3 flex items-center justify-around z-40 select-none shadow-lg">
+                  <div data-kb-hide className="bg-white border-t border-slate-200/80 pt-2 pb-[calc(env(safe-area-inset-bottom,0px)+14px)] px-3 flex items-center justify-around z-40 select-none shadow-lg">
                     {/* 1. Explore */}
                     <button
                       onClick={() => handleTabPress('home')}

@@ -62,3 +62,14 @@ html.haraka-phone body {
   inset: 0;
   width: 100%;
 }
+
+/* While typing on a phone: the bottom tab bar steps aside, and on very short visible areas
+   (small phones with the keyboard open) so do the step buttons; they return when typing ends */
+html.haraka-typing [data-kb-hide] {
+  display: none !important;
+}
+@media (max-height: 460px) {
+  html.haraka-typing [data-kb-hide-short] {
+    display: none !important;
+  }
+}
