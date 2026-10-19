@@ -851,6 +851,10 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
 
   // When user clicks ANY call button: show little dropdown with two options (in-app call and phone call)
   const startCall = (name?: string, avatar?: string, phone?: string, uid?: string) => {
+    if (uid && uid === firebaseUidRef.current) {
+      showToast('You cannot call yourself.');
+      return;
+    }
     setCallDropdownUser({
       name: name || 'Haraka user',
       avatar: avatar || '',
@@ -1309,6 +1313,10 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     if (!firebaseUidRef.current) {
       showToast('Please log in to message the seller.');
       navigateTo({ type: 'login' });
+      return;
+    }
+    if (seller?.id && seller.id === firebaseUidRef.current) {
+      showToast('This is your own ad. Buyers will message you here.');
       return;
     }
     const artisanProfile = artisanProfiles.find((a) => a.id === seller?.id || a.id === listing?.id);
@@ -10900,6 +10908,10 @@ export default function RootLayout() {
 
                           {/* Quick Action Buttons */}
                           <div className="flex gap-2 pt-1 border-t border-slate-50">
+                            {art.id === firebaseUid ? (
+                              <span className="flex-1 text-[11px] font-bold text-slate-500 py-2 px-1">This is you</span>
+                            ) : (
+                            <>
                             <button
                               onClick={() =>
                                 navigateTo({ type: 'book-service', artisanId: art.id })
@@ -10933,6 +10945,8 @@ export default function RootLayout() {
                               <MessageSquare size={13} />
                               <span>Chat Direct</span>
                             </button>
+                            </>
+                            )}
                             <button
                               onClick={() =>
                                 navigateTo({ type: 'artisan-profile', id: art.id })
@@ -11115,6 +11129,7 @@ export default function RootLayout() {
                                 <h3 className="text-xs font-bold text-slate-800 line-clamp-1">{item.title}</h3>
                                 <p className="text-[11px] text-slate-400">{item.location.neighborhood}, {item.location.city}</p>
                               </div>
+                              {!(firebaseUid && ((item as { sellerId?: string }).sellerId === firebaseUid || item.seller?.id === firebaseUid)) && (
                               <div className="flex gap-2 mt-1">
                                 <button
                                   onClick={(e) => {
@@ -11141,6 +11156,7 @@ export default function RootLayout() {
                                   Call
                                 </button>
                               </div>
+                              )}
                             </div>
                           </div>
                         );
@@ -11450,7 +11466,11 @@ export default function RootLayout() {
                       {myOwnListings.length > 0 ? (
                         <div className="border border-slate-200/80 rounded-xl p-3 bg-white space-y-2.5">
                           {myOwnListings.slice(0, 3).map((ad) => (
-                            <div key={ad.id} className="flex items-start gap-3 border-b border-slate-100 last:border-b-0 pb-2.5 last:pb-0">
+                            <div
+                              key={ad.id}
+                              onClick={() => listings.some((l) => l.id === ad.id) && navigateTo({ type: 'listing', id: ad.id })}
+                              className="flex items-start gap-3 border-b border-slate-100 last:border-b-0 pb-2.5 last:pb-0 cursor-pointer active:opacity-70"
+                            >
                               <div className="relative shrink-0">
                                 <img
                                   src={ad.image || PLACEHOLDER_IMAGE}
@@ -12625,6 +12645,8 @@ export default function RootLayout() {
           );
         }
         const item = foundItem;
+        // The seller looking at their own ad: no chat, call, follow, save or report for themselves
+        const isMyAd = Boolean(firebaseUid) && ((item as { sellerId?: string }).sellerId === firebaseUid || item.seller?.id === firebaseUid);
         const isSaved = savedIds.includes(item.id);
         const isFollowing = followedSellerIds.includes(item.seller.id);
         const itemImages = (item.images && item.images.length > 0)
@@ -12724,20 +12746,22 @@ export default function RootLayout() {
                     >
                       <Share2 size={16} />
                     </button>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        toggleSave(item.id);
-                      }}
-                      className="w-10 h-10 rounded-full bg-white shadow-md flex items-center justify-center active:scale-95 transition-all cursor-pointer"
-                      title={isSaved ? 'Remove from saved' : 'Save ad'}
-                    >
-                      <Heart
-                        size={18}
-                        className={isSaved ? 'text-red-500 fill-red-500' : 'text-red-500 fill-red-500'}
-                      />
-                    </button>
+                    {!isMyAd && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleSave(item.id);
+                        }}
+                        className="w-10 h-10 rounded-full bg-white shadow-md flex items-center justify-center active:scale-95 transition-all cursor-pointer"
+                        title={isSaved ? 'Remove from saved' : 'Save ad'}
+                      >
+                        <Heart
+                          size={18}
+                          className={isSaved ? 'text-red-500 fill-red-500' : 'text-red-500 fill-red-500'}
+                        />
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -12944,13 +12968,17 @@ export default function RootLayout() {
                     </div>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => item.seller?.id && toggleFollowSeller(item.seller.id)}
-                    className="shrink-0 text-xs font-bold text-blue-600 hover:text-blue-700 transition-colors cursor-pointer py-1 px-1.5"
-                  >
-                    {isFollowing ? 'Following' : 'Follow'}
-                  </button>
+                  {isMyAd ? (
+                    <span className="shrink-0 text-[11px] font-bold text-slate-500 bg-slate-100 rounded-full py-1 px-2.5">You</span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => item.seller?.id && toggleFollowSeller(item.seller.id)}
+                      className="shrink-0 text-xs font-bold text-blue-600 hover:text-blue-700 transition-colors cursor-pointer py-1 px-1.5"
+                    >
+                      {isFollowing ? 'Following' : 'Follow'}
+                    </button>
+                  )}
                 </div>
 
                 {/* Inner Highlight Row: only display information if actually provided */}
@@ -13183,13 +13211,17 @@ export default function RootLayout() {
 
               {/* 7. Report & Listing ID Row matching attached image */}
               <div className="bg-[#F1F5F9]/80 rounded-2xl px-4 py-3 flex items-center justify-between flex-nowrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => handleOpenReportModal(item)}
-                  className="text-xs text-slate-600 hover:text-slate-900 font-semibold cursor-pointer active:scale-95 transition-transform whitespace-nowrap"
-                >
-                  Report this listing
-                </button>
+                {isMyAd ? (
+                  <span className="text-xs text-slate-500 font-semibold whitespace-nowrap">Your ad</span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => handleOpenReportModal(item)}
+                    className="text-xs text-slate-600 hover:text-slate-900 font-semibold cursor-pointer active:scale-95 transition-transform whitespace-nowrap"
+                  >
+                    Report this listing
+                  </button>
+                )}
                 <span className="text-xs font-semibold text-slate-600 whitespace-nowrap shrink-0">
                   Listing ID: #{item.id === 'listing-airpods-pro-2' ? 'HK-849102' : `HK-${item.id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 6).toUpperCase()}`}
                 </span>
@@ -13204,6 +13236,21 @@ export default function RootLayout() {
                 <span className="w-2 h-2 rounded-full bg-slate-400" />
                 <span>This item has been Sold</span>
               </div>
+            ) : isMyAd ? (
+              <>
+                <div className="min-w-0">
+                  <span className="text-[11px] font-semibold text-slate-500 block">This is your ad</span>
+                  <span className="text-xs font-bold text-slate-800 block">Buyers chat and call you here</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => navigateTo({ type: 'manage-my-ads' })}
+                  className="flex-1 bg-[#0F172A] hover:bg-[#1E293B] text-white text-xs font-bold py-3.5 rounded-2xl flex items-center justify-center gap-2 shadow-md active:scale-95 transition-all cursor-pointer"
+                >
+                  <Package size={16} />
+                  <span>Manage My Ads</span>
+                </button>
+              </>
             ) : (
               <>
                 <button
@@ -14560,6 +14607,8 @@ export default function RootLayout() {
         }
         const firstName = artisan.name.split(' ')[0];
         const isArtisanLiveAvailable = getArtisanAvailability(artisan.id);
+        // An artisan looking at their own public profile can't book or message themselves
+        const isMyProfile = Boolean(firebaseUid) && artisan.id === firebaseUid;
 
 
         const profileData = getArtisanProfileData(artisan);
@@ -14838,6 +14887,7 @@ export default function RootLayout() {
                 </div>
 
                 {/* Direct Action Buttons */}
+                {!isMyProfile && (
                 <div className="grid grid-cols-2 gap-2 pt-1">
                   <button
                     onClick={() => navigateTo({ type: 'book-service', artisanId: artisan.id })}
@@ -14872,6 +14922,7 @@ export default function RootLayout() {
                     <span>Chat Direct</span>
                   </button>
                 </div>
+                )}
 
                 {/* Haraka Guarantee */}
                 <div className="flex items-start gap-1.5 pt-1 text-[11px] text-slate-600 leading-snug">
@@ -15013,6 +15064,9 @@ export default function RootLayout() {
                 </div>
               </div>
 
+              {isMyProfile ? (
+                <span className="text-xs font-bold text-slate-500">This is your public profile</span>
+              ) : (
               <button
                 onClick={() => navigateTo({ type: 'book-service', artisanId: artisan.id })}
                 className={`flex-1 max-w-[210px] py-3 px-4 rounded-full text-white font-black text-xs flex items-center justify-center gap-1.5 shadow-md active:scale-95 transition-all cursor-pointer ${
@@ -15024,6 +15078,7 @@ export default function RootLayout() {
                 <span>{isArtisanLiveAvailable ? `Book ${firstName} Now` : `Queue Booking (Busy)`}</span>
                 <ArrowRight size={15} />
               </button>
+              )}
             </div>
           </div>
         );
