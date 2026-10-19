@@ -2717,6 +2717,28 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     );
   };
 
+  // Every photo/document picker lives here, always on the page, so its button works on any
+  // screen that uses it (a picker inside one screen does nothing when tapped from another).
+  const clearPicked = (e: React.MouseEvent<HTMLInputElement>) => {
+    e.currentTarget.value = ''; // picking the same file again still counts as a change
+  };
+  const renderFilePickers = () => (
+    <div className="hidden" aria-hidden="true">
+        <input type="file" ref={adPhotoInputRef} accept="image/*" multiple className="hidden" onClick={clearPicked} onChange={handleAdPhotosSelected} />
+        <input type="file" ref={bookingPhotoInputRef} accept="image/*" multiple className="hidden" onClick={clearPicked} onChange={handleBookingPhotosSelected} />
+        <input type="file" ref={businessCertInputRef} accept="image/*,application/pdf" className="hidden" onClick={clearPicked} onChange={handleBusinessCertChange} />
+        <input type="file" ref={ghanaCardBackInputRef} accept="image/*" className="hidden" onClick={clearPicked} onChange={handleGhanaCardBackChange} />
+        <input type="file" ref={ghanaCardFrontInputRef} accept="image/*" className="hidden" onClick={clearPicked} onChange={handleGhanaCardFrontChange} />
+        <input type="file" ref={policeClearanceInputRef} accept="image/*,.pdf" className="hidden" onClick={clearPicked} onChange={handlePoliceClearanceChange} />
+        <input type="file" ref={portfolioImgInputRef} accept="image/*" className="hidden" onClick={clearPicked} onChange={handlePortfolioPhotoChange} />
+        <input type="file" ref={publicMarketplaceAvatarInputRef} accept="image/*" className="hidden" onClick={clearPicked} onChange={handlePublicMarketplaceAvatarChange} />
+        <input type="file" ref={storeBannerInputRef} accept="image/*" className="hidden" onClick={clearPicked} onChange={handleStoreBannerChange} />
+        <input type="file" ref={storeCounterInputRef} accept="image/*" className="hidden" onClick={clearPicked} onChange={handleStoreCounterChange} />
+        <input type="file" ref={storeLogoInputRef} accept="image/*" className="hidden" onClick={clearPicked} onChange={handleStoreLogoChange} />
+        <input type="file" ref={storePhysicalInputRef} accept="image/*" className="hidden" onClick={clearPicked} onChange={handleStorePhysicalChange} />
+    </div>
+  );
+
   const renderDeleteAccountModal = () => {
     if (!showDeleteAccountModal) return null;
     return (
@@ -15127,15 +15149,6 @@ export default function RootLayout() {
                     </div>
 
                     <div className="flex gap-2.5 overflow-x-auto pb-1 no-scrollbar">
-                      {/* Upload Button */}
-                      <input
-                        ref={bookingPhotoInputRef}
-                        type="file"
-                        accept="image/*"
-                        multiple
-                        className="hidden"
-                        onChange={handleBookingPhotosSelected}
-                      />
                       <button
                         type="button"
                         onClick={() => bookingPhotoInputRef.current?.click()}
@@ -16907,35 +16920,6 @@ export default function RootLayout() {
 
         return (
           <div className="flex-1 flex flex-col bg-slate-50 overflow-y-auto no-scrollbar">
-            {/* Hidden file input elements for Ghana Card front & back upload */}
-            <input
-              type="file"
-              ref={ghanaCardFrontInputRef}
-              onChange={handleGhanaCardFrontChange}
-              accept="image/*"
-              className="hidden"
-            />
-            <input
-              type="file"
-              ref={ghanaCardBackInputRef}
-              onChange={handleGhanaCardBackChange}
-              accept="image/*"
-              className="hidden"
-            />
-            <input
-              type="file"
-              ref={policeClearanceInputRef}
-              onChange={handlePoliceClearanceChange}
-              accept="image/*,.pdf"
-              className="hidden"
-            />
-            <input
-              type="file"
-              ref={portfolioImgInputRef}
-              onChange={handlePortfolioPhotoChange}
-              accept="image/*"
-              className="hidden"
-            />
 
             {/* Top Navigation Bar matching user screenshot */}
             <div className="bg-white px-4 pt-3.5 pb-3 border-b border-slate-100 sticky top-0 z-20 flex items-center justify-between">
@@ -17515,13 +17499,6 @@ export default function RootLayout() {
                             >
                               <Pencil size={11} className="stroke-[2.5]" />
                             </button>
-                            <input
-                              type="file"
-                              ref={storeLogoInputRef}
-                              accept="image/*"
-                              onChange={handleStoreLogoChange}
-                              className="hidden"
-                            />
                           </div>
 
                           <div className="flex-1 min-w-0">
@@ -17578,13 +17555,6 @@ export default function RootLayout() {
                                 <span className="text-[11px] text-slate-400">Recommended: 1200 × 400 px</span>
                               </div>
                             )}
-                            <input
-                              type="file"
-                              ref={storeBannerInputRef}
-                              accept="image/*"
-                              onChange={handleStoreBannerChange}
-                              className="hidden"
-                            />
                             <button
                               type="button"
                               onClick={() => storeBannerInputRef.current?.click()}
@@ -17611,21 +17581,6 @@ export default function RootLayout() {
                           </p>
                         </div>
 
-                        {/* Hidden inputs */}
-                        <input
-                          type="file"
-                          ref={storePhysicalInputRef}
-                          accept="image/*"
-                          onChange={handleStorePhysicalChange}
-                          className="hidden"
-                        />
-                        <input
-                          type="file"
-                          ref={storeCounterInputRef}
-                          accept="image/*"
-                          onChange={handleStoreCounterChange}
-                          className="hidden"
-                        />
 
                         <div className="grid grid-cols-2 gap-3">
                           {/* Photo 1: Physical Shop Signboard */}
@@ -18248,13 +18203,6 @@ export default function RootLayout() {
                               <label className="text-xs font-semibold text-slate-700 block mb-1.5">
                                 Certificate Document / Photo (Optional)
                               </label>
-                              <input
-                                type="file"
-                                ref={businessCertInputRef}
-                                accept="image/*,application/pdf"
-                                onChange={handleBusinessCertChange}
-                                className="hidden"
-                              />
                               <div className="relative rounded-2xl overflow-hidden border border-slate-200/80 bg-slate-50 p-4 flex flex-col items-center justify-center text-center">
                                 {businessCertPhoto ? (
                                   <img
@@ -20155,13 +20103,6 @@ export default function RootLayout() {
                               <label className="text-xs font-semibold text-slate-700 block mb-1.5">
                                 Certificate Document / Photo (Optional)
                               </label>
-                              <input
-                                type="file"
-                                ref={businessCertInputRef}
-                                accept="image/*,application/pdf"
-                                onChange={handleBusinessCertChange}
-                                className="hidden"
-                              />
                               <div className="relative rounded-2xl overflow-hidden border border-slate-200/80 bg-slate-50 p-4 flex flex-col items-center justify-center text-center">
                                 {businessCertPhoto ? (
                                   <img
@@ -20304,10 +20245,8 @@ export default function RootLayout() {
                               <h3 className="text-base font-black text-slate-900 leading-tight truncate">
                                 {sellerRegForm.fullName || 'Artisan Applicant'}
                               </h3>
-                              <span className="bg-emerald-50 text-emerald-800 text-[11px] font-extrabold px-2 py-0.5 rounded-full border border-emerald-200 flex items-center gap-1">
-                                <BadgeCheck size={12} className="text-emerald-700" />
-                                <span>Verified Trade Pro</span>
-                              </span>
+                              {/* No "verified" badge here: applicants are not verified yet. The badge only shows
+                                  on profiles an admin approved AND verified (artisan.verified / profile.verified). */}
                             </div>
 
                             <p className="text-xs font-bold text-orange-600 mt-0.5">
@@ -20974,14 +20913,6 @@ export default function RootLayout() {
                       </span>
                     </div>
 
-                    {/* Hidden input for user photo upload */}
-                    <input
-                      ref={publicMarketplaceAvatarInputRef}
-                      type="file"
-                      accept="image/*"
-                      className="hidden"
-                      onChange={handlePublicMarketplaceAvatarChange}
-                    />
 
                     {/* Profile row */}
                     <div className="flex items-center gap-3.5 pt-1">
@@ -21683,14 +21614,6 @@ export default function RootLayout() {
                 <div className={`flex gap-2 overflow-x-auto pb-1 items-center p-1 rounded-2xl transition-colors ${
                   postAdErrors.images ? 'bg-red-50/50 ring-2 ring-red-400' : ''
                 }`}>
-                  <input
-                    ref={adPhotoInputRef}
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    className="hidden"
-                    onChange={handleAdPhotosSelected}
-                  />
                   {(adDraft.images?.length || 0) < 8 && (
                     <button
                       type="button"
@@ -23426,6 +23349,7 @@ export default function RootLayout() {
                 {renderCallDropdown()}
                 {renderCallModal()}
                 {renderDeleteAccountModal()}
+                {renderFilePickers()}
                 {renderChatActionSheet()}
                 {renderReportPersonModal()}
                 {renderPolicyViewer()}
@@ -23586,6 +23510,7 @@ export default function RootLayout() {
                   {renderCallDropdown()}
                   {renderCallModal()}
                   {renderDeleteAccountModal()}
+                {renderFilePickers()}
                 {renderChatActionSheet()}
                 {renderReportPersonModal()}
                 </div>
