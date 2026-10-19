@@ -1944,6 +1944,8 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
   };
 
   const handleSignOut = () => {
+    // The sign-out finishes in the background; the splash must already treat this phone as signed out
+    signedOutRef.current = true;
     callSessionRef.current?.hangUp();
     clearPushToken()
       .catch(() => {})
@@ -1956,7 +1958,9 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     setCurrentUserRole('buyer');
     setSubmittedSellerApplicantId(null);
     setIsLoggedIn(false);
-    navigateTo({ type: 'welcome' });
+    // Start over like a fresh launch: splash, then the onboarding pages, then Welcome
+    setRouteHistory([]);
+    setCurrentRoute({ type: 'splash' });
   };
 
   // Real Firebase session: restores a saved login on launch and loads the user's profile
@@ -1966,6 +1970,8 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
   const [isFirebaseAdmin, setIsFirebaseAdmin] = useState(false);
   const [adminAccess, setAdminAccess] = useState<AdminAccess>({ isAdmin: false, canAddAdmins: false, isSystemAdmin: false });
   const profileLoadedRef = useRef(false);
+  /** True from the moment the user logs out until someone signs in again */
+  const signedOutRef = useRef(false);
   const syncedListsRef = useRef({ saved: '[]', followed: '[]' });
   const [notificationsReadAt, setNotificationsReadAt] = useState('');
   const firebaseUidRef = useRef<string | null>(null);
@@ -1975,6 +1981,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
   useEffect(() => {
     return watchAuth((user, profile) => {
       firebaseUidRef.current = user?.uid ?? null;
+      if (user) signedOutRef.current = false; // a new sign-in
       setFirebaseUid(user?.uid ?? null);
       setEmailConfirmed(user ? isEmailConfirmed(user) : true);
       if (!user) return;
@@ -2574,7 +2581,9 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
       setCurrentUserRole('buyer');
       setSubmittedSellerApplicantId(null);
       setIsLoggedIn(false);
-      navigateTo({ type: 'welcome' });
+      signedOutRef.current = true;
+      setRouteHistory([]);
+      setCurrentRoute({ type: 'splash' });
       showToast('Your Haraka account has been deleted.', 'check');
     } catch (err) {
       console.warn('Could not delete account', err);
@@ -9682,21 +9691,12 @@ export default function RootLayout() {
                 );
                 return;
               }
-              // Wait until the saved login has loaded, so signed-in users go straight Home
+              // Wait until the saved login has loaded: signed-in users go straight Home; everyone
+              // signed out (new, or after logging out) always goes through the onboarding pages
               const decide = () => {
-                let seenOnboarding = false;
-                try {
-                  seenOnboarding = localStorage.getItem('haraka.onboardingSeen') === '1';
-                } catch {
-                  seenOnboarding = false;
-                }
-                setCurrentRoute(
-                  firebaseAuth.currentUser || firebaseUidRef.current
-                    ? { type: 'tabs', tab: 'home' }
-                    : seenOnboarding
-                    ? { type: 'welcome' }
-                    : { type: 'onboarding' }
-                );
+                setRouteHistory([]);
+                const signedIn = !signedOutRef.current && Boolean(firebaseAuth.currentUser || firebaseUidRef.current);
+                setCurrentRoute(signedIn ? { type: 'tabs', tab: 'home' } : { type: 'onboarding' });
               };
               Promise.race([firebaseAuth.authStateReady(), new Promise((resolve) => setTimeout(resolve, 4000))]).then(decide, decide);
             }}
