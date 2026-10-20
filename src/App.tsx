@@ -150,6 +150,7 @@ import {
   reportClientError,
   saveBrandingImage,
   setCategoryImage,
+  moveCategoryAds,
   addCategory,
   removeCategory,
   deleteListing as deleteRemoteListing,
@@ -3004,7 +3005,36 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     }
   };
 
+  // Moving all ads from one category to another
+  const [moveAds, setMoveAds] = useState<{ from: string; to: string } | null>(null);
+  const adsInCategory = (slug: string) => listings.filter((l) => l.category === slug).length;
+
+  const runMoveAds = async () => {
+    if (!moveAds || savingCategory) return;
+    const target = CATEGORIES.find((c) => c.slug === moveAds.to);
+    if (!target) {
+      showToast('⚠️ Choose where to move the ads.');
+      return;
+    }
+    setSavingCategory(moveAds.from);
+    try {
+      const moved = await moveCategoryAds(moveAds.from, { slug: target.slug, name: target.name, subcategories: target.subcategories });
+      setMoveAds(null);
+      showToast(`Moved ${moved} ad${moved === 1 ? '' : 's'} to ${CATEGORY_SHORT_NAMES[target.slug] || target.name}`);
+    } catch (err) {
+      console.warn('Could not move ads', err);
+      showToast('⚠️ Could not move the ads. Try again.');
+    } finally {
+      setSavingCategory('');
+    }
+  };
+
   const deleteCustomCategory = async (slug: string) => {
+    if (adsInCategory(slug) > 0) {
+      showToast('⚠️ This category still has ads. Move them to another category first.');
+      setMoveAds({ from: slug, to: '' });
+      return;
+    }
     // Tap twice to remove, so a category is never removed by accident
     if (confirmRemoveCategory !== slug) {
       setConfirmRemoveCategory(slug);
@@ -3097,13 +3127,26 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
 
         <div className="divide-y divide-slate-100">
           {CATEGORIES.map((cat) => (
-            <div key={cat.slug} className="flex items-center gap-3 py-2">
+            <div key={cat.slug} className="py-2 space-y-2">
+            <div className="flex items-center gap-3">
               <div className="w-11 h-11 rounded-[8px] overflow-hidden bg-[#E8EDF2] flex items-center justify-center shrink-0">
                 {categoryImage(cat) ? <img src={categoryImage(cat)} alt="" className="w-full h-full object-cover" /> : getCategoryIcon(cat.slug)}
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-xs font-bold text-slate-900 truncate">{CATEGORY_SHORT_NAMES[cat.slug] || cat.name}</p>
-                <p className="text-[10.5px] text-slate-500">{cat.custom ? 'Added by you' : replaced.has(cat.slug) ? 'Your photo' : 'Original photo'}</p>
+                <p className="text-[10.5px] text-slate-500">
+                  {cat.custom ? 'Added by you' : replaced.has(cat.slug) ? 'Your photo' : 'Original photo'} • {adsInCategory(cat.slug)} ads
+                </p>
+                {adsInCategory(cat.slug) > 0 && moveAds?.from !== cat.slug && (
+                  <button
+                    type="button"
+                    disabled={Boolean(savingCategory)}
+                    onClick={() => setMoveAds({ from: cat.slug, to: '' })}
+                    className="text-[10.5px] font-bold text-[#1FA971] cursor-pointer disabled:opacity-50"
+                  >
+                    Move ads to another category
+                  </button>
+                )}
               </div>
               <div className="flex gap-1.5 shrink-0">
                 <button
@@ -3135,6 +3178,44 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
                   </button>
                 )}
               </div>
+            </div>
+            {moveAds?.from === cat.slug && (
+              <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-2.5 space-y-2">
+                <label htmlFor={`move-ads-${cat.slug}`} className="text-[11px] font-bold text-slate-700 block">
+                  Move all {adsInCategory(cat.slug)} ads to:
+                </label>
+                <select
+                  id={`move-ads-${cat.slug}`}
+                  value={moveAds.to}
+                  onChange={(e) => setMoveAds({ from: cat.slug, to: e.target.value })}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-900 outline-none focus:border-[#1FA971]"
+                >
+                  <option value="">Choose a category…</option>
+                  {CATEGORIES.filter((c) => c.slug !== cat.slug).map((c) => (
+                    <option key={c.slug} value={c.slug}>
+                      {CATEGORY_SHORT_NAMES[c.slug] || c.name}
+                    </option>
+                  ))}
+                </select>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setMoveAds(null)}
+                    className="flex-1 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-600 text-xs font-bold cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={runMoveAds}
+                    disabled={!moveAds.to || savingCategory === cat.slug}
+                    className="flex-1 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-bold cursor-pointer disabled:opacity-50"
+                  >
+                    {savingCategory === cat.slug ? 'Moving…' : 'Move Ads'}
+                  </button>
+                </div>
+              </div>
+            )}
             </div>
           ))}
         </div>
@@ -5994,17 +6075,20 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     electronics: 'Electronics',
     furniture: 'Furniture',
     fashion: 'Fashion',
-    beauty: 'Health & Beauty',
-    leisure: 'Sports & Leisure',
+    appliances: 'Home Appliances',
+    leisure: 'Sports',
+    books: 'Books',
+    tools: 'Tools',
     kids: 'Baby & Kids',
-    agriculture: 'Food & Farming',
-    pets: 'Pets',
+    beauty: 'Health & Beauty',
+    agriculture: 'Groceries',
     commercial: 'Business',
+    pets: 'Pets',
   };
 
   /** A category as a photo tile with its name underneath (Home row and the Categories page) */
   /** The category's photo: the admin's one, else the built-in one */
-  const categoryImage = (cat: AppCategory) => (cat.image ? thumbnailUrl(cat.image, 240) : CATEGORY_IMAGES[cat.slug]) || '';
+  const categoryImage = (cat: AppCategory) => (cat.image ? thumbnailUrl(cat.image, 160) : CATEGORY_IMAGES[cat.slug]) || '';
 
   const renderCategoryTile = (cat: AppCategory, sizeClass: string) => (
     <button
@@ -6020,7 +6104,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
           getCategoryIcon(cat.slug)
         )}
       </div>
-      <span className="text-[11px] font-semibold text-slate-800 text-center leading-tight line-clamp-2 w-full">
+      <span className="text-[10.5px] font-semibold text-slate-800 text-center leading-tight line-clamp-2 w-full">
         {CATEGORY_SHORT_NAMES[cat.slug] || cat.name}
       </span>
     </button>
@@ -10265,12 +10349,12 @@ export default function RootLayout() {
 
                   {/* One row of category photos; swipe sideways for the rest */}
                   <div
-                    className="flex gap-2.5 px-4 overflow-x-auto no-scrollbar pb-1"
+                    className="flex gap-2 px-4 overflow-x-auto no-scrollbar pb-1"
                     style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
                   >
                     {CATEGORIES.map((cat) => (
-                      <div key={cat.id} className="w-[72px] shrink-0">
-                        {renderCategoryTile(cat, 'w-[72px] h-[64px]')}
+                      <div key={cat.id} className="w-[62px] shrink-0">
+                        {renderCategoryTile(cat, 'w-[62px] h-[52px]')}
                       </div>
                     ))}
                   </div>
@@ -10692,7 +10776,7 @@ export default function RootLayout() {
               {/* All categories as photo tiles (same style as the row on Home) */}
               <div className="bg-white p-3.5 rounded-3xl border border-slate-100 shadow-2xs">
                 <div className="grid grid-cols-4 gap-x-2.5 gap-y-3.5">
-                  {CATEGORIES.map((cat) => renderCategoryTile(cat, 'w-full h-[68px]'))}
+                  {CATEGORIES.map((cat) => renderCategoryTile(cat, 'w-full h-[56px]'))}
                 </div>
               </div>
 
@@ -14713,7 +14797,7 @@ export default function RootLayout() {
                           </div>
                           <div className="min-w-0">
                             <h4 className="text-xs font-bold text-slate-900 truncate">{c.name}</h4>
-                            <p className="text-[11px] text-slate-400">{listings.filter((l) => l.category === c.id).length} items</p>
+                            <p className="text-[11px] text-slate-400">{listings.filter((l) => l.category === c.slug).length} items</p>
                           </div>
                         </div>
                       ))}

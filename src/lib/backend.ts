@@ -876,7 +876,7 @@ function requireSystemAdmin(): string {
 /** System admin: new photo for a category (pass '' to go back to the original photo). */
 export async function setCategoryImage(slug: string, image: string): Promise<void> {
   requireSystemAdmin();
-  const url = image ? (await storeMedia(image, 'categories', 60_000)) || '' : '';
+  const url = image ? (await storeMedia(image, 'categories', 30_000)) || '' : '';
   await setDoc(doc(db, 'categories', slug), { slug, image: url, updatedAtISO: new Date().toISOString() }, { merge: true });
 }
 
@@ -888,7 +888,7 @@ export async function addCategory(name: string, subcategories: string[], image: 
   const base = clean.toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'category';
   let slug = base;
   for (let n = 2; takenSlugs.includes(slug); n++) slug = `${base}-${n}`;
-  const url = image ? (await storeMedia(image, 'categories', 60_000)) || '' : '';
+  const url = image ? (await storeMedia(image, 'categories', 30_000)) || '' : '';
   await setDoc(doc(db, 'categories', slug), {
     slug,
     name: clean,
@@ -899,6 +899,21 @@ export async function addCategory(name: string, subcategories: string[], image: 
     updatedAtISO: new Date().toISOString(),
   });
   return slug;
+}
+
+/** System admin: moves every ad in one category to another. Returns how many ads were moved. */
+export async function moveCategoryAds(fromSlug: string, to: { slug: string; name: string; subcategories: string[] }): Promise<number> {
+  requireSystemAdmin();
+  if (fromSlug === to.slug) return 0;
+  const ads = await getDocs(query(collection(db, 'listings'), where('category', '==', fromSlug)));
+  for (let i = 0; i < ads.docs.length; i += 400) {
+    const batch = writeBatch(db);
+    for (const ad of ads.docs.slice(i, i + 400)) {
+      batch.update(ad.ref, { category: to.slug, categoryName: to.name, subcategory: to.subcategories[0] || 'General' });
+    }
+    await batch.commit();
+  }
+  return ads.size;
 }
 
 /** System admin: removes a category they added (built-in categories can't be removed). */

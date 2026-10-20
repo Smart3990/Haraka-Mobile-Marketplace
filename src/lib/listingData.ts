@@ -104,7 +104,7 @@ export interface NotificationItem {
   target?: 'application' | 'dashboard';
 }
 
-// Categories covering all items from user's images
+// Categories, in the order shown on Home and the Categories page
 export const CATEGORIES: Category[] = [
   {
     id: 'cat-vehicles',
@@ -148,13 +148,13 @@ export const CATEGORIES: Category[] = [
   },
   {
     id: 'cat-furniture',
-    name: 'Home, Furniture & Appliances',
+    name: 'Home & Furniture',
     slug: 'furniture',
     icon: 'Sofa',
     count: 5,
     color: '#0F172A',
     bgLight: '#E8EDF2',
-    subcategories: ['Living Room Sets', 'Kitchen & Dining', 'Beds & Mattresses', 'Home Decor', 'Home Appliances'],
+    subcategories: ['Living Room Sets', 'Kitchen & Dining', 'Beds & Mattresses', 'Home Decor'],
   },
   {
     id: 'cat-fashion',
@@ -167,14 +167,14 @@ export const CATEGORIES: Category[] = [
     subcategories: ["Men's Wear", "Women's Clothing", 'Shoes & Sneakers', 'Watches & Jewelry', 'Bags & Accessories'],
   },
   {
-    id: 'cat-beauty',
-    name: 'Beauty & Personal Care',
-    slug: 'beauty',
-    icon: 'HeartPulse',
-    count: 4,
+    id: 'cat-appliances',
+    name: 'Home Appliances',
+    slug: 'appliances',
+    icon: 'Refrigerator',
+    count: 0,
     color: '#0F172A',
     bgLight: '#E8EDF2',
-    subcategories: ['Skincare & Treatments', 'Hair & Wigs', 'Fragrances & Perfumes', 'Makeup', 'Personal Grooming'],
+    subcategories: ['Fridges & Freezers', 'Washing Machines', 'Cookers & Microwaves', 'Air Conditioners & Fans', 'Kitchen Appliances'],
   },
   {
     id: 'cat-leisure',
@@ -187,6 +187,26 @@ export const CATEGORIES: Category[] = [
     subcategories: ['Sports & Fitness Equipment', 'Musical Instruments', 'Books & Stationery', 'Camping & Outdoors'],
   },
   {
+    id: 'cat-books',
+    name: 'Books & Stationery',
+    slug: 'books',
+    icon: 'BookOpen',
+    count: 0,
+    color: '#0F172A',
+    bgLight: '#E8EDF2',
+    subcategories: ['Textbooks', 'Novels', "Children's Books", 'Religious Books', 'Stationery'],
+  },
+  {
+    id: 'cat-tools',
+    name: 'Tools & Building',
+    slug: 'tools',
+    icon: 'Wrench',
+    count: 0,
+    color: '#0F172A',
+    bgLight: '#E8EDF2',
+    subcategories: ['Power Tools', 'Hand Tools', 'Building Materials', 'Generators', 'Plumbing & Electrical'],
+  },
+  {
     id: 'cat-kids',
     name: 'Babies & Kids',
     slug: 'kids',
@@ -195,6 +215,16 @@ export const CATEGORIES: Category[] = [
     color: '#0F172A',
     bgLight: '#E8EDF2',
     subcategories: ['Baby Clothing', 'Strollers & Car Seats', 'Toys & Board Games', 'Baby Nursery & Cots'],
+  },
+  {
+    id: 'cat-beauty',
+    name: 'Beauty & Personal Care',
+    slug: 'beauty',
+    icon: 'HeartPulse',
+    count: 4,
+    color: '#0F172A',
+    bgLight: '#E8EDF2',
+    subcategories: ['Skincare & Treatments', 'Hair & Wigs', 'Fragrances & Perfumes', 'Makeup', 'Personal Grooming'],
   },
   {
     id: 'cat-agriculture',
@@ -207,16 +237,6 @@ export const CATEGORIES: Category[] = [
     subcategories: ['Fresh Farm Produce', 'Grains & Rice Bags', 'Farm Machinery & Irrigation', 'Poultry & Livestock'],
   },
   {
-    id: 'cat-pets',
-    name: 'Animals & Pets',
-    slug: 'pets',
-    icon: 'PawPrint',
-    count: 4,
-    color: '#0F172A',
-    bgLight: '#E8EDF2',
-    subcategories: ['Dogs & Puppies', 'Pet Food & Feeding Bowls', 'Birds & Parrots', 'Aquariums & Fish'],
-  },
-  {
     id: 'cat-commercial',
     name: 'Business & Industry',
     slug: 'commercial',
@@ -225,6 +245,16 @@ export const CATEGORIES: Category[] = [
     color: '#0F172A',
     bgLight: '#E8EDF2',
     subcategories: ['Office Stationery & Printers', 'Industrial Machinery', 'Restaurant Equipment', 'Safety & Security Gear'],
+  },
+  {
+    id: 'cat-pets',
+    name: 'Animals & Pets',
+    slug: 'pets',
+    icon: 'PawPrint',
+    count: 4,
+    color: '#0F172A',
+    bgLight: '#E8EDF2',
+    subcategories: ['Dogs & Puppies', 'Pet Food & Feeding Bowls', 'Birds & Parrots', 'Aquariums & Fish'],
   },
 ];
 
