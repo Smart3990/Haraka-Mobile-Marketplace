@@ -916,6 +916,25 @@ export async function moveCategoryAds(fromSlug: string, to: { slug: string; name
   return ads.size;
 }
 
+/**
+ * System admin: deletes a category. A category the admin added is deleted for good; a built-in
+ * one is hidden for everyone and can be restored later.
+ */
+export async function deleteCategory(slug: string, isCustom: boolean): Promise<void> {
+  requireSystemAdmin();
+  if (isCustom) {
+    await deleteDoc(doc(db, 'categories', slug));
+    return;
+  }
+  await setDoc(doc(db, 'categories', slug), { slug, hidden: true, updatedAtISO: new Date().toISOString() }, { merge: true });
+}
+
+/** System admin: brings back a built-in category that was deleted. */
+export async function restoreCategory(slug: string): Promise<void> {
+  requireSystemAdmin();
+  await setDoc(doc(db, 'categories', slug), { slug, hidden: false, updatedAtISO: new Date().toISOString() }, { merge: true });
+}
+
 /** System admin: removes a category they added (built-in categories can't be removed). */
 export async function removeCategory(slug: string): Promise<void> {
   requireSystemAdmin();

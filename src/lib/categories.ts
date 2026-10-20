@@ -16,6 +16,8 @@ export interface CategoryDoc {
   subcategories?: string[];
   custom?: boolean;
   order?: number;
+  /** A built-in category the system admin deleted (kept so it can be restored) */
+  hidden?: boolean;
 }
 
 /** A category as the app shows it; `image` is the admin's photo when one was set. */
@@ -25,7 +27,7 @@ const CACHE_KEY = 'haraka.categories';
 
 function merge(docs: CategoryDoc[]): AppCategory[] {
   const bySlug = new Map(docs.map((d) => [d.slug, d]));
-  const builtIn: AppCategory[] = BUILT_IN.map((c) => {
+  const builtIn: AppCategory[] = BUILT_IN.filter((c) => !bySlug.get(c.slug)?.hidden).map((c) => {
     const d = bySlug.get(c.slug);
     return d ? { ...c, image: d.image || undefined } : c;
   });
@@ -89,6 +91,11 @@ function subscribe(notify: () => void) {
 /** All categories (built-in first, then the ones the admin added); updates live. */
 export function useCategories(): AppCategory[] {
   return useSyncExternalStore(subscribe, () => current, () => current);
+}
+
+/** Built-in categories the system admin deleted (they can be restored). */
+export function hiddenBuiltInCategories(): Category[] {
+  return BUILT_IN.filter((c) => docs.some((d) => d.slug === c.slug && d.hidden));
 }
 
 /** The admin's saved category records (to know which built-in photos were replaced). */

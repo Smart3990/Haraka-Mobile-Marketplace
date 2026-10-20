@@ -105,7 +105,8 @@ service cloud.firestore {
       allow get, list: if true;
       allow create, update: if isSystemAdmin() && isValidId(slug)
         && request.resource.data.slug == slug
-        && request.resource.data.keys().hasOnly(['slug', 'name', 'image', 'subcategories', 'custom', 'order', 'updatedAtISO'])
+        && request.resource.data.keys().hasOnly(['slug', 'name', 'image', 'subcategories', 'custom', 'order', 'hidden', 'updatedAtISO'])
+        && request.resource.data.get('hidden', false) is bool
         && request.resource.data.get('image', '') is string && request.resource.data.get('image', '').size() < 200000
         && request.resource.data.get('name', 'x') is string && request.resource.data.get('name', 'x').size() <= 40
         && request.resource.data.get('subcategories', []) is list && request.resource.data.get('subcategories', []).size() <= 20;

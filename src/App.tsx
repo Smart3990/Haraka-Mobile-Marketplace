@@ -152,7 +152,8 @@ import {
   setCategoryImage,
   moveCategoryAds,
   addCategory,
-  removeCategory,
+  deleteCategory,
+  restoreCategory,
   deleteListing as deleteRemoteListing,
   fileToPhotoDataUrl,
   getPlatformStats,
@@ -211,7 +212,7 @@ import { HarakaLogo } from './components/HarakaLogo';
 import { HARAKA_LOGO, HARAKA_MARK, WELCOME_HERO, WELCOME_HERO_TRANS } from './lib/images';
 import { useBranding } from './lib/branding';
 import { CATEGORY_IMAGES } from './lib/categoryImages';
-import { categoryDocs, useCategories, type AppCategory } from './lib/categories';
+import { categoryDocs, hiddenBuiltInCategories, useCategories, type AppCategory } from './lib/categories';
 import SplashScreen from './components/SplashScreen';
 import WelcomeScreen from './components/WelcomeScreen';
 import OnboardingScreen from './components/OnboardingScreen';
@@ -244,6 +245,7 @@ type ScreenRoute =
   | { type: 'splash' }
   | { type: 'onboarding' }
   | { type: 'welcome' }
+  | { type: 'admin-settings' }
   | { type: 'sign-up' }
   | { type: 'login' }
   | { type: 'demo-accounts' }
@@ -2938,7 +2940,6 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     subs: '',
     image: '',
   });
-  const [confirmRemoveCategory, setConfirmRemoveCategory] = useState('');
 
   const pickCategoryImage = (target: string) => {
     categoryPickRef.current = target;
@@ -3029,27 +3030,109 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     }
   };
 
-  const deleteCustomCategory = async (slug: string) => {
-    if (adsInCategory(slug) > 0) {
-      showToast('⚠️ This category still has ads. Move them to another category first.');
-      setMoveAds({ from: slug, to: '' });
+  // ---- Deleting a category (system admin: press and hold a category) ----
+  const [deleteCategoryTarget, setDeleteCategoryTarget] = useState<{ slug: string; name: string; custom: boolean; moveTo: string } | null>(null);
+
+  const askDeleteCategory = (cat: AppCategory) => {
+    if (!adminAccess.isSystemAdmin) return;
+    setDeleteCategoryTarget({ slug: cat.slug, name: CATEGORY_SHORT_NAMES[cat.slug] || cat.name, custom: Boolean(cat.custom), moveTo: '' });
+  };
+
+  const confirmDeleteCategory = async () => {
+    const target = deleteCategoryTarget;
+    if (!target || savingCategory) return;
+    const adCount = adsInCategory(target.slug);
+    const destination = CATEGORIES.find((c) => c.slug === target.moveTo);
+    if (adCount > 0 && !destination) {
+      showToast('⚠️ Choose where to move its ads first.');
       return;
     }
-    // Tap twice to remove, so a category is never removed by accident
-    if (confirmRemoveCategory !== slug) {
-      setConfirmRemoveCategory(slug);
-      return;
-    }
-    setConfirmRemoveCategory('');
-    setSavingCategory(slug);
+    setSavingCategory(target.slug);
     try {
-      await removeCategory(slug);
-      showToast('Category removed');
-    } catch {
-      showToast('⚠️ Could not remove the category. Try again.');
+      // Its ads go to the chosen category first, so no ad is left without a category
+      if (adCount > 0 && destination) {
+        await moveCategoryAds(target.slug, { slug: destination.slug, name: destination.name, subcategories: destination.subcategories });
+      }
+      await deleteCategory(target.slug, target.custom);
+      setDeleteCategoryTarget(null);
+      showToast(`${target.name} deleted`);
+    } catch (err) {
+      console.warn('Could not delete category', err);
+      showToast('⚠️ Could not delete the category. Try again.');
     } finally {
       setSavingCategory('');
     }
+  };
+
+  const restoreDeletedCategory = async (slug: string) => {
+    setSavingCategory(slug);
+    try {
+      await restoreCategory(slug);
+      showToast('Category restored');
+    } catch {
+      showToast('⚠️ Could not restore the category. Try again.');
+    } finally {
+      setSavingCategory('');
+    }
+  };
+
+  const renderDeleteCategorySheet = () => {
+    const target = deleteCategoryTarget;
+    if (!target || !adminAccess.isSystemAdmin) return null;
+    const adCount = adsInCategory(target.slug);
+    const busy = savingCategory === target.slug;
+    const close = () => !busy && setDeleteCategoryTarget(null);
+    return (
+      <div className="fixed inset-0 z-[86] bg-slate-900/40 flex items-end justify-center" onClick={close}>
+        <div
+          className="w-full max-w-md bg-white rounded-t-3xl px-4 pt-3 pb-[calc(env(safe-area-inset-bottom,0px)+16px)] space-y-3 shadow-2xl"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="w-10 h-1.5 rounded-full bg-slate-200 mx-auto" />
+          <div>
+            <p className="text-base font-black text-slate-900">Delete "{target.name}"?</p>
+            <p className="text-xs text-slate-500 leading-relaxed">
+              {target.custom
+                ? 'It disappears for everyone.'
+                : 'It disappears for everyone. You can restore it later from Platform Settings.'}
+            </p>
+          </div>
+          {adCount > 0 && (
+            <div className="space-y-1.5">
+              <label htmlFor="delete-category-move" className="text-xs font-bold text-slate-800 block">
+                It has {adCount} ad{adCount === 1 ? '' : 's'}. Move {adCount === 1 ? 'it' : 'them'} to:
+              </label>
+              <select
+                id="delete-category-move"
+                value={target.moveTo}
+                onChange={(e) => setDeleteCategoryTarget({ ...target, moveTo: e.target.value })}
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none focus:border-[#1FA971]"
+              >
+                <option value="">Choose a category…</option>
+                {CATEGORIES.filter((c) => c.slug !== target.slug).map((c) => (
+                  <option key={c.slug} value={c.slug}>
+                    {CATEGORY_SHORT_NAMES[c.slug] || c.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          <div className="flex gap-2 pt-1">
+            <button type="button" onClick={close} className="flex-1 py-3 rounded-2xl border border-slate-200 text-slate-600 text-sm font-bold cursor-pointer">
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={confirmDeleteCategory}
+              disabled={busy || (adCount > 0 && !target.moveTo)}
+              className="flex-[1.4] py-3 rounded-2xl bg-red-600 text-white text-sm font-bold cursor-pointer disabled:opacity-50"
+            >
+              {busy ? 'Deleting…' : adCount > 0 ? 'Move Ads & Delete' : 'Delete Category'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   const renderCategoryManagerCard = () => {
@@ -3061,7 +3144,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
         <div className="flex items-start justify-between gap-2">
           <div>
             <span className="text-xs font-black text-slate-900 block">Categories</span>
-            <span className="text-[11px] text-slate-500">System admin only. Change photos or add categories for everyone.</span>
+            <span className="text-[11px] text-slate-500">Change photos or add categories for everyone. Press and hold a category to delete it.</span>
           </div>
           {!newCategory.open && (
             <button
@@ -3128,7 +3211,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
         <div className="divide-y divide-slate-100">
           {CATEGORIES.map((cat) => (
             <div key={cat.slug} className="py-2 space-y-2">
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 select-none" {...longPress(() => askDeleteCategory(cat))}>
               <div className="w-11 h-11 rounded-[8px] overflow-hidden bg-[#E8EDF2] flex items-center justify-center shrink-0">
                 {categoryImage(cat) ? <img src={categoryImage(cat)} alt="" className="w-full h-full object-cover" /> : getCategoryIcon(cat.slug)}
               </div>
@@ -3165,16 +3248,6 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
                     className={`${smallButton} border border-slate-200 text-slate-600`}
                   >
                     Original
-                  </button>
-                )}
-                {cat.custom && (
-                  <button
-                    type="button"
-                    disabled={Boolean(savingCategory)}
-                    onClick={() => deleteCustomCategory(cat.slug)}
-                    className={`${smallButton} border ${confirmRemoveCategory === cat.slug ? 'border-red-500 bg-red-50 text-red-600' : 'border-slate-200 text-slate-600'}`}
-                  >
-                    {confirmRemoveCategory === cat.slug ? 'Tap again' : 'Remove'}
                   </button>
                 )}
               </div>
@@ -3219,6 +3292,25 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
             </div>
           ))}
         </div>
+
+        {hiddenBuiltInCategories().length > 0 && (
+          <div className="pt-1 space-y-1.5">
+            <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">Deleted categories</p>
+            {hiddenBuiltInCategories().map((cat) => (
+              <div key={cat.slug} className="flex items-center justify-between gap-2 py-1">
+                <span className="text-xs font-semibold text-slate-500 truncate">{CATEGORY_SHORT_NAMES[cat.slug] || cat.name}</span>
+                <button
+                  type="button"
+                  disabled={Boolean(savingCategory)}
+                  onClick={() => restoreDeletedCategory(cat.slug)}
+                  className={`${smallButton} border border-slate-200 text-slate-700`}
+                >
+                  {savingCategory === cat.slug ? '…' : 'Restore'}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     );
   };
@@ -6091,8 +6183,12 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     <button
       key={cat.id}
       type="button"
-      onClick={() => navigateTo({ type: 'category', slug: cat.slug })}
-      className="flex flex-col items-center gap-1.5 min-w-0 active:scale-95 transition-transform cursor-pointer"
+      onClick={() => {
+        if (justLongPressed()) return;
+        navigateTo({ type: 'category', slug: cat.slug });
+      }}
+      {...(adminAccess.isSystemAdmin ? longPress(() => askDeleteCategory(cat)) : {})}
+      className="flex flex-col items-center gap-1.5 min-w-0 active:scale-95 transition-transform cursor-pointer select-none"
     >
       <div className={`${sizeClass} rounded-[8px] overflow-hidden bg-[#E8EDF2] flex items-center justify-center shadow-2xs`}>
         {categoryImage(cat) ? (
@@ -9286,6 +9382,17 @@ export default function RootLayout() {
             >
               <Bell size={16} />
             </button>
+            {currentUserRole === 'admin' && adminAccess.isSystemAdmin && (
+              <button
+                type="button"
+                onClick={() => navigateTo({ type: 'admin-settings' })}
+                className="w-8 h-8 rounded-xl border border-slate-200 bg-white flex items-center justify-center text-slate-700 hover:text-slate-900 shadow-2xs active:scale-95 transition-all cursor-pointer"
+                title="Platform Settings"
+                aria-label="Platform Settings"
+              >
+                <Settings size={16} />
+              </button>
+            )}
           </div>
         </div>
         {renderAddAdminModal()}
@@ -9714,9 +9821,6 @@ export default function RootLayout() {
                   </div>
                 </div>
 
-                {renderBrandingCard()}
-                {renderCategoryManagerCard()}
-
                 {/* Applications Section - Stacked Header & Below Statuses Bar */}
                 <div className="space-y-2.5">
                   <div className="px-1">
@@ -10136,6 +10240,38 @@ export default function RootLayout() {
             autoDismissMs={3000}
             showDismissButton={false}
           />
+        );
+      }
+
+      case 'admin-settings': {
+        // System admin's platform settings: branding, categories (and future platform features)
+        if (!adminAccess.isSystemAdmin) {
+          return renderUnavailable('Not available', 'Only the system admin can open Platform Settings.');
+        }
+        return (
+          <div className="flex-1 flex flex-col pb-10 bg-dashboard-dots overflow-y-auto no-scrollbar">
+            <div className="bg-white px-4 pt-3.5 pb-3 border-b border-slate-200/80 sticky top-0 z-20 flex items-center gap-3">
+              <button
+                type="button"
+                onClick={goBack}
+                aria-label="Back"
+                className="w-9 h-9 rounded-xl border border-slate-200 bg-white flex items-center justify-center text-slate-700 shadow-2xs active:scale-95 cursor-pointer shrink-0"
+              >
+                <ArrowLeft size={17} />
+              </button>
+              <div className="min-w-0">
+                <h1 className="text-base font-black text-slate-900 flex items-center gap-1.5">
+                  <Settings size={17} className="text-[#FF6A00]" />
+                  <span>Platform Settings</span>
+                </h1>
+                <p className="text-[11px] text-slate-500 font-medium">System admin only • changes apply to everyone</p>
+              </div>
+            </div>
+            <div className="p-3.5 space-y-3">
+              {renderBrandingCard()}
+              {renderCategoryManagerCard()}
+            </div>
+          </div>
         );
       }
 
@@ -24374,6 +24510,7 @@ export default function RootLayout() {
                 {renderChatActionSheet()}
                 {renderReportPersonModal()}
                 {renderGetVerifiedSheet()}
+                {renderDeleteCategorySheet()}
                 {renderAdminEditAdSheet()}
                 {renderPolicyViewer()}
               </div>
@@ -24537,6 +24674,7 @@ export default function RootLayout() {
                 {renderChatActionSheet()}
                 {renderReportPersonModal()}
                 {renderGetVerifiedSheet()}
+                {renderDeleteCategorySheet()}
                 {renderAdminEditAdSheet()}
                 </div>
 
