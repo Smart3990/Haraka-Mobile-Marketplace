@@ -649,6 +649,19 @@ export async function decideApplication(app: StoredApplication, decision: Applic
     else batch.delete(profileRef);
   }
   await batch.commit();
+  // The Verified tag travels with each ad, so update the ads they already posted too
+  await syncSellerAdsVerified(app.uid, decision === 'verify').catch((error) => reportClientError('verify-ads', error));
+}
+
+/** Admins: sets (or clears) the Verified tag on every ad a seller has posted. */
+async function syncSellerAdsVerified(sellerId: string, verified: boolean): Promise<void> {
+  const ads = await getDocs(query(collection(db, 'listings'), where('sellerId', '==', sellerId)));
+  const stale = ads.docs.filter((ad) => Boolean(ad.data().isVerifiedDeal) !== verified || Boolean(ad.data().seller?.isVerified) !== verified);
+  for (let i = 0; i < stale.length; i += 400) {
+    const batch = writeBatch(db);
+    for (const ad of stale.slice(i, i + 400)) batch.update(ad.ref, { isVerifiedDeal: verified, 'seller.isVerified': verified });
+    await batch.commit();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1511,6 +1524,25 @@ export async function clearPushToken(): Promise<void> {
   const uid = auth.currentUser?.uid;
   if (!uid) return;
   await deleteDoc(doc(db, 'pushTokens', uid));
+}
+
+/**
+ * Admins' accounts that receive "new application / verification request" notifications on their
+ * phones (/settings/adminPush). Admins add themselves when they sign in; anyone who is no longer
+ * an admin takes themselves off the list.
+ */
+export async function syncAdminPushList(uid: string, isAdmin: boolean): Promise<void> {
+  const ref = doc(db, 'settings', 'adminPush');
+  const snap = await getDoc(ref);
+  const listed = snap.exists() && ((snap.data().uids as string[]) || []).includes(uid);
+  if (isAdmin && !listed) await setDoc(ref, { uids: arrayUnion(uid) }, { merge: true });
+  if (!isAdmin && listed) await updateDoc(ref, { uids: arrayRemove(uid) });
+}
+
+/** Accounts of the admins to notify about new applications and verification requests. */
+export async function getAdminPushUids(): Promise<string[]> {
+  const snap = await getDoc(doc(db, 'settings', 'adminPush'));
+  return snap.exists() ? ((snap.data().uids as string[]) || []) : [];
 }
 
 export async function getPushToken(uid: string): Promise<string | null> {

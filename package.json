@@ -15,6 +15,7 @@
     "deploy:web": "vite build && npx firebase-tools deploy --only hosting,firestore:rules"
   },
   "dependencies": {
+    "@breezystack/lamejs": "^1.2.7",
     "@expo/metro-runtime": "~58.0.14",
     "@google/genai": "^2.4.0",
     "@tailwindcss/vite": "^4.3.3",

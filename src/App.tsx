@@ -196,6 +196,8 @@ import {
   resendEmailVerification,
   deleteMyAccount,
   removeAdmin,
+  syncAdminPushList,
+  getAdminPushUids,
   resolveReport,
   watchAdmins,
   watchReports,
@@ -240,6 +242,8 @@ import {
   VOICE_BITS_PER_SECOND,
   openVoiceMic,
   playVoice,
+  createVoiceAudio,
+  voiceBlobToDataUrl,
   startVoiceRecording,
   voiceMimeType,
   type VoiceRecording,
@@ -1235,6 +1239,24 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
   };
 
   const [activeListingPhotoIndex, setActiveListingPhotoIndex] = useState(0);
+  // Ad photos swipe sideways; the dots and thumbnails follow, and tapping them scrolls the photos
+  const listingPhotoStripRef = useRef<HTMLDivElement>(null);
+  const listingPhotoScrollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onListingPhotosScroll = () => {
+    if (listingPhotoScrollTimer.current) clearTimeout(listingPhotoScrollTimer.current);
+    listingPhotoScrollTimer.current = setTimeout(() => {
+      const strip = listingPhotoStripRef.current;
+      if (!strip || !strip.clientWidth) return;
+      setActiveListingPhotoIndex(Math.round(strip.scrollLeft / strip.clientWidth));
+    }, 90);
+  };
+  useEffect(() => {
+    const strip = listingPhotoStripRef.current;
+    if (!strip || !strip.clientWidth) return;
+    if (Math.round(strip.scrollLeft / strip.clientWidth) !== activeListingPhotoIndex) {
+      strip.scrollTo({ left: activeListingPhotoIndex * strip.clientWidth, behavior: 'smooth' });
+    }
+  }, [activeListingPhotoIndex]);
   const [homeBannerIndex, setHomeBannerIndex] = useState(0);
 
   // Auto-scroll home carousel banners every 5 seconds
@@ -4269,6 +4291,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
       });
       setShowGetVerifiedSheet(false);
       showToast('Documents sent. An admin will review them shortly.');
+      notifyAdmins('New verification request', 'A partner sent their Ghana Card to get verified. Open the Admin Control Dashboard to review it.');
     } catch (err) {
       console.warn('Could not send verification documents', err);
       const message = err instanceof Error && !/firebase|firestore|internal|permission/i.test(err.message) ? err.message : '';
@@ -4505,6 +4528,19 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
       .then((to) => (to ? nativeBridge.sendPush!([{ to, title, body: body.slice(0, 180), data }]) : undefined))
       .catch((err) => console.warn('Could not send notification', err));
   };
+
+  /** Tells the admins' phones about something waiting for them (no names, in case an admin was removed). */
+  const notifyAdmins = (title: string, body: string) => {
+    getAdminPushUids()
+      .then((uids) => uids.forEach((uid) => notifyUser(uid, title, body, { type: 'dashboard', id: '' })))
+      .catch((err) => console.warn('Could not notify admins', err));
+  };
+
+  // Admins join the list of phones told about new applications; others make sure they are off it
+  useEffect(() => {
+    if (!firebaseUid || !emailConfirmed) return;
+    syncAdminPushList(firebaseUid, adminAccess.isAdmin).catch((err) => console.warn('Could not update admin notifications', err));
+  }, [firebaseUid, emailConfirmed, adminAccess.isAdmin]);
 
   // ---------- In-app voice calls ----------
   /** Updates the call screen as the call progresses; closes it shortly after the call ends. */
@@ -6075,11 +6111,20 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     if ((applicant as any).uid) {
       try {
         await decideApplication(applicant as unknown as StoredApplication, decision, reason);
+        const wasApproved = applicant.status === 'approved';
         notifyUser(
           (applicant as any).uid,
-          decision === 'reject' ? 'Application not approved' : 'Your application was approved 🎉',
+          decision === 'reject'
+            ? wasApproved
+              ? 'Your partner account was paused'
+              : 'Application not approved'
+            : decision === 'verify' && wasApproved
+            ? 'You are now verified ✓'
+            : 'Your application was approved 🎉',
           decision === 'reject'
             ? `Reason: ${reason || 'not given'}. You can update your details and reapply.`
+            : decision === 'verify' && wasApproved
+            ? 'The Verified badge now shows on your profile and on all your ads.'
             : decision === 'verify'
             ? 'Your account is approved and verified. You can start now.'
             : 'Your partner account is active. You can start now.',
@@ -6166,14 +6211,16 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
         title:
           myApplication.status === 'approved'
             ? myApplication.verifiedBadge
-              ? 'Application approved & verified ✓'
+              ? 'You are verified ✓'
               : 'Application approved'
             : myApplication.status === 'rejected'
             ? 'Application not approved'
             : 'Application received',
         body:
           myApplication.status === 'approved'
-            ? 'Your partner account is active. You can now post on Haraka.'
+            ? myApplication.verifiedBadge
+              ? 'Your partner account is active and the Verified badge shows on your profile and all your ads.'
+              : 'Your partner account is active. You can now post on Haraka.'
             : myApplication.status === 'rejected'
             ? `Reason: ${myApplication.rejectionReason || 'Not given'}. You can update your details and reapply.`
             : 'Our team is reviewing your documents. This usually takes 24 to 72 hours.',
@@ -6637,7 +6684,8 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
       const blob = new Blob(adAudioChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
       const duration = Math.max(1, Math.round((Date.now() - adRecordingStartedAtRef.current) / 1000));
       try {
-        const dataUrl = await blobToDataUrl(blob);
+        // Converted to MP3 when needed so the note plays on iPhones too
+        const dataUrl = await voiceBlobToDataUrl(blob);
         setAdDraft((prev) => ({
           ...prev,
           hasAudioDescription: true,
@@ -6663,7 +6711,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
       return;
     }
 
-    const audio = new Audio(adDraft.audioDescriptionUrl);
+    const audio = createVoiceAudio(adDraft.audioDescriptionUrl);
     adAudioElementRef.current = audio;
     const totalDuration = adDraft.audioDescriptionDuration || 1;
     audio.onended = stopAdAudioPlayback;
@@ -6748,7 +6796,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
       return;
     }
 
-    const audio = new Audio(audioUrl);
+    const audio = createVoiceAudio(audioUrl);
     listingAudioElementRef.current = audio;
     audio.playbackRate = listingAudioSpeed;
     audio.muted = isListingAudioMuted;
@@ -13936,14 +13984,27 @@ export default function RootLayout() {
                     )
                   }
                 >
-                  <img
-                    src={itemImages[activeListingPhotoIndex] || itemImages[0]}
-                    alt={item.title}
-                    className="w-full h-full object-cover group-hover:scale-[1.01] transition-transform duration-300"
-                    onError={(e) => {
-                      (e.target as HTMLImageElement).src = PLACEHOLDER_IMAGE;
-                    }}
-                  />
+                  {/* Swipe left/right through the photos (tap one to open it full screen) */}
+                  <div
+                    ref={listingPhotoStripRef}
+                    onScroll={onListingPhotosScroll}
+                    className="w-full h-full flex overflow-x-auto snap-x snap-mandatory no-scrollbar overscroll-x-contain"
+                    style={{ scrollbarWidth: 'none', WebkitOverflowScrolling: 'touch' }}
+                  >
+                    {(itemImages.length > 0 ? itemImages : [PLACEHOLDER_IMAGE]).map((imgUrl, i) => (
+                      <img
+                        key={i}
+                        src={imgUrl}
+                        alt={`${item.title} photo ${i + 1}`}
+                        loading={i === 0 ? 'eager' : 'lazy'}
+                        draggable={false}
+                        className="w-full h-full shrink-0 snap-center snap-always object-cover select-none"
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).src = PLACEHOLDER_IMAGE;
+                        }}
+                      />
+                    ))}
+                  </div>
 
                   {/* Sold Overlay on Main Image */}
                   {(item.isSold || item.status === 'Sold') && (
@@ -22964,6 +23025,7 @@ export default function RootLayout() {
                       const saved = await submitApplication(applicantRecord);
                       setAdminApplicants((prev) => [saved as unknown as AdminApplicant, ...prev.filter((a) => a.id !== saved.id)]);
                       setSubmittedSellerApplicantId(saved.id);
+                      notifyAdmins('New partner application', 'Someone applied to sell or offer services on Haraka. Open the Admin Control Dashboard to review it.');
                     } catch (err) {
                       console.warn('Could not submit application', err);
                       const message = err instanceof Error && !/firebase|firestore|internal/i.test(err.message) ? err.message : '';

@@ -112,6 +112,22 @@ service cloud.firestore {
         && request.resource.data.get('welcomeImageUrl', '') is string && request.resource.data.get('welcomeImageUrl', '').size() < 600000;
     }
 
+    // Admins whose phones are told about new applications and verification requests.
+    // Admins add themselves; anyone can take only themselves off; signed-in users read it to notify them.
+    match /settings/adminPush {
+      allow get: if isSignedIn();
+      allow create: if isAdmin() && request.resource.data.keys().hasOnly(['uids'])
+        && request.resource.data.uids == [request.auth.uid];
+      allow update: if isSignedIn() && request.resource.data.keys().hasOnly(['uids'])
+        && request.resource.data.uids is list && request.resource.data.uids.size() <= 50
+        && (
+          (isAdmin() && request.resource.data.uids.toSet().difference(resource.data.uids.toSet()).hasOnly([request.auth.uid])
+            && resource.data.uids.toSet().difference(request.resource.data.uids.toSet()).size() == 0)
+          || (request.resource.data.uids.toSet().difference(resource.data.uids.toSet()).size() == 0
+            && resource.data.uids.toSet().difference(request.resource.data.uids.toSet()).hasOnly([request.auth.uid]))
+        );
+    }
+
     // Marketplace categories changed or added by the system admin (or an admin given access); everyone reads them
     match /categories/{slug} {
       allow get, list: if true;
@@ -188,6 +204,10 @@ service cloud.firestore {
         || (hasPermission('editAds') && request.resource.data.sellerId == resource.data.sellerId)
         || (hasPermission('categories')
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['category', 'categoryName', 'subcategory']))
+        // An admin verifying (or un-verifying) a seller updates the Verified tag on their ads
+        || (isAdmin()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isVerifiedDeal', 'seller'])
+          && request.resource.data.seller.diff(resource.data.seller).affectedKeys().hasOnly(['isVerified']))
       );
       allow delete: if isSignedIn() && isValidId(listingId) && (
         resource.data.sellerId == request.auth.uid || isAdmin()
