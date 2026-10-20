@@ -43,6 +43,7 @@ import firebaseConfig from '../../firebase-applet-config.json';
 import { isCloudinaryConfigured, uploadMedia } from './cloudinary';
 import { auth, db } from './firebase';
 import type { Listing } from './listingData';
+import type { BannerDoc } from './banners';
 
 export type UserRole = 'buyer' | 'seller' | 'artisan' | 'admin';
 
@@ -77,31 +78,75 @@ export interface UserProfileDoc {
  */
 export const SYSTEM_ADMIN_EMAIL = 'blanc.69458@gmail.com';
 
+/**
+ * Platform features the system admin can hand to other admins (Platform Settings > Admin
+ * Permissions). Reviewing applications and reports stays open to every admin.
+ */
+export const ADMIN_PERMISSIONS = [
+  { key: 'banners', label: 'Home banners', note: 'Add, edit and hide the banners on Home' },
+  { key: 'categories', label: 'Categories', note: 'Photos, new categories, moving ads, deleting' },
+  { key: 'branding', label: 'App branding', note: 'App bar logo and Welcome picture' },
+  { key: 'editAds', label: 'Edit any ad', note: "Correct someone else's ad" },
+] as const;
+export type AdminPermission = (typeof ADMIN_PERMISSIONS)[number]['key'];
+const ALL_PERMISSIONS = ADMIN_PERMISSIONS.map((p) => p.key) as AdminPermission[];
+
 export interface AdminAccess {
   isAdmin: boolean;
   /** May open the "add admin" form */
   canAddAdmins: boolean;
   isSystemAdmin: boolean;
+  /** Platform features this admin was given (the system admin has them all) */
+  permissions: AdminPermission[];
 }
 
-const NO_ADMIN_ACCESS: AdminAccess = { isAdmin: false, canAddAdmins: false, isSystemAdmin: false };
+const NO_ADMIN_ACCESS: AdminAccess = { isAdmin: false, canAddAdmins: false, isSystemAdmin: false, permissions: [] };
+
+/** True when this admin may use that platform feature (always true for the system admin). */
+export function hasAdminPermission(access: AdminAccess, permission: AdminPermission): boolean {
+  return access.isSystemAdmin || (access.isAdmin && access.permissions.includes(permission));
+}
+
+// The signed-in person's admin access, so the functions below can refuse early with a clear message
+let currentAccess: AdminAccess = NO_ADMIN_ACCESS;
+
+function requirePermission(permission: AdminPermission, message: string): string {
+  const email = auth.currentUser?.email?.toLowerCase();
+  if (!email || !hasAdminPermission(email === SYSTEM_ADMIN_EMAIL ? { ...currentAccess, isSystemAdmin: true } : currentAccess, permission)) {
+    throw new Error(message);
+  }
+  return email;
+}
 
 /** Watches whether the signed-in user is an admin (system admin, or listed in /admins/{email}). */
-export function watchAdminAccess(user: User | null, callback: (access: AdminAccess) => void): () => void {
+export function watchAdminAccess(user: User | null, onAccess: (access: AdminAccess) => void): () => void {
+  const callback = (access: AdminAccess) => {
+    currentAccess = access;
+    onAccess(access);
+  };
   const email = user?.email?.toLowerCase();
   if (!email) {
     callback(NO_ADMIN_ACCESS);
     return () => {};
   }
   if (email === SYSTEM_ADMIN_EMAIL) {
-    callback({ isAdmin: true, canAddAdmins: true, isSystemAdmin: true });
+    callback({ isAdmin: true, canAddAdmins: true, isSystemAdmin: true, permissions: ALL_PERMISSIONS });
     return () => {};
   }
   return onSnapshot(
     doc(db, 'admins', email),
     (snap) =>
       callback(
-        snap.exists() ? { isAdmin: true, canAddAdmins: Boolean(snap.data().canAddAdmins), isSystemAdmin: false } : NO_ADMIN_ACCESS
+        snap.exists()
+          ? {
+              isAdmin: true,
+              canAddAdmins: Boolean(snap.data().canAddAdmins),
+              isSystemAdmin: false,
+              permissions: ((snap.data().permissions as string[]) || []).filter((p): p is AdminPermission =>
+                (ALL_PERMISSIONS as string[]).includes(p)
+              ),
+            }
+          : NO_ADMIN_ACCESS
       ),
     () => callback(NO_ADMIN_ACCESS)
   );
@@ -113,6 +158,7 @@ export interface AdminRecord {
   canAddAdmins: boolean;
   addedBy: string;
   createdAtISO: string;
+  permissions?: AdminPermission[];
 }
 
 /** Admins added through the app (the system admin is not in this list). Admins only. */
@@ -129,6 +175,15 @@ export function removeAdmin(email: string): Promise<void> {
   const key = email.trim().toLowerCase();
   if (key === SYSTEM_ADMIN_EMAIL) return Promise.reject(new Error('The system admin cannot be removed.'));
   return deleteDoc(doc(db, 'admins', key));
+}
+
+/** System admin: chooses which platform features another admin may use. */
+export async function setAdminPermissions(email: string, permissions: AdminPermission[], canAddAdmins: boolean): Promise<void> {
+  if (auth.currentUser?.email?.toLowerCase() !== SYSTEM_ADMIN_EMAIL) throw new Error('Only the system admin can change admin permissions.');
+  await updateDoc(doc(db, 'admins', email.trim().toLowerCase()), {
+    permissions: ALL_PERMISSIONS.filter((p) => permissions.includes(p)),
+    canAddAdmins,
+  });
 }
 
 /**
@@ -847,12 +902,11 @@ async function storeMedia(src: string | undefined, folder: string, inlinePhotoBu
 }
 
 /**
- * System admin only: replaces the app bar logo or the Welcome page picture for everyone.
+ * System admin (or an admin given branding access): replaces the app bar logo or the Welcome page picture for everyone.
  * Pass an empty image to go back to the built-in one.
  */
 export async function saveBrandingImage(field: 'logoUrl' | 'welcomeImageUrl', image: string): Promise<void> {
-  const email = auth.currentUser?.email?.toLowerCase();
-  if (email !== SYSTEM_ADMIN_EMAIL) throw new Error('Only the system admin can change the app branding.');
+  const email = requirePermission('branding', 'You do not have permission to change the app branding.');
   let url = '';
   if (image) {
     // PNG logos are uploaded as they are so a transparent background stays transparent
@@ -867,22 +921,20 @@ export async function saveBrandingImage(field: 'logoUrl' | 'welcomeImageUrl', im
   );
 }
 
-function requireSystemAdmin(): string {
-  const email = auth.currentUser?.email?.toLowerCase();
-  if (email !== SYSTEM_ADMIN_EMAIL) throw new Error('Only the system admin can change categories.');
-  return email;
+function requireCategoryAccess(): string {
+  return requirePermission('categories', 'You do not have permission to change categories.');
 }
 
-/** System admin: new photo for a category (pass '' to go back to the original photo). */
+/** Admin with category access: new photo for a category (pass '' to go back to the original photo). */
 export async function setCategoryImage(slug: string, image: string): Promise<void> {
-  requireSystemAdmin();
+  requireCategoryAccess();
   const url = image ? (await storeMedia(image, 'categories', 30_000)) || '' : '';
   await setDoc(doc(db, 'categories', slug), { slug, image: url, updatedAtISO: new Date().toISOString() }, { merge: true });
 }
 
-/** System admin: adds a new category for everyone. Returns its slug. */
+/** Admin with category access: adds a new category for everyone. Returns its slug. */
 export async function addCategory(name: string, subcategories: string[], image: string, takenSlugs: string[]): Promise<string> {
-  requireSystemAdmin();
+  requireCategoryAccess();
   const clean = name.trim().replace(/\s+/g, ' ').slice(0, 40);
   if (clean.length < 2) throw new Error('Enter a category name.');
   const base = clean.toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'category';
@@ -901,9 +953,9 @@ export async function addCategory(name: string, subcategories: string[], image: 
   return slug;
 }
 
-/** System admin: moves every ad in one category to another. Returns how many ads were moved. */
+/** Admin with category access: moves every ad in one category to another. Returns how many ads were moved. */
 export async function moveCategoryAds(fromSlug: string, to: { slug: string; name: string; subcategories: string[] }): Promise<number> {
-  requireSystemAdmin();
+  requireCategoryAccess();
   if (fromSlug === to.slug) return 0;
   const ads = await getDocs(query(collection(db, 'listings'), where('category', '==', fromSlug)));
   for (let i = 0; i < ads.docs.length; i += 400) {
@@ -917,11 +969,11 @@ export async function moveCategoryAds(fromSlug: string, to: { slug: string; name
 }
 
 /**
- * System admin: deletes a category. A category the admin added is deleted for good; a built-in
+ * Admin with category access: deletes a category. A category the admin added is deleted for good; a built-in
  * one is hidden for everyone and can be restored later.
  */
 export async function deleteCategory(slug: string, isCustom: boolean): Promise<void> {
-  requireSystemAdmin();
+  requireCategoryAccess();
   if (isCustom) {
     await deleteDoc(doc(db, 'categories', slug));
     return;
@@ -929,16 +981,55 @@ export async function deleteCategory(slug: string, isCustom: boolean): Promise<v
   await setDoc(doc(db, 'categories', slug), { slug, hidden: true, updatedAtISO: new Date().toISOString() }, { merge: true });
 }
 
-/** System admin: brings back a built-in category that was deleted. */
+/** Admin with category access: brings back a built-in category that was deleted. */
 export async function restoreCategory(slug: string): Promise<void> {
-  requireSystemAdmin();
+  requireCategoryAccess();
   await setDoc(doc(db, 'categories', slug), { slug, hidden: false, updatedAtISO: new Date().toISOString() }, { merge: true });
 }
 
-/** System admin: removes a category they added (built-in categories can't be removed). */
+/** Admin with category access: removes a category they added (built-in categories can't be removed). */
 export async function removeCategory(slug: string): Promise<void> {
-  requireSystemAdmin();
+  requireCategoryAccess();
   await deleteDoc(doc(db, 'categories', slug));
+}
+
+/**
+ * Admin with banner access: saves a Home banner (new or edited). PNG pictures keep their
+ * transparent background, like the built-in illustration. Returns the banner's id.
+ */
+export async function saveBanner(banner: Omit<BannerDoc, 'updatedAtISO'>): Promise<string> {
+  requirePermission('banners', 'You do not have permission to change banners.');
+  let image = banner.image || '';
+  if (image.startsWith('data:')) {
+    const isPng = image.startsWith('data:image/png');
+    let url = '';
+    if (isPng && isCloudinaryConfigured()) url = await uploadMedia(image, 'banners').catch(() => '');
+    if (!url) url = isPng && image.length < 250_000 ? image : (await storeMedia(image, 'banners', 120_000)) || '';
+    image = url;
+  }
+  const id = banner.id || `banner-${Date.now().toString(36)}`;
+  await setDoc(doc(db, 'banners', id), {
+    ...banner,
+    id,
+    image,
+    title: banner.title.trim().slice(0, 60),
+    desc: banner.desc.trim().slice(0, 140),
+    btnText: banner.btnText.trim().slice(0, 24),
+    updatedAtISO: new Date().toISOString(),
+  });
+  return id;
+}
+
+/** Admin with banner access: deletes a banner they added. */
+export async function deleteBanner(id: string): Promise<void> {
+  requirePermission('banners', 'You do not have permission to change banners.');
+  await deleteDoc(doc(db, 'banners', id));
+}
+
+/** Admin with banner access: hides (or shows again) one of the built-in Home banners. */
+export async function setBuiltInBannerHidden(id: string, hidden: boolean): Promise<void> {
+  requirePermission('banners', 'You do not have permission to change banners.');
+  await setDoc(doc(db, 'banners', id), { id, builtIn: true, hidden, updatedAtISO: new Date().toISOString() });
 }
 
 /**

@@ -44,6 +44,11 @@ service cloud.firestore {
       return isSystemAdmin() || (isAdmin() && get(adminDocPath()).data.canAddAdmins == true);
     }
 
+    // Platform features the system admin handed to an admin (Platform Settings > Admin Permissions)
+    function hasPermission(permission) {
+      return isSystemAdmin() || (isAdmin() && permission in get(adminDocPath()).data.get('permissions', []));
+    }
+
     function isValidId(id) {
       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
@@ -87,30 +92,54 @@ service cloud.firestore {
         && email != 'blanc.69458@gmail.com'
         && request.resource.data.email == email
         && request.resource.data.addedBy == request.auth.token.email
+        && request.resource.data.canAddAdmins is bool
+        // Only the system admin hands out platform permissions
+        && (isSystemAdmin() || request.resource.data.get('permissions', []) == (resource == null ? [] : resource.data.get('permissions', [])));
+      // The system admin chooses what each admin may do
+      allow update: if isSystemAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['permissions', 'canAddAdmins'])
+        && request.resource.data.get('permissions', []) is list && request.resource.data.get('permissions', []).size() <= 10
         && request.resource.data.canAddAdmins is bool;
       allow delete: if canAddAdmins();
     }
 
-    // App branding (app bar logo, Welcome page picture): everyone reads it, only the system admin changes it
+    // App branding (app bar logo, Welcome page picture): everyone reads it; the system admin (or an admin given access) changes it
     match /settings/branding {
       allow get: if true;
-      allow create, update: if isSystemAdmin()
+      allow create, update: if hasPermission('branding')
         && request.resource.data.keys().hasOnly(['logoUrl', 'welcomeImageUrl', 'updatedAtISO', 'updatedBy'])
         && request.resource.data.get('logoUrl', '') is string && request.resource.data.get('logoUrl', '').size() < 600000
         && request.resource.data.get('welcomeImageUrl', '') is string && request.resource.data.get('welcomeImageUrl', '').size() < 600000;
     }
 
-    // Marketplace categories changed or added by the system admin; everyone reads them
+    // Marketplace categories changed or added by the system admin (or an admin given access); everyone reads them
     match /categories/{slug} {
       allow get, list: if true;
-      allow create, update: if isSystemAdmin() && isValidId(slug)
+      allow create, update: if hasPermission('categories') && isValidId(slug)
         && request.resource.data.slug == slug
         && request.resource.data.keys().hasOnly(['slug', 'name', 'image', 'subcategories', 'custom', 'order', 'hidden', 'updatedAtISO'])
         && request.resource.data.get('hidden', false) is bool
         && request.resource.data.get('image', '') is string && request.resource.data.get('image', '').size() < 200000
         && request.resource.data.get('name', 'x') is string && request.resource.data.get('name', 'x').size() <= 40
         && request.resource.data.get('subcategories', []) is list && request.resource.data.get('subcategories', []).size() <= 20;
-      allow delete: if isSystemAdmin();
+      allow delete: if hasPermission('categories');
+    }
+
+    // Home banners added (or built-in ones hidden) in Platform Settings; everyone reads them
+    match /banners/{bannerId} {
+      allow get, list: if true;
+      allow create, update: if hasPermission('banners') && isValidId(bannerId)
+        && request.resource.data.id == bannerId
+        && request.resource.data.keys().hasOnly(['id', 'builtIn', 'hidden', 'title', 'desc', 'btnText', 'target', 'bg', 'image', 'audience', 'order', 'updatedAtISO'])
+        && request.resource.data.get('hidden', false) is bool
+        && request.resource.data.get('title', '') is string && request.resource.data.get('title', '').size() <= 60
+        && request.resource.data.get('desc', '') is string && request.resource.data.get('desc', '').size() <= 140
+        && request.resource.data.get('btnText', '') is string && request.resource.data.get('btnText', '').size() <= 24
+        && request.resource.data.get('target', '') is string && request.resource.data.get('target', '').size() <= 80
+        && request.resource.data.get('bg', '') is string && request.resource.data.get('bg', '').size() <= 120
+        && request.resource.data.get('image', '') is string && request.resource.data.get('image', '').size() < 300000
+        && request.resource.data.get('audience', 'everyone') in ['everyone', 'buyer', 'seller', 'artisan'];
+      allow delete: if hasPermission('banners');
     }
 
     // Why something failed on a user's phone (error text and device type), read only by admins
@@ -152,10 +181,13 @@ service cloud.firestore {
       allow create: if isVerifiedUser() && isValidId(listingId)
         && request.resource.data.sellerId == request.auth.uid
         && userRole() in ['seller', 'artisan'];
-      // The seller edits their own ad; only the system admin can correct someone else's ad
+      // The seller edits their own ad; the system admin (or an admin given access) can correct someone
+      // else's ad, and admins with category access can move ads to another category
       allow update: if isSignedIn() && isValidId(listingId) && (
         (resource.data.sellerId == request.auth.uid && request.resource.data.sellerId == request.auth.uid)
-        || (isSystemAdmin() && request.resource.data.sellerId == resource.data.sellerId)
+        || (hasPermission('editAds') && request.resource.data.sellerId == resource.data.sellerId)
+        || (hasPermission('categories')
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['category', 'categoryName', 'subcategory']))
       );
       allow delete: if isSignedIn() && isValidId(listingId) && (
         resource.data.sellerId == request.auth.uid || isAdmin()
