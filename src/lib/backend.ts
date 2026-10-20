@@ -1013,12 +1013,10 @@ export async function removeCategory(slug: string): Promise<void> {
 export async function saveBanner(banner: Omit<BannerDoc, 'updatedAtISO'>): Promise<string> {
   requirePermission('banners', 'You do not have permission to change banners.');
   let image = banner.image || '';
-  if (image.startsWith('data:')) {
-    const isPng = image.startsWith('data:image/png');
-    let url = '';
-    if (isPng && isCloudinaryConfigured()) url = await uploadMedia(image, 'banners').catch(() => '');
-    if (!url) url = isPng && image.length < 250_000 ? image : (await storeMedia(image, 'banners', 120_000)) || '';
-    image = url;
+  // Banner pictures are already shrunk on the phone, so they are saved with the banner itself:
+  // no upload to wait for, and the banner shows for everyone as soon as it is saved
+  if (image.startsWith('data:') && image.length >= 280_000) {
+    image = (await storeMedia(image, 'banners', 200_000)) || '';
   }
   const id = banner.id || `banner-${Date.now().toString(36)}`;
   await setDoc(doc(db, 'banners', id), {
@@ -1049,6 +1047,52 @@ export async function deleteBanner(id: string): Promise<void> {
 export async function setBuiltInBannerHidden(id: string, hidden: boolean): Promise<void> {
   requirePermission('banners', 'You do not have permission to change banners.');
   await setDoc(doc(db, 'banners', id), { id, builtIn: true, hidden, updatedAtISO: new Date().toISOString() });
+}
+
+// ---------------------------------------------------------------------------
+// System admin tools: every account, and problems reported from phones
+// ---------------------------------------------------------------------------
+
+/** Every account on Haraka, newest first (admins only; the system admin's tools use it). */
+export function watchAllUsers(callback: (users: UserProfileDoc[]) => void): () => void {
+  return onSnapshot(
+    collection(db, 'users'),
+    (snap) =>
+      callback(
+        snap.docs
+          .map((d) => ({ ...(d.data() as UserProfileDoc), id: d.id }))
+          .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))
+      ),
+    (error) => console.warn('Could not load users', error)
+  );
+}
+
+export interface ClientErrorDoc {
+  id: string;
+  uid: string;
+  where: string;
+  code: string;
+  message: string;
+  userAgent: string;
+  atISO: string;
+}
+
+/** Problems recorded on people's phones (failed uploads and the like), newest first. Admins only. */
+export function watchClientErrors(callback: (errors: ClientErrorDoc[]) => void): () => void {
+  return onSnapshot(
+    query(collection(db, 'clientErrors'), orderBy('atISO', 'desc'), limit(100)),
+    (snap) => callback(snap.docs.map((d) => ({ ...(d.data() as ClientErrorDoc), id: d.id }))),
+    (error) => console.warn('Could not load problem reports', error)
+  );
+}
+
+/** Admins: removes problem reports that were looked at. */
+export async function clearClientErrors(ids: string[]): Promise<void> {
+  for (let i = 0; i < ids.length; i += 400) {
+    const batch = writeBatch(db);
+    ids.slice(i, i + 400).forEach((id) => batch.delete(doc(db, 'clientErrors', id)));
+    await batch.commit();
+  }
 }
 
 /**
@@ -1098,6 +1142,15 @@ export function watchListings(
       console.warn('Could not load listings', error);
       onError?.(error);
     }
+  );
+}
+
+/** Every ad on Haraka, newest first, with no limit (the system admin's All Ads page). */
+export function watchAllListings(callback: (listings: StoredListing[]) => void): () => void {
+  return onSnapshot(
+    query(collection(db, 'listings'), orderBy('createdAtISO', 'desc')),
+    (snap) => callback(snap.docs.map((d) => normalizeListing(d.id, d.data() as Partial<StoredListing>))),
+    (error) => console.warn('Could not load all ads', error)
   );
 }
 

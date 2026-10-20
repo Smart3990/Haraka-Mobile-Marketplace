@@ -112,6 +112,9 @@ import {
   UserCheck,
   CreditCard,
   BadgeCheck,
+  Megaphone,
+  KeyRound,
+  Bug,
   Gauge,
   Droplets,
   Sun,
@@ -198,6 +201,12 @@ import {
   resendEmailVerification,
   deleteMyAccount,
   removeAdmin,
+  watchAllListings,
+  watchAllUsers,
+  watchClientErrors,
+  clearClientErrors,
+  type ClientErrorDoc,
+  type UserProfileDoc,
   syncAdminPushList,
   getAdminPushUids,
   resolveReport,
@@ -266,7 +275,7 @@ type ScreenRoute =
   | { type: 'splash' }
   | { type: 'onboarding' }
   | { type: 'welcome' }
-  | { type: 'admin-settings' }
+  | { type: 'admin-settings'; section?: 'banners' | 'categories' | 'branding' | 'permissions' | 'ads' | 'users' | 'problems' }
   | { type: 'sign-up' }
   | { type: 'login' }
   | { type: 'demo-accounts' }
@@ -3184,21 +3193,38 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     hidden: false,
   });
 
-  /** Fits an uploaded picture into the banner's picture slot, keeping a transparent background. */
+  /**
+   * Fits an uploaded picture into the banner's picture slot (small enough to save with the banner
+   * in a moment). Pictures with a transparent background stay PNG; photos become a small JPEG.
+   */
   const prepareBannerImage = async (file: File): Promise<string> => {
     const src = await blobToDataUrl(file);
     const img = new Image();
     img.src = src;
     await img.decode();
-    const scale = Math.min(1, 360 / Math.max(img.naturalWidth, img.naturalHeight));
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
-    canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
-    canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height);
-    const png = canvas.toDataURL('image/png');
-    if (png.length < 240_000) return png;
-    const webp = canvas.toDataURL('image/webp', 0.85);
-    return webp.startsWith('data:image/webp') && webp.length < png.length ? webp : canvas.toDataURL('image/jpeg', 0.8);
+    let result = '';
+    // Shown at most 128px wide, so 256px is sharp on any phone screen
+    for (const maxSide of [256, 200, 160]) {
+      const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+      const ctx = canvas.getContext('2d')!;
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+      let transparent = false;
+      for (let i = 3; i < pixels.length; i += 16) {
+        if (pixels[i] < 250) {
+          transparent = true;
+          break;
+        }
+      }
+      if (!transparent) return canvas.toDataURL('image/jpeg', 0.75);
+      const webp = canvas.toDataURL('image/webp', 0.85);
+      result = webp.startsWith('data:image/webp') ? webp : canvas.toDataURL('image/png');
+      if (result.length < 120_000) return result;
+    }
+    return result;
   };
 
   const handleBannerImage = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -3223,16 +3249,18 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
       showToast('⚠️ Enter a title and the button text.');
       return;
     }
-    setSavingBanner('draft');
+    // The banner shows in the list straight away and finishes saving in the background, so a slow
+    // connection never leaves the admin stuck on "Saving…". If it fails, the editor opens again.
+    setBannerDraft(null);
+    showToast('Saving banner…');
     try {
       await saveBanner(draft);
-      setBannerDraft(null);
       showToast(draft.id ? 'Banner updated for everyone' : 'Banner added to Home');
     } catch (err) {
       console.warn('Could not save banner', err);
-      showToast('⚠️ Could not save the banner. Try again.');
-    } finally {
-      setSavingBanner('');
+      reportClientError('banner-save', err);
+      setBannerDraft(draft);
+      showToast('⚠️ Could not save the banner. Check your connection and tap Save again.');
     }
   };
 
@@ -4013,6 +4041,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     city: string;
     neighborhood: string;
     isSold: boolean;
+    category: string;
   } | null>(null);
   const [isSavingAdminEdit, setIsSavingAdminEdit] = useState(false);
 
@@ -4027,6 +4056,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
       city: item.location?.city || '',
       neighborhood: item.location?.neighborhood || '',
       isSold: Boolean(item.isSold),
+      category: item.category || '',
     });
 
   const saveAdminEditAd = async () => {
@@ -4044,6 +4074,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
       condition: edit.condition as Listing['condition'],
       location: { city: edit.city.trim(), neighborhood: edit.neighborhood.trim() },
       isSold: edit.isSold,
+      ...categoryChange(edit.id, edit.category),
     };
     setIsSavingAdminEdit(true);
     try {
@@ -4058,6 +4089,14 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     } finally {
       setIsSavingAdminEdit(false);
     }
+  };
+
+  /** Category fields to save when the admin moved the ad to another category (nothing if unchanged). */
+  const categoryChange = (adId: string, slug: string): Partial<Listing> => {
+    const before = listings.find((l) => l.id === adId)?.category;
+    const target = CATEGORIES.find((c) => c.slug === slug);
+    if (!target || before === slug) return {};
+    return { category: target.slug, categoryName: target.name, subcategory: target.subcategories[0] || 'General' };
   };
 
   const renderAdminEditAdSheet = () => {
@@ -4076,7 +4115,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
           <div className="w-10 h-1.5 rounded-full bg-slate-200 mx-auto" />
           <div>
             <p className="text-base font-black text-slate-900">Edit Ad</p>
-            <p className="text-xs text-slate-500">System admin only. The seller is notified of the change.</p>
+            <p className="text-xs text-slate-500">Admin edit. The seller is notified of the change.</p>
           </div>
           <div>
             <label className={label} htmlFor="admin-ad-title">Title</label>
@@ -4085,6 +4124,17 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
           <div>
             <label className={label} htmlFor="admin-ad-price">Price (GH₵)</label>
             <input id="admin-ad-price" className={field} inputMode="decimal" value={edit.price} onChange={(e) => set({ price: e.target.value.replace(/[^0-9.]/g, '') })} />
+          </div>
+          <div>
+            <label className={label} htmlFor="admin-ad-category">Category</label>
+            <select id="admin-ad-category" className={field} value={edit.category} onChange={(e) => set({ category: e.target.value })}>
+              {!CATEGORIES.some((c) => c.slug === edit.category) && <option value={edit.category}>{edit.category || 'None'}</option>}
+              {CATEGORIES.map((c) => (
+                <option key={c.slug} value={c.slug}>
+                  {CATEGORY_SHORT_NAMES[c.slug] || c.name}
+                </option>
+              ))}
+            </select>
           </div>
           <div>
             <label className={label} htmlFor="admin-ad-description">Description</label>
@@ -10893,6 +10943,418 @@ export default function RootLayout() {
   };
 
   /** Friendly screen for links to things that no longer exist (or never did). */
+  // ---------- Platform Settings: system admin tools (all ads, all users, problems from phones) ----------
+  type SettingsSection = 'banners' | 'categories' | 'branding' | 'permissions' | 'ads' | 'users' | 'problems';
+  const settingsSection: SettingsSection | null = currentRoute.type === 'admin-settings' ? currentRoute.section || null : null;
+  const [allAds, setAllAds] = useState<StoredListing[]>([]);
+  const [allUsers, setAllUsers] = useState<UserProfileDoc[]>([]);
+  const [clientErrors, setClientErrors] = useState<ClientErrorDoc[]>([]);
+  const [adsQuery, setAdsQuery] = useState('');
+  const [adsStatus, setAdsStatus] = useState<'all' | 'active' | 'sold'>('all');
+  const [adsCategory, setAdsCategory] = useState('');
+  const [adsSeller, setAdsSeller] = useState<{ id: string; name: string } | null>(null);
+  const [adsShown, setAdsShown] = useState(40);
+  const [usersQuery, setUsersQuery] = useState('');
+  const [usersRole, setUsersRole] = useState<'all' | 'buyer' | 'seller' | 'artisan'>('all');
+  const [openUserId, setOpenUserId] = useState('');
+  const [adminToolBusy, setAdminToolBusy] = useState('');
+  const [adminToolConfirm, setAdminToolConfirm] = useState('');
+
+  // Everything is loaded only while the system admin is on these pages
+  const onSystemAdminSettings = adminAccess.isSystemAdmin && currentRoute.type === 'admin-settings';
+  useEffect(() => {
+    if (!onSystemAdminSettings) return;
+    const stops = [watchAllListings(setAllAds), watchAllUsers(setAllUsers), watchClientErrors(setClientErrors)];
+    return () => stops.forEach((stop) => stop());
+  }, [onSystemAdminSettings]);
+
+  const runAdminTool = async (key: string, job: () => Promise<unknown>, done: string) => {
+    if (adminToolBusy) return;
+    setAdminToolBusy(key);
+    try {
+      await job();
+      showToast(done);
+    } catch (err) {
+      console.warn('Admin action failed', err);
+      showToast('⚠️ Could not save. Check your connection and try again.');
+    } finally {
+      setAdminToolBusy('');
+      setAdminToolConfirm('');
+    }
+  };
+  /** Two taps for anything that can't be undone */
+  const confirmTap = (key: string, job: () => void) => (adminToolConfirm === key ? job() : setAdminToolConfirm(key));
+
+  const formatDay = (iso?: string) => {
+    if (!iso) return '';
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+  };
+  const toolInput = 'w-full rounded-xl border border-slate-200 bg-white pl-9 pr-3 py-2.5 text-sm text-slate-900 outline-none focus:border-orange-500';
+  const chip = (active: boolean) =>
+    `shrink-0 px-3 py-1.5 rounded-full text-[11px] font-bold border cursor-pointer ${
+      active ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-600 border-slate-200'
+    }`;
+  const smallBtn = 'py-1.5 px-2.5 rounded-lg text-[11px] font-bold cursor-pointer disabled:opacity-50';
+
+  const renderAllAdsPage = () => {
+    if (!adminAccess.isSystemAdmin) return null;
+    const q = adsQuery.trim().toLowerCase();
+    const filtered = allAds.filter(
+      (ad) =>
+        (!adsSeller || ad.sellerId === adsSeller.id) &&
+        (adsStatus === 'all' || (adsStatus === 'sold') === Boolean(ad.isSold || ad.status === 'Sold')) &&
+        (!adsCategory || ad.category === adsCategory) &&
+        (!q || `${ad.title} ${ad.seller?.name || ''} ${ad.location?.city || ''} ${ad.location?.neighborhood || ''} ${ad.id}`.toLowerCase().includes(q))
+    );
+    return (
+      <div className="space-y-3">
+        <div className="relative">
+          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            className={toolInput}
+            value={adsQuery}
+            onChange={(e) => {
+              setAdsQuery(e.target.value);
+              setAdsShown(40);
+            }}
+            placeholder="Search title, seller, area or ad ID"
+          />
+        </div>
+        <div className="flex gap-1.5 overflow-x-auto no-scrollbar">
+          {(['all', 'active', 'sold'] as const).map((st) => (
+            <button key={st} type="button" onClick={() => setAdsStatus(st)} className={chip(adsStatus === st)}>
+              {st === 'all' ? 'All ads' : st === 'active' ? 'Active' : 'Sold'}
+            </button>
+          ))}
+          <select
+            value={adsCategory}
+            onChange={(e) => setAdsCategory(e.target.value)}
+            aria-label="Category"
+            className="shrink-0 px-2.5 py-1.5 rounded-full text-[11px] font-bold border border-slate-200 bg-white text-slate-600"
+          >
+            <option value="">All categories</option>
+            {CATEGORIES.map((c) => (
+              <option key={c.slug} value={c.slug}>
+                {CATEGORY_SHORT_NAMES[c.slug] || c.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        {adsSeller && (
+          <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-orange-50 border border-orange-200">
+            <span className="text-[11px] font-bold text-orange-800 truncate">Ads by {adsSeller.name}</span>
+            <button type="button" onClick={() => setAdsSeller(null)} className="text-[11px] font-bold text-orange-700 cursor-pointer shrink-0">
+              Show everyone's
+            </button>
+          </div>
+        )}
+        <p className="text-[11px] font-semibold text-slate-500">
+          {filtered.length} of {allAds.length} ads
+        </p>
+        {filtered.slice(0, adsShown).map((ad) => {
+          const sold = Boolean(ad.isSold || ad.status === 'Sold');
+          const busy = adminToolBusy.endsWith(ad.id);
+          return (
+            <div key={ad.id} className="bg-white rounded-2xl p-2.5 border border-slate-200/80 shadow-2xs flex gap-2.5">
+              <button
+                type="button"
+                onClick={() => navigateTo({ type: 'listing', id: ad.id })}
+                className="w-16 h-16 rounded-xl overflow-hidden bg-slate-100 shrink-0 cursor-pointer"
+                aria-label={`Open ${ad.title}`}
+              >
+                {ad.images?.[0] && <img src={thumbnailUrl(ad.images[0], 160)} alt="" className="w-full h-full object-cover" />}
+              </button>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-bold text-slate-900 truncate">{ad.title}</p>
+                <p className="text-[11px] font-black text-[#1FA971]">
+                  {ad.currency} {Number(ad.price || 0).toLocaleString()}
+                  {sold && <span className="ml-1.5 px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 text-[10px]">SOLD</span>}
+                </p>
+                <p className="text-[10.5px] text-slate-500 truncate">
+                  {ad.seller?.name || 'Unknown seller'} • {CATEGORY_SHORT_NAMES[ad.category] || ad.categoryName} • {formatDay(ad.createdAtISO)}
+                </p>
+                <div className="flex flex-wrap gap-1.5 mt-1.5">
+                  <button type="button" disabled={busy} onClick={() => openAdminEditAd(ad)} className={`${smallBtn} bg-slate-900 text-white`}>
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() =>
+                      runAdminTool(
+                        `sold:${ad.id}`,
+                        () => updateRemoteListing(ad.id, { isSold: !sold, status: sold ? 'Active' : 'Sold' }),
+                        sold ? 'Ad is active again' : 'Ad marked as sold'
+                      )
+                    }
+                    className={`${smallBtn} border border-slate-200 text-slate-600`}
+                  >
+                    {sold ? 'Mark active' : 'Mark sold'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() =>
+                      confirmTap(`del:${ad.id}`, () => {
+                        runAdminTool(`del:${ad.id}`, () => deleteRemoteListing(ad.id), 'Ad deleted');
+                        notifyUser(ad.sellerId, 'Your ad was removed', `"${ad.title}" was removed by a Haraka admin.`, { type: 'listing', id: ad.id });
+                      })
+                    }
+                    className={`${smallBtn} ${adminToolConfirm === `del:${ad.id}` ? 'bg-red-600 text-white' : 'text-red-600 hover:bg-red-50'}`}
+                  >
+                    {busy ? 'Saving…' : adminToolConfirm === `del:${ad.id}` ? 'Tap to confirm' : 'Delete'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+        {filtered.length > adsShown && (
+          <button
+            type="button"
+            onClick={() => setAdsShown((n) => n + 40)}
+            className="w-full py-2.5 rounded-xl bg-white border border-slate-200 text-xs font-bold text-slate-700 cursor-pointer"
+          >
+            Show more ({filtered.length - adsShown} left)
+          </button>
+        )}
+      </div>
+    );
+  };
+
+  const renderAllUsersPage = () => {
+    if (!adminAccess.isSystemAdmin) return null;
+    const q = usersQuery.trim().toLowerCase();
+    const adsBy = new Map<string, number>();
+    allAds.forEach((ad) => adsBy.set(ad.sellerId, (adsBy.get(ad.sellerId) || 0) + 1));
+    const filtered = allUsers.filter(
+      (u) =>
+        (usersRole === 'all' || (u.role || 'buyer') === usersRole) &&
+        (!q || `${u.name || ''} ${u.email || ''} ${u.phone || ''} ${u.storeName || ''}`.toLowerCase().includes(q))
+    );
+    const counts = { all: allUsers.length, buyer: 0, seller: 0, artisan: 0 } as Record<string, number>;
+    allUsers.forEach((u) => (counts[u.role || 'buyer'] = (counts[u.role || 'buyer'] || 0) + 1));
+    const roleBadge: Record<string, string> = {
+      buyer: 'bg-slate-100 text-slate-600',
+      seller: 'bg-orange-100 text-orange-700',
+      artisan: 'bg-sky-100 text-sky-700',
+    };
+    return (
+      <div className="space-y-3">
+        <div className="relative">
+          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input className={toolInput} value={usersQuery} onChange={(e) => setUsersQuery(e.target.value)} placeholder="Search name, email, phone or store" />
+        </div>
+        <div className="flex gap-1.5 overflow-x-auto no-scrollbar">
+          {(['all', 'buyer', 'seller', 'artisan'] as const).map((r) => (
+            <button key={r} type="button" onClick={() => setUsersRole(r)} className={chip(usersRole === r)}>
+              {r === 'all' ? 'Everyone' : r === 'buyer' ? 'Buyers' : r === 'seller' ? 'Sellers' : 'Artisans'} ({counts[r] || 0})
+            </button>
+          ))}
+        </div>
+        {filtered.map((u) => {
+          const open = openUserId === u.id;
+          const role = u.role || 'buyer';
+          const adCount = adsBy.get(u.id) || 0;
+          return (
+            <div key={u.id} className="bg-white rounded-2xl border border-slate-200/80 shadow-2xs overflow-hidden">
+              <button type="button" onClick={() => setOpenUserId(open ? '' : u.id)} className="w-full p-2.5 flex items-center gap-2.5 text-left cursor-pointer">
+                <div className="w-10 h-10 rounded-full bg-slate-100 overflow-hidden shrink-0 flex items-center justify-center">
+                  {u.avatar ? <img src={thumbnailUrl(u.avatar, 96)} alt="" className="w-full h-full object-cover" /> : <User size={17} className="text-slate-400" />}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-bold text-slate-900 truncate flex items-center gap-1">
+                    <span className="truncate">{u.name || 'No name'}</span>
+                    {u.verified && <BadgeCheck size={13} className="text-[#1FA971] shrink-0" />}
+                  </p>
+                  <p className="text-[11px] text-slate-500 truncate">{u.email}</p>
+                </div>
+                <span className={`shrink-0 px-2 py-0.5 rounded-full text-[10px] font-black uppercase ${roleBadge[role] || roleBadge.buyer}`}>{role}</span>
+                <ChevronRight size={15} className={`text-slate-400 shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />
+              </button>
+              {open && (
+                <div className="px-3 pb-3 pt-1 space-y-2 border-t border-slate-100">
+                  <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
+                    <span className="text-slate-500">Joined</span>
+                    <span className="font-semibold text-slate-800 text-right">{formatDay(u.createdAt) || '—'}</span>
+                    <span className="text-slate-500">Phone</span>
+                    <span className="font-semibold text-slate-800 text-right truncate">{u.phone || '—'}</span>
+                    <span className="text-slate-500">Location</span>
+                    <span className="font-semibold text-slate-800 text-right truncate">{u.location || '—'}</span>
+                    {u.storeName && (
+                      <>
+                        <span className="text-slate-500">Store</span>
+                        <span className="font-semibold text-slate-800 text-right truncate">{u.storeName}</span>
+                      </>
+                    )}
+                    <span className="text-slate-500">Verified</span>
+                    <span className="font-semibold text-slate-800 text-right">{u.verified ? 'Yes' : 'No'}</span>
+                    <span className="text-slate-500">Ads</span>
+                    <span className="font-semibold text-slate-800 text-right">{adCount}</span>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {adCount > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAdsSeller({ id: u.id, name: u.name || u.email });
+                          setAdsQuery('');
+                          setAdsStatus('all');
+                          setAdsCategory('');
+                          navigateTo({ type: 'admin-settings', section: 'ads' });
+                        }}
+                        className={`${smallBtn} bg-slate-900 text-white`}
+                      >
+                        View their ads
+                      </button>
+                    )}
+                    {u.phone && (
+                      <a href={`tel:${u.phone.replace(/[^0-9+]/g, '')}`} className={`${smallBtn} border border-slate-200 text-slate-700`}>
+                        Call
+                      </a>
+                    )}
+                    {u.email && (
+                      <a href={`mailto:${u.email}`} className={`${smallBtn} border border-slate-200 text-slate-700`}>
+                        Email
+                      </a>
+                    )}
+                    {adCount > 0 && (
+                      <button
+                        type="button"
+                        disabled={Boolean(adminToolBusy)}
+                        onClick={() =>
+                          confirmTap(`wipe:${u.id}`, () =>
+                            runAdminTool(
+                              `wipe:${u.id}`,
+                              () => Promise.all(allAds.filter((ad) => ad.sellerId === u.id).map((ad) => deleteRemoteListing(ad.id))),
+                              `Removed ${adCount} ad${adCount === 1 ? '' : 's'}`
+                            )
+                          )
+                        }
+                        className={`${smallBtn} ${adminToolConfirm === `wipe:${u.id}` ? 'bg-red-600 text-white' : 'text-red-600 hover:bg-red-50'}`}
+                      >
+                        {adminToolBusy === `wipe:${u.id}` ? 'Removing…' : adminToolConfirm === `wipe:${u.id}` ? 'Tap to confirm' : 'Remove all their ads'}
+                      </button>
+                    )}
+                  </div>
+                  {role !== 'buyer' && (
+                    <p className="text-[10.5px] text-slate-400">
+                      To change their partner status or Verified badge, open their application in the Admin Control Dashboard.
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {filtered.length === 0 && <p className="text-[11px] text-slate-500 text-center py-6">No accounts match.</p>}
+      </div>
+    );
+  };
+
+  const renderProblemsPage = () => {
+    if (!adminAccess.isSystemAdmin) return null;
+    const names = new Map(allUsers.map((u) => [u.id, u.name || u.email]));
+    const device = (ua: string) =>
+      /iPhone|iPad/.test(ua) ? 'iPhone' : /Android/.test(ua) ? (ua.match(/Android [\d.]+/)?.[0] || 'Android') : /Windows|Macintosh|Linux/.test(ua) ? 'Computer' : 'Phone';
+    return (
+      <div className="space-y-3">
+        <div className="bg-white rounded-2xl p-3 border border-slate-200/80 shadow-2xs flex items-start justify-between gap-2">
+          <p className="text-[11px] text-slate-500">
+            When something fails on someone's phone (an upload, a voice note, a banner save), the reason is recorded here so it can be fixed.
+          </p>
+          {clientErrors.length > 0 && (
+            <button
+              type="button"
+              disabled={Boolean(adminToolBusy)}
+              onClick={() =>
+                confirmTap('clear-problems', () =>
+                  runAdminTool('clear-problems', () => clearClientErrors(clientErrors.map((e) => e.id)), 'Problem reports cleared')
+                )
+              }
+              className={`${smallBtn} shrink-0 ${adminToolConfirm === 'clear-problems' ? 'bg-red-600 text-white' : 'border border-slate-200 text-slate-700'}`}
+            >
+              {adminToolConfirm === 'clear-problems' ? 'Tap to confirm' : 'Clear all'}
+            </button>
+          )}
+        </div>
+        {clientErrors.length === 0 && <p className="text-[11px] text-slate-500 text-center py-6">No problems reported. 🎉</p>}
+        {clientErrors.map((e) => (
+          <div key={e.id} className="bg-white rounded-2xl p-3 border border-slate-200/80 shadow-2xs space-y-1">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] font-black text-slate-900 truncate">{e.where}</span>
+              <span className="text-[10.5px] text-slate-400 shrink-0">{formatChatTime(e.atISO)}</span>
+            </div>
+            <p className="text-[11px] text-slate-700 break-words">{e.message}</p>
+            <p className="text-[10.5px] text-slate-400 truncate">
+              {names.get(e.uid) || 'A user'} • {device(e.userAgent || '')}
+              {e.code ? ` • ${e.code}` : ''}
+            </p>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  /** The Platform Settings menu: one button per section, each opening its own page. */
+  const settingsSections = (): { key: SettingsSection; title: string; note: string; icon: React.ReactNode; show: boolean }[] => [
+    { key: 'ads', title: 'All Ads', note: `${allAds.length} ad${allAds.length === 1 ? '' : 's'} • search, edit, mark sold, delete`, icon: <Package size={18} />, show: adminAccess.isSystemAdmin },
+    { key: 'users', title: 'All Users', note: `${allUsers.length} account${allUsers.length === 1 ? '' : 's'} • details, their ads, contact`, icon: <Users size={18} />, show: adminAccess.isSystemAdmin },
+    { key: 'banners', title: 'Home Banners', note: 'Add, edit, reorder and delete banners', icon: <Megaphone size={18} />, show: can('banners') },
+    { key: 'categories', title: 'Categories', note: 'Photos, new categories, moving ads', icon: <LayoutGrid size={18} />, show: can('categories') },
+    { key: 'branding', title: 'App Branding', note: 'App bar logo and Welcome picture', icon: <Palette size={18} />, show: can('branding') },
+    { key: 'permissions', title: 'Admin Permissions', note: 'Choose what each admin can do', icon: <KeyRound size={18} />, show: adminAccess.isSystemAdmin },
+    {
+      key: 'problems',
+      title: 'App Problems',
+      note: clientErrors.length ? `${clientErrors.length} report${clientErrors.length === 1 ? '' : 's'} from phones` : 'Errors reported from phones',
+      icon: <Bug size={18} />,
+      show: adminAccess.isSystemAdmin,
+    },
+  ];
+
+  const renderSettingsMenu = () => (
+    <div className="space-y-2">
+      {settingsSections()
+        .filter((s) => s.show)
+        .map((s) => (
+          <button
+            key={s.key}
+            type="button"
+            onClick={() => navigateTo({ type: 'admin-settings', section: s.key })}
+            className="w-full bg-white rounded-2xl p-3.5 border border-slate-200/80 shadow-2xs flex items-center gap-3 text-left cursor-pointer active:scale-[0.99] transition-transform"
+          >
+            <span className="w-10 h-10 rounded-xl bg-orange-50 text-[#FF6A00] flex items-center justify-center shrink-0">{s.icon}</span>
+            <span className="flex-1 min-w-0">
+              <span className="text-sm font-black text-slate-900 block">{s.title}</span>
+              <span className="text-[11px] text-slate-500 block truncate">{s.note}</span>
+            </span>
+            <ChevronRight size={17} className="text-slate-400 shrink-0" />
+          </button>
+        ))}
+    </div>
+  );
+
+  const renderSettingsSection = (section: SettingsSection) => {
+    switch (section) {
+      case 'ads':
+        return renderAllAdsPage();
+      case 'users':
+        return renderAllUsersPage();
+      case 'problems':
+        return renderProblemsPage();
+      case 'banners':
+        return renderBannerManagerCard();
+      case 'categories':
+        return renderCategoryManagerCard();
+      case 'branding':
+        return renderBrandingCard();
+      case 'permissions':
+        return renderAdminPermissionsCard();
+    }
+  };
+
   const renderUnavailable = (title: string, message: string) => (
     <div className="flex-1 flex flex-col items-center justify-center gap-4 p-8 text-center bg-white min-h-full">
       <div className="w-14 h-14 rounded-full bg-slate-100 flex items-center justify-center">
@@ -10958,12 +11420,17 @@ export default function RootLayout() {
       }
 
       case 'admin-settings': {
-        // Platform settings: banners, categories, branding and admin permissions (each shown to admins allowed to use it)
+        // Platform Settings: a menu of sections (each shown to admins allowed to use it); each opens its own page
         if (!canOpenPlatformSettings) {
           return renderUnavailable('Not available', 'Ask the system admin for access to Platform Settings.');
         }
+        const section = currentRoute.section;
+        const info = section ? settingsSections().find((s) => s.key === section) : undefined;
+        if (section && !info?.show) {
+          return renderUnavailable('Not available', 'You do not have access to this part of Platform Settings.');
+        }
         return (
-          <div className="flex-1 flex flex-col pb-10 bg-dashboard-dots overflow-y-auto no-scrollbar">
+          <div key={section || 'menu'} className="flex-1 flex flex-col pb-10 bg-dashboard-dots overflow-y-auto no-scrollbar">
             <div className="bg-white px-4 pt-3.5 pb-3 border-b border-slate-200/80 sticky top-0 z-20 flex items-center gap-3">
               <button
                 type="button"
@@ -10975,20 +11442,15 @@ export default function RootLayout() {
               </button>
               <div className="min-w-0">
                 <h1 className="text-base font-black text-slate-900 flex items-center gap-1.5">
-                  <Settings size={17} className="text-[#FF6A00]" />
-                  <span>Platform Settings</span>
+                  <span className="text-[#FF6A00] flex">{info ? info.icon : <Settings size={17} />}</span>
+                  <span className="truncate">{info ? info.title : 'Platform Settings'}</span>
                 </h1>
-                <p className="text-[11px] text-slate-500 font-medium">
-                  {adminAccess.isSystemAdmin ? 'System admin' : 'Admin'} • changes apply to everyone
+                <p className="text-[11px] text-slate-500 font-medium truncate">
+                  {info ? info.note : `${adminAccess.isSystemAdmin ? 'System admin' : 'Admin'} • changes apply to everyone`}
                 </p>
               </div>
             </div>
-            <div className="p-3.5 space-y-3">
-              {renderBannerManagerCard()}
-              {renderCategoryManagerCard()}
-              {renderBrandingCard()}
-              {renderAdminPermissionsCard()}
-            </div>
+            <div className="p-3.5 space-y-3">{section ? renderSettingsSection(section) : renderSettingsMenu()}</div>
           </div>
         );
       }
