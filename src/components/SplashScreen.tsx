@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { BRAND_LOGO } from '../lib/images';
+import { useBranding } from '../lib/branding';
 
 interface SplashScreenProps {
   onFinish?: () => void;
@@ -14,6 +15,8 @@ export default function SplashScreen({
   autoDismissMs = 3000,
   showDismissButton = false,
 }: SplashScreenProps) {
+  // The system admin can replace the logo from the dashboard
+  const brandLogo = useBranding().logoUrl || HARAKA_SPLASH_LOGO_URL;
   const [isPressed, setIsPressed] = useState(false);
   const onFinishRef = useRef(onFinish);
 
@@ -53,7 +56,7 @@ export default function SplashScreen({
         {/* Center Branded Content */}
         <div className="flex-1 flex flex-col items-center justify-center w-full z-10 my-auto">
           <img
-            src={HARAKA_SPLASH_LOGO_URL}
+            src={brandLogo}
             alt="Haraka"
             onMouseDown={() => setIsPressed(true)}
             onMouseUp={() => setIsPressed(false)}

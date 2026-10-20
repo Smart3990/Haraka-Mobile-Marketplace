@@ -3,6 +3,7 @@ import { GoogleAuthProvider, signInWithPopup, OAuthProvider } from 'firebase/aut
 import { auth } from '../lib/firebase';
 import { friendlyAuthError, signUpWithEmail } from '../lib/backend';
 import { BRAND_LOGO } from '../lib/images';
+import { useBranding } from '../lib/branding';
 
 interface SignUpScreenProps {
   onSuccess: (userData: { fullName: string; email: string }) => void;
@@ -21,6 +22,8 @@ export default function SignUpScreen({
   showSocialLogins = true,
   onOpenPolicy,
 }: SignUpScreenProps) {
+  // The system admin can replace the logo from the dashboard
+  const brandLogo = useBranding().logoUrl || HARAKA_LOGO_URL;
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -136,7 +139,7 @@ export default function SignUpScreen({
             <img
               alt="Haraka"
               className="h-12 w-auto object-contain mx-auto mb-2"
-              src={HARAKA_LOGO_URL}
+              src={brandLogo}
             />
           </header>
           {/* END: NavigationHeader */}

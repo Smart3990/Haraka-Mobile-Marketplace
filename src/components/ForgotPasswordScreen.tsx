@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Lock, Eye, EyeOff, CheckCircle2, RefreshCw, KeyRound, ExternalLink } from 'lucide-react';
 import { friendlyAuthError, sendPasswordReset } from '../lib/backend';
 import { BRAND_LOGO } from '../lib/images';
+import { useBranding } from '../lib/branding';
 
 interface ForgotPasswordScreenProps {
   initialEmail?: string;
@@ -33,6 +34,8 @@ export default function ForgotPasswordScreen({
   onNavigateSignUp,
   onSuccess,
 }: ForgotPasswordScreenProps) {
+  // The system admin can replace the logo from the dashboard
+  const brandLogo = useBranding().logoUrl || HARAKA_LOGO_URL;
   const [email, setEmail] = useState(initialEmail);
   const [step, setStep] = useState<ResetViewStep>('request');
   const [loading, setLoading] = useState(false);
@@ -112,7 +115,7 @@ export default function ForgotPasswordScreen({
           {/* BEGIN: TopBar with Centered Brand Logo (Back button removed per request) */}
           <div className="flex flex-col items-center justify-center pt-8 pb-4 mb-6">
             <img
-              src={HARAKA_LOGO_URL}
+              src={brandLogo}
               alt="Haraka"
               className="h-12 w-auto object-contain mx-auto mb-2"
             />
