@@ -206,6 +206,7 @@ import {
 import { HarakaLogo } from './components/HarakaLogo';
 import { HARAKA_LOGO, HARAKA_MARK, WELCOME_HERO, WELCOME_HERO_TRANS } from './lib/images';
 import { useBranding } from './lib/branding';
+import { CATEGORY_IMAGES } from './lib/categoryImages';
 import SplashScreen from './components/SplashScreen';
 import WelcomeScreen from './components/WelcomeScreen';
 import OnboardingScreen from './components/OnboardingScreen';
@@ -5763,6 +5764,43 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     }
   };
 
+  /** Short label under a category photo */
+  const CATEGORY_SHORT_NAMES: Record<string, string> = {
+    vehicles: 'Vehicles',
+    property: 'Property',
+    phones: 'Phones',
+    electronics: 'Electronics',
+    furniture: 'Furniture',
+    fashion: 'Fashion',
+    beauty: 'Health & Beauty',
+    leisure: 'Sports & Leisure',
+    kids: 'Baby & Kids',
+    agriculture: 'Food & Farming',
+    pets: 'Pets',
+    commercial: 'Business',
+  };
+
+  /** A category as a photo tile with its name underneath (Home row and the Categories page) */
+  const renderCategoryTile = (cat: (typeof CATEGORIES)[number], sizeClass: string) => (
+    <button
+      key={cat.id}
+      type="button"
+      onClick={() => navigateTo({ type: 'category', slug: cat.slug })}
+      className="flex flex-col items-center gap-1.5 min-w-0 active:scale-95 transition-transform cursor-pointer"
+    >
+      <div className={`${sizeClass} rounded-2xl overflow-hidden bg-[#E8EDF2] flex items-center justify-center shadow-2xs`}>
+        {CATEGORY_IMAGES[cat.slug] ? (
+          <img src={CATEGORY_IMAGES[cat.slug]} alt="" className="w-full h-full object-cover" decoding="async" />
+        ) : (
+          getCategoryIcon(cat.slug)
+        )}
+      </div>
+      <span className="text-[11px] font-semibold text-slate-800 text-center leading-tight line-clamp-2 w-full">
+        {CATEGORY_SHORT_NAMES[cat.slug] || cat.name}
+      </span>
+    </button>
+  );
+
   const getServiceIcon = (iconName: string) => {
     switch (iconName) {
       case 'Wrench':
@@ -9999,49 +10037,16 @@ export default function RootLayout() {
                     </button>
                   </div>
 
-                  {/* 6 Category Icons in horizontal layout without browser scrollbar */}
+                  {/* One row of category photos; swipe sideways for the rest */}
                   <div
-                    className="flex gap-2 px-3 overflow-x-auto no-scrollbar pb-1"
+                    className="flex gap-2.5 px-4 overflow-x-auto no-scrollbar pb-1"
                     style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
                   >
-                    {CATEGORIES.slice(0, 6).map((cat) => {
-                      const getHomeCategoryName = (slug: string, fallback: string) => {
-                        switch (slug) {
-                          case 'phones':
-                            return 'Phone';
-                          case 'electronics':
-                            return 'Electronics';
-                          case 'furniture':
-                            return 'Furniture';
-                          case 'fashion':
-                            return 'Fashion';
-                          case 'vehicles':
-                            return 'Vehicles';
-                          case 'property':
-                            return 'Property';
-                          default:
-                            return fallback;
-                        }
-                      };
-
-                      return (
-                        <button
-                          key={cat.id}
-                          onClick={() => {
-                            // Clicking category icon opens the respective page for that product
-                            navigateTo({ type: 'category', slug: cat.slug });
-                          }}
-                          className="flex flex-col items-center min-w-[62px] active:scale-95 transition-transform"
-                        >
-                          <div className="w-[52px] h-[52px] rounded-2xl flex items-center justify-center mb-1.5 transition-all bg-[#E8EDF2] text-slate-800 hover:bg-[#DDE4EB]">
-                            {getCategoryIcon(cat.slug)}
-                          </div>
-                          <span className="text-[11px] font-semibold text-slate-700 text-center leading-tight">
-                            {getHomeCategoryName(cat.slug, cat.name)}
-                          </span>
-                        </button>
-                      );
-                    })}
+                    {CATEGORIES.map((cat) => (
+                      <div key={cat.id} className="w-[72px] shrink-0">
+                        {renderCategoryTile(cat, 'w-[72px] h-[64px]')}
+                      </div>
+                    ))}
                   </div>
                 </div>
 
@@ -10458,48 +10463,11 @@ export default function RootLayout() {
                 </p>
               </div>
 
-              {/* Category List in the classic card format with subcategories as how it was previously */}
-              <div className="flex flex-col gap-2.5">
-                {CATEGORIES.map((cat) => (
-                  <div
-                    key={cat.id}
-                    className="bg-white rounded-2xl border border-slate-100 overflow-hidden shadow-2xs hover:border-slate-200 transition-all"
-                  >
-                    <button
-                      onClick={() => {
-                        navigateTo({ type: 'category', slug: cat.slug });
-                      }}
-                      className="w-full p-3.5 flex items-center justify-between text-left hover:bg-slate-50 transition-colors"
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className="w-11 h-11 rounded-xl flex items-center justify-center bg-[#E8EDF2] text-slate-800 shrink-0">
-                          {getCategoryIcon(cat.slug)}
-                        </div>
-                        <div>
-                          <h3 className="text-xs font-extrabold text-slate-900">{cat.name}</h3>
-                          <p className="text-[11px] text-slate-400 font-medium mt-0.5">{listings.filter((l) => l.category === cat.id).length} active ads</p>
-                        </div>
-                      </div>
-                      <ChevronRight size={17} className="text-slate-400 shrink-0" />
-                    </button>
-                    {cat.subcategories && cat.subcategories.length > 0 && (
-                      <div className="px-3.5 pb-3 flex flex-wrap gap-1.5 bg-slate-50/50 pt-1">
-                        {cat.subcategories.map((sub, i) => (
-                          <span
-                            key={i}
-                            onClick={() => {
-                              setSearchQuery(sub);
-                              navigateTo({ type: 'category', slug: cat.slug });
-                            }}
-                            className="text-[10.5px] font-medium text-slate-600 bg-white border border-slate-200/80 px-2.5 py-0.5 rounded-lg cursor-pointer hover:border-orange-500 hover:text-orange-600 transition-colors"
-                          >
-                            {sub}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ))}
+              {/* All categories as photo tiles (same style as the row on Home) */}
+              <div className="bg-white p-3.5 rounded-3xl border border-slate-100 shadow-2xs">
+                <div className="grid grid-cols-4 gap-x-2.5 gap-y-3.5">
+                  {CATEGORIES.map((cat) => renderCategoryTile(cat, 'w-full h-[68px]'))}
+                </div>
               </div>
 
               {/* Services & Artisans Section (Matching Image 1) */}
