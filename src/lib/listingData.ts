@@ -237,16 +237,6 @@ export const CATEGORIES: Category[] = [
     subcategories: ['Fresh Farm Produce', 'Grains & Rice Bags', 'Farm Machinery & Irrigation', 'Poultry & Livestock'],
   },
   {
-    id: 'cat-commercial',
-    name: 'Business & Industry',
-    slug: 'commercial',
-    icon: 'Building2',
-    count: 4,
-    color: '#0F172A',
-    bgLight: '#E8EDF2',
-    subcategories: ['Office Stationery & Printers', 'Industrial Machinery', 'Restaurant Equipment', 'Safety & Security Gear'],
-  },
-  {
     id: 'cat-pets',
     name: 'Animals & Pets',
     slug: 'pets',

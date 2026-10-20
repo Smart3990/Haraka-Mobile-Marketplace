@@ -6060,8 +6060,6 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
         return <Wheat size={22} strokeWidth={2} className="text-slate-800" />;
       case 'pets':
         return <PawPrint size={22} strokeWidth={2} className="text-slate-800" />;
-      case 'commercial':
-        return <Building2 size={22} strokeWidth={2} className="text-slate-800" />;
       default:
         return <Package size={22} strokeWidth={2} className="text-slate-800" />;
     }
@@ -6082,7 +6080,6 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     kids: 'Baby & Kids',
     beauty: 'Health & Beauty',
     agriculture: 'Groceries',
-    commercial: 'Business',
     pets: 'Pets',
   };
 
