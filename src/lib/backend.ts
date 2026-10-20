@@ -1033,13 +1033,19 @@ export async function saveBanner(banner: Omit<BannerDoc, 'updatedAtISO'>): Promi
   return id;
 }
 
-/** Admin with banner access: deletes a banner they added. */
+/** Admin with banner access: moves a banner to a new place in the list (only its position is saved). */
+export async function setBannerOrder(id: string, order: number, builtIn: boolean): Promise<void> {
+  requirePermission('banners', 'You do not have permission to change banners.');
+  await setDoc(doc(db, 'banners', id), { id, order, ...(builtIn ? { builtIn: true } : {}), updatedAtISO: new Date().toISOString() }, { merge: true });
+}
+
+/** Admin with banner access: deletes a banner they added, or puts one of Haraka's banners back the way it was. */
 export async function deleteBanner(id: string): Promise<void> {
   requirePermission('banners', 'You do not have permission to change banners.');
   await deleteDoc(doc(db, 'banners', id));
 }
 
-/** Admin with banner access: hides (or shows again) one of the built-in Home banners. */
+/** Admin with banner access: deletes one of Haraka's starting banners (it can be restored). */
 export async function setBuiltInBannerHidden(id: string, hidden: boolean): Promise<void> {
   requirePermission('banners', 'You do not have permission to change banners.');
   await setDoc(doc(db, 'banners', id), { id, builtIn: true, hidden, updatedAtISO: new Date().toISOString() });

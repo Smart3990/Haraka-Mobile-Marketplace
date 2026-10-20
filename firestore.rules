@@ -154,7 +154,8 @@ service cloud.firestore {
         && request.resource.data.get('target', '') is string && request.resource.data.get('target', '').size() <= 80
         && request.resource.data.get('bg', '') is string && request.resource.data.get('bg', '').size() <= 120
         && request.resource.data.get('image', '') is string && request.resource.data.get('image', '').size() < 300000
-        && request.resource.data.get('audience', 'everyone') in ['everyone', 'buyer', 'seller', 'artisan'];
+        && request.resource.data.get('audience', 'everyone') in ['everyone', 'buyer', 'seller', 'artisan', 'applicant', 'admin']
+        && request.resource.data.get('order', 0) is number;
       allow delete: if hasPermission('banners');
     }
 

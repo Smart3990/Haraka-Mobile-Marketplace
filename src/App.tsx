@@ -17,6 +17,7 @@ import {
   ChevronRight,
   ChevronLeft,
   ChevronDown,
+  ChevronUp,
   Sparkles,
   Phone,
   MessageCircle,
@@ -157,6 +158,7 @@ import {
   saveBanner,
   deleteBanner,
   setBuiltInBannerHidden,
+  setBannerOrder,
   setAdminPermissions,
   hasAdminPermission,
   ADMIN_PERMISSIONS,
@@ -2888,7 +2890,9 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     e.currentTarget.value = ''; // picking the same file again still counts as a change
   };
   // ---------- System admin: app branding (app bar logo, Welcome page picture) ----------
-  // ---------- Home banners (the app's own plus the ones added in Platform Settings) ----------
+  // ---------- Home banners: one list, managed in Platform Settings ----------
+  // Haraka starts with the banners below; an admin can edit, reorder or delete any of them and add
+  // new ones. Edits are saved in /banners/{id} (same id as the banner they replace).
   interface HomeBanner {
     id: string;
     title: string;
@@ -2900,201 +2904,64 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     /** Picture beside the text: '' or undefined = Haraka illustration, 'none' = no picture */
     image?: string;
   }
-  type BannerGroup = 'buyer' | 'applicant' | 'seller' | 'artisan' | 'admin';
-  const BANNER_GROUP_LABELS: Record<BannerGroup, string> = {
-    buyer: 'Buyers',
-    applicant: 'Pending applicants',
-    seller: 'Sellers',
-    artisan: 'Artisans',
-    admin: 'Admins',
-  };
+  type BannerGroup = Exclude<BannerAudience, 'everyone'>;
   const bannerDocs = useBannerDocs();
 
-  /** The app's own banners for one kind of user. */
-  const builtInBanners = (group: BannerGroup): HomeBanner[] => {
-    let slides: HomeBanner[] = [];
+  /** Haraka's starting banners (texts with live numbers stay live until an admin edits them). */
+  const defaultBanners = (): Omit<BannerDoc, 'updatedAtISO'>[] => {
+    const pendingCount = adminApplicants.filter((a) => a.status === 'pending').length;
+    const appRejected = adminApplicants.find((a) => a.id === submittedSellerApplicantId)?.status === 'rejected';
+    const g = (a: string, b: string, c: string) => `linear-gradient(to right, ${a}, ${b}, ${c})`;
+    const list: Omit<BannerDoc, 'updatedAtISO' | 'order' | 'builtIn'>[] = [
+      // Buyers
+      { id: 'buyer-marketplace-3d', audience: 'buyer', title: 'Buy & Sell in a Flash', desc: 'Phones, cars, fashion, electronics & home goods with instant direct WhatsApp and calls.', btnText: 'Explore Deals', target: 'search', bg: g('#006C45', '#059669', '#10B981'), image: '' },
+      { id: 'buyer-partner', audience: 'buyer', title: 'Are you a Seller or an Artisan?', desc: 'Start selling your products or offering your trade services on Haraka app today!', btnText: 'Register Today', target: 'register-partner', bg: g('#FF5722', '#FF6D00', '#F57C00'), image: '' },
+      { id: 'buyer-verified-merchants', audience: 'buyer', title: 'Shop Verified Local Merchants', desc: 'Discover verified phones, laptops, and home essentials with verified Ghana Cards and direct pickup.', btnText: 'Shop Tech & Home', target: 'category:phones', bg: g('#1E293B', '#334155', '#0F172A'), image: '' },
+      { id: 'buyer-artisans', audience: 'buyer', title: 'Find Certified Artisans Near You', desc: 'Book trusted electricians, carpenters, plumbers & mechanics with verified Ghana Cards.', btnText: 'Explore Artisans', target: 'artisans', bg: g('#047857', '#059669', '#10B981'), image: '' },
+      { id: 'buyer-deals', audience: 'buyer', title: 'Top Deals in Greater Accra', desc: 'Discover verified phones, laptops, and home furniture directly from trusted local owners.', btnText: 'Browse Deals', target: 'category:phones', bg: g('#6D28D9', '#7C3AED', '#8B5CF6'), image: '' },
+      // Sellers
+      { id: 'seller-ads', audience: 'seller', title: 'Grow Your Store & Post More Ads', desc: 'Reach thousands of active buyers in Accra with zero commissions. Post deals now!', btnText: 'Post an Ad Now', target: 'post-ad', bg: g('#FF5722', '#FF6D00', '#F57C00'), image: '' },
+      { id: 'seller-inquiries', audience: 'seller', title: 'Fast Responses Earn More Deals', desc: 'Reply quickly to buyer inquiries & cash offers to boost your verified seller rating.', btnText: 'Check Messages', target: 'messages', bg: g('#1D4ED8', '#2563EB', '#3B82F6'), image: '' },
+      { id: 'seller-artisans', audience: 'seller', title: 'Hire Verified Local Artisans', desc: 'Need product assembly, furniture delivery, or device repair? Connect with local pros.', btnText: 'Explore Artisans', target: 'artisans', bg: g('#047857', '#059669', '#10B981'), image: '' },
+      // Artisans
+      { id: 'artisan-schedule', audience: 'artisan', title: 'Your Service & Booking Schedule', desc: 'Manage incoming diagnostic visits, neighborhood repairs, and daily trade jobs.', btnText: 'View My Bookings', target: 'my-bookings', bg: g('#EA580C', '#F97316', '#C2410C'), image: '' },
+      { id: 'artisan-portfolio', audience: 'artisan', title: 'Showcase Your Trade Projects', desc: 'Upload recent photos of your carpentry, wiring, or plumbing jobs to win top clients.', btnText: 'Update Portfolio', target: 'profile', bg: g('#0F766E', '#0D9488', '#14B8A6'), image: '' },
+      { id: 'artisan-trust', audience: 'artisan', title: 'Verified Ghana Card Badge', desc: 'Your verified status proves authenticity to homeowners, businesses & building contractors.', btnText: 'View Profile', target: 'profile', bg: g('#1E293B', '#334155', '#0F172A'), image: '' },
+      // Pending applicants
+      {
+        id: 'app-status',
+        audience: 'applicant',
+        title: appRejected ? 'Application Not Approved' : 'Seller Application Under Review',
+        desc: appRejected
+          ? 'See the reason from our team, update your details and reapply.'
+          : 'Your store registration and Ghana Card documents are currently being processed by admin.',
+        btnText: 'Check Application',
+        target: 'application',
+        bg: g('#EA580C', '#F97316', '#C2410C'),
+        image: '',
+      },
+      { id: 'app-artisans', audience: 'applicant', title: 'Find Certified Artisans Near You', desc: 'Book electricians, carpenters, plumbers & mechanics with verified Ghana Cards.', btnText: 'Explore Artisans', target: 'artisans', bg: g('#047857', '#059669', '#10B981'), image: '' },
+      { id: 'app-deals', audience: 'applicant', title: 'Top Deals in Greater Accra', desc: 'Browse verified electronics, gadgets, and home items at direct neighborhood prices.', btnText: "Shop Today's Deals", target: 'category:electronics', bg: g('#6D28D9', '#7C3AED', '#8B5CF6'), image: '' },
+      // Admins
+      { id: 'admin-queue', audience: 'admin', title: 'Partner Verification & Safety Queue', desc: `${pendingCount} applicant${pendingCount === 1 ? '' : 's'} awaiting Ghana Card review and approval.`, btnText: 'Review Applications', target: 'dashboard', bg: g('#0F172A', '#1E293B', '#334155'), image: '' },
+      { id: 'admin-integrity', audience: 'admin', title: 'Marketplace Trust & Safety Audit', desc: 'Audit live listings, prevent prohibited items, and ensure fair trade pricing across Accra.', btnText: 'Audit Live Ads', target: 'search', bg: g('#991B1B', '#B91C1C', '#DC2626'), image: '' },
+      { id: 'admin-trades', audience: 'admin', title: 'Directory & Trade License Standards', desc: `${ARTISANS_DIRECTORY.length} active verified master craftsmen currently serving Ghanaian households.`, btnText: 'Manage Directory', target: 'artisans', bg: g('#065F46', '#047857', '#059669'), image: '' },
+    ];
+    return list.map((b, i) => ({ ...b, builtIn: true, hidden: false, order: (i + 1) * 10 }));
+  };
 
-    if (group === 'seller') {
-      // Sellers see seller-focused growth, messaging & collaboration slides
-      slides = [
-        {
-          id: 'seller-ads',
-          title: 'Grow Your Store & Post More Ads',
-          desc: 'Reach thousands of active buyers in Accra with zero commissions. Post deals now!',
-          btnText: 'Post an Ad Now',
-          background: 'linear-gradient(to right, #FF5722, #FF6D00, #F57C00)',
-          action: () => navigateTo({ type: 'post-ad-step1' }),
-          image: WELCOME_HERO_TRANS,
-        },
-        {
-          id: 'seller-inquiries',
-          title: 'Fast Responses Earn More Deals',
-          desc: 'Reply quickly to buyer inquiries & cash offers to boost your verified seller rating.',
-          btnText: 'Check Messages',
-          background: 'linear-gradient(to right, #1D4ED8, #2563EB, #3B82F6)',
-          action: () => navigateTo({ type: 'tabs', tab: 'messages' }),
-          image: WELCOME_HERO_TRANS,
-        },
-        {
-          id: 'seller-artisans',
-          title: 'Hire Verified Local Artisans',
-          desc: 'Need product assembly, furniture delivery, or device repair? Connect with local pros.',
-          btnText: 'Explore Artisans',
-          background: 'linear-gradient(to right, #047857, #059669, #10B981)',
-          action: () => navigateTo({ type: 'artisans' }),
-          image: WELCOME_HERO_TRANS,
-        },
-      ];
-    } else if (group === 'artisan') {
-      // Artisans see schedule, portfolio & verification hub slides
-      slides = [
-        {
-          id: 'artisan-schedule',
-          title: 'Your Service & Booking Schedule',
-          desc: 'Manage incoming diagnostic visits, neighborhood repairs, and daily trade jobs.',
-          btnText: 'View My Bookings',
-          background: 'linear-gradient(to right, #EA580C, #F97316, #C2410C)',
-          action: () => navigateTo({ type: 'my-bookings' }),
-        },
-        {
-          id: 'artisan-portfolio',
-          title: 'Showcase Your Trade Projects',
-          desc: 'Upload recent photos of your carpentry, wiring, or plumbing jobs to win top clients.',
-          btnText: 'Update Portfolio',
-          background: 'linear-gradient(to right, #0F766E, #0D9488, #14B8A6)',
-          action: () => {
-            setActiveTab('profile');
-            navigateTo({ type: 'tabs', tab: 'profile' });
-          },
-        },
-        {
-          id: 'artisan-trust',
-          title: 'Verified Ghana Card Badge',
-          desc: 'Your verified status proves authenticity to homeowners, businesses & building contractors.',
-          btnText: 'View Profile',
-          background: 'linear-gradient(to right, #1E293B, #334155, #0F172A)',
-          action: () => {
-            setActiveTab('profile');
-            navigateTo({ type: 'tabs', tab: 'profile' });
-          },
-        },
-      ];
-    } else if (group === 'admin') {
-      // Admins see moderation, applicant queue & safety audit slides
-      const pendingCount = adminApplicants.filter((a) => a.status === 'pending').length;
-      slides = [
-        {
-          id: 'admin-queue',
-          title: 'Partner Verification & Safety Queue',
-          desc: `${pendingCount} applicant${pendingCount === 1 ? '' : 's'} awaiting Ghana Card review and approval.`,
-          btnText: 'Review Applications',
-          background: 'linear-gradient(to right, #0F172A, #1E293B, #334155)',
-          action: () => {
-            setActiveTab('dashboard');
-            navigateTo({ type: 'tabs', tab: 'dashboard' });
-          },
-        },
-        {
-          id: 'admin-integrity',
-          title: 'Marketplace Trust & Safety Audit',
-          desc: 'Audit live listings, prevent prohibited items, and ensure fair trade pricing across Accra.',
-          btnText: 'Audit Live Ads',
-          background: 'linear-gradient(to right, #991B1B, #B91C1C, #DC2626)',
-          action: () => navigateTo({ type: 'search' }),
-        },
-        {
-          id: 'admin-trades',
-          title: 'Directory & Trade License Standards',
-          desc: `${ARTISANS_DIRECTORY.length} active verified master craftsmen currently serving Ghanaian households.`,
-          btnText: 'Manage Directory',
-          background: 'linear-gradient(to right, #065F46, #047857, #059669)',
-          action: () => navigateTo({ type: 'artisans' }),
-        },
-      ];
-    } else if (group === 'applicant') {
-      // Pending applicant sees their status plus marketplace highlights
-      slides = [
-        {
-          id: 'app-status',
-          title:
-            adminApplicants.find((a) => a.id === submittedSellerApplicantId)?.status === 'rejected'
-              ? 'Application Not Approved'
-              : 'Seller Application Under Review',
-          desc:
-            adminApplicants.find((a) => a.id === submittedSellerApplicantId)?.status === 'rejected'
-              ? 'See the reason from our team, update your details and reapply.'
-              : 'Your store registration and Ghana Card documents are currently being processed by admin.',
-          btnText: 'Check Application',
-          background: 'linear-gradient(to right, #EA580C, #F97316, #C2410C)',
-          action: () => submittedSellerApplicantId && navigateTo({ type: 'pending-application', applicantId: submittedSellerApplicantId }),
-        },
-        {
-          id: 'app-artisans',
-          title: 'Find Certified Artisans Near You',
-          desc: 'Book electricians, carpenters, plumbers & mechanics with verified Ghana Cards.',
-          btnText: 'Explore Artisans',
-          background: 'linear-gradient(to right, #047857, #059669, #10B981)',
-          action: () => navigateTo({ type: 'artisans' }),
-        },
-        {
-          id: 'app-deals',
-          title: 'Top Deals in Greater Accra',
-          desc: 'Browse verified electronics, gadgets, and home items at direct neighborhood prices.',
-          btnText: 'Shop Today\'s Deals',
-          background: 'linear-gradient(to right, #6D28D9, #7C3AED, #8B5CF6)',
-          action: () => navigateTo({ type: 'category', slug: 'electronics' }),
-        },
-      ];
-    } else {
-      slides = [
-        {
-          id: 'buyer-marketplace-3d',
-          title: 'Buy & Sell in a Flash',
-          desc: 'Phones, cars, fashion, electronics & home goods with instant direct WhatsApp and calls.',
-          btnText: 'Explore Deals',
-          background: 'linear-gradient(to right, #006C45, #059669, #10B981)',
-          action: () => navigateTo({ type: 'search' }),
-          image: WELCOME_HERO_TRANS,
-        },
-        {
-          id: 'buyer-partner',
-          title: 'Are you a Seller or an Artisan?',
-          desc: 'Start selling your products or offering your trade services on Haraka app today!',
-          btnText: 'Register Today',
-          background: 'linear-gradient(to right, #FF5722, #FF6D00, #F57C00)',
-          action: () => navigateTo({ type: 'register-partner' }),
-          image: WELCOME_HERO_TRANS,
-        },
-        {
-          id: 'buyer-verified-merchants',
-          title: 'Shop Verified Local Merchants',
-          desc: 'Discover verified phones, laptops, and home essentials with verified Ghana Cards and direct pickup.',
-          btnText: 'Shop Tech & Home',
-          background: 'linear-gradient(to right, #1E293B, #334155, #0F172A)',
-          action: () => navigateTo({ type: 'category', slug: 'phones' }),
-          image: WELCOME_HERO_TRANS,
-        },
-        {
-          id: 'buyer-artisans',
-          title: 'Find Certified Artisans Near You',
-          desc: 'Book trusted electricians, carpenters, plumbers & mechanics with verified Ghana Cards.',
-          btnText: 'Explore Artisans',
-          background: 'linear-gradient(to right, #047857, #059669, #10B981)',
-          action: () => navigateTo({ type: 'artisans' }),
-          image: WELCOME_HERO_TRANS,
-        },
-        {
-          id: 'buyer-deals',
-          title: 'Top Deals in Greater Accra',
-          desc: 'Discover verified phones, laptops, and home furniture directly from trusted local owners.',
-          btnText: 'Browse Deals',
-          background: 'linear-gradient(to right, #6D28D9, #7C3AED, #8B5CF6)',
-          action: () => navigateTo({ type: 'category', slug: 'phones' }),
-          image: WELCOME_HERO_TRANS,
-        },
-      ];
-    }
-    return slides;
+  /** Every banner: Haraka's (with the admin's edits applied) and the ones added, in order. Deleted ones are marked hidden. */
+  const allBanners = (): Omit<BannerDoc, 'updatedAtISO'>[] => {
+    const byId = new Map(bannerDocs.map((d) => [d.id, d]));
+    const defaults = defaultBanners().map((b) => {
+      const saved = byId.get(b.id);
+      if (!saved) return b;
+      if (saved.hidden) return { ...b, hidden: true };
+      // An edited banner uses everything the admin saved
+      return saved.title ? { ...b, ...saved, builtIn: true } : { ...b, order: saved.order ?? b.order };
+    });
+    const added = bannerDocs.filter((d) => !d.builtIn && d.title);
+    return [...defaults, ...added].sort((x, y) => (x.order || 0) - (y.order || 0));
   };
 
   /** Where a banner's button goes */
@@ -3104,6 +2971,10 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     { value: 'post-ad', label: 'Post an ad' },
     { value: 'artisans', label: 'Artisans' },
     { value: 'messages', label: 'Messages' },
+    { value: 'my-bookings', label: 'My bookings' },
+    { value: 'profile', label: 'My profile' },
+    { value: 'application', label: 'My application' },
+    { value: 'dashboard', label: 'Admin dashboard' },
     ...CATEGORIES.map((c) => ({ value: `category:${c.slug}`, label: `Category: ${CATEGORY_SHORT_NAMES[c.slug] || c.name}` })),
   ];
   const bannerAction = (target: string) => () => {
@@ -3112,7 +2983,17 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     else if (target === 'artisans') navigateTo({ type: 'artisans' });
     else if (target === 'register-partner') navigateTo({ type: 'register-partner' });
     else if (target === 'messages') navigateTo({ type: 'tabs', tab: 'messages' });
-    else navigateTo({ type: 'search' });
+    else if (target === 'my-bookings') navigateTo({ type: 'my-bookings' });
+    else if (target === 'profile') {
+      setActiveTab('profile');
+      navigateTo({ type: 'tabs', tab: 'profile' });
+    } else if (target === 'dashboard') {
+      setActiveTab('dashboard');
+      navigateTo({ type: 'tabs', tab: 'dashboard' });
+    } else if (target === 'application') {
+      if (submittedSellerApplicantId) navigateTo({ type: 'pending-application', applicantId: submittedSellerApplicantId });
+      else navigateTo({ type: 'register-partner' });
+    } else navigateTo({ type: 'search' });
   };
   const bannerFromDoc = (d: Pick<BannerDoc, 'id' | 'title' | 'desc' | 'btnText' | 'bg' | 'image' | 'target'>): HomeBanner => ({
     id: d.id || 'draft',
@@ -3124,7 +3005,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     action: bannerAction(d.target),
   });
 
-  /** Banners on this person's Home: the admin's banners for them first, then the app's own (minus hidden ones). */
+  /** Banners on this person's Home: the ones for everyone plus the ones for their kind of account. */
   const homeBanners = (): HomeBanner[] => {
     const group: BannerGroup =
       currentUserRole === 'seller' || currentUserRole === 'artisan' || currentUserRole === 'admin'
@@ -3132,13 +3013,9 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
         : submittedSellerApplicantId
           ? 'applicant'
           : 'buyer';
-    const audience = group === 'applicant' ? 'buyer' : group;
-    const hiddenIds = new Set(bannerDocs.filter((d) => d.builtIn && d.hidden).map((d) => d.id));
-    const added = bannerDocs
-      .filter((d) => !d.builtIn && !d.hidden && d.title && (d.audience === 'everyone' || d.audience === audience))
-      .sort((x, y) => (x.order || 0) - (y.order || 0))
+    return allBanners()
+      .filter((b) => !b.hidden && (b.audience === 'everyone' || b.audience === group))
       .map(bannerFromDoc);
-    return [...added, ...builtInBanners(group).filter((b) => !hiddenIds.has(b.id))];
   };
 
   /** One banner, drawn exactly like the Home carousel (also used for the editor preview). */
@@ -3285,13 +3162,16 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     { value: 'buyer', label: 'Buyers' },
     { value: 'seller', label: 'Sellers' },
     { value: 'artisan', label: 'Artisans' },
+    { value: 'applicant', label: 'Pending applicants' },
+    { value: 'admin', label: 'Admins' },
   ];
   const [bannerDraft, setBannerDraft] = useState<BannerDraft | null>(null);
   const [savingBanner, setSavingBanner] = useState('');
   const [confirmDeleteBanner, setConfirmDeleteBanner] = useState('');
   const bannerInputRef = useRef<HTMLInputElement>(null);
 
-  const newBannerDraft = (): BannerDraft => ({
+  /** A new banner starts at the top of the list. */
+  const newBannerDraft = (existing: BannerDraft[]): BannerDraft => ({
     id: '',
     title: '',
     desc: '',
@@ -3300,7 +3180,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     bg: BANNER_GRADIENTS[0],
     image: '',
     audience: 'everyone',
-    order: 0,
+    order: Math.min(10, ...existing.map((b) => b.order || 0)) - 10,
     hidden: false,
   });
 
@@ -3345,7 +3225,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     }
     setSavingBanner('draft');
     try {
-      await saveBanner({ ...draft, order: draft.order || Date.now() });
+      await saveBanner(draft);
       setBannerDraft(null);
       showToast(draft.id ? 'Banner updated for everyone' : 'Banner added to Home');
     } catch (err) {
@@ -3371,11 +3251,29 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     }
   };
 
+  const [bannerFilter, setBannerFilter] = useState<BannerAudience | 'all'>('all');
+
+  /** Swaps a banner with its neighbour in the list being shown (only the order is saved). */
+  const moveBanner = (list: BannerDraft[], index: number, step: -1 | 1) => {
+    const a = list[index];
+    const b = list[index + step];
+    if (!a || !b) return;
+    // Equal positions (shouldn't happen) still end up in the asked order
+    const [orderA, orderB] = a.order === b.order ? [b.order + step, a.order] : [b.order, a.order];
+    runBannerChange(
+      a.id,
+      () => Promise.all([setBannerOrder(a.id, orderA, Boolean(a.builtIn)), setBannerOrder(b.id, orderB, Boolean(b.builtIn))]),
+      'Banner order saved'
+    );
+  };
+
   const renderBannerManagerCard = () => {
     if (!can('banners')) return null;
-    const added = bannerDocs.filter((d) => !d.builtIn && d.title).sort((x, y) => (x.order || 0) - (y.order || 0));
-    const hiddenIds = new Set(bannerDocs.filter((d) => d.builtIn && d.hidden).map((d) => d.id));
+    const everything = allBanners();
+    const shown = everything.filter((b) => !b.hidden && (bannerFilter === 'all' || b.audience === bannerFilter));
+    const deleted = everything.filter((b) => b.hidden);
     const smallButton = 'py-1.5 px-2.5 rounded-lg text-[11px] font-bold cursor-pointer disabled:opacity-50';
+    const audienceLabel = (a: BannerAudience) => BANNER_AUDIENCES.find((x) => x.value === a)?.label || 'Everyone';
     const thumb = (background: string, image?: string) => (
       <div className="w-16 h-11 rounded-lg shrink-0 overflow-hidden flex items-center justify-end pr-1" style={{ background }}>
         {image !== 'none' && <img src={image || WELCOME_HERO_TRANS} alt="" className="h-9 w-9 object-contain" />}
@@ -3386,11 +3284,11 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
         <div className="flex items-start justify-between gap-2">
           <div>
             <span className="text-xs font-black text-slate-900 block">Home Banners</span>
-            <span className="text-[11px] text-slate-500">The sliding banners at the top of Home. Your banners show first.</span>
+            <span className="text-[11px] text-slate-500">The sliding banners at the top of Home, in the order they show.</span>
           </div>
           <button
             type="button"
-            onClick={() => setBannerDraft(newBannerDraft())}
+            onClick={() => setBannerDraft(newBannerDraft(everything))}
             className="shrink-0 py-1.5 px-3 rounded-lg bg-[#FF6A00] text-white text-[11px] font-bold cursor-pointer flex items-center gap-1"
           >
             <Plus size={13} />
@@ -3398,20 +3296,32 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
           </button>
         </div>
 
+        {/* Show the banners one kind of user sees */}
+        <div className="flex gap-1.5 overflow-x-auto no-scrollbar -mx-0.5 px-0.5">
+          {[{ value: 'all' as const, label: 'All' }, ...BANNER_AUDIENCES].map((f) => (
+            <button
+              key={f.value}
+              type="button"
+              onClick={() => setBannerFilter(f.value)}
+              className={`shrink-0 px-3 py-1.5 rounded-full text-[11px] font-bold border cursor-pointer ${
+                bannerFilter === f.value ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-600 border-slate-200'
+              }`}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+
         <div className="space-y-2">
-          <p className="text-[11px] font-black text-slate-800">Your banners ({added.length})</p>
-          {added.length === 0 && <p className="text-[11px] text-slate-500">No banners added yet. Tap "Add Banner" to create one.</p>}
-          {added.map((b) => {
+          {shown.length === 0 && <p className="text-[11px] text-slate-500">No banners here. Tap "Add Banner" to create one.</p>}
+          {shown.map((b, i) => {
             const busy = savingBanner === b.id;
             return (
-              <div key={b.id} className={`flex items-center gap-2.5 p-2 rounded-xl border border-slate-100 ${b.hidden ? 'opacity-60' : ''}`}>
+              <div key={b.id} className="flex items-center gap-2.5 p-2 rounded-xl border border-slate-100">
                 {thumb(bannerBackground(b.bg), b.image)}
                 <div className="flex-1 min-w-0">
                   <p className="text-xs font-bold text-slate-900 truncate">{b.title}</p>
-                  <p className="text-[11px] text-slate-500 truncate">
-                    {BANNER_AUDIENCES.find((a) => a.value === b.audience)?.label || 'Everyone'}
-                    {b.hidden ? ' • hidden' : ''}
-                  </p>
+                  <p className="text-[11px] text-slate-500 truncate">Shown to: {audienceLabel(b.audience)}</p>
                   <div className="flex flex-wrap gap-1.5 mt-1">
                     <button type="button" disabled={busy} onClick={() => setBannerDraft({ ...b })} className={`${smallButton} bg-slate-900 text-white`}>
                       Edit
@@ -3420,18 +3330,8 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
                       type="button"
                       disabled={busy}
                       onClick={() =>
-                        runBannerChange(b.id, () => saveBanner({ ...b, hidden: !b.hidden }), b.hidden ? 'Banner is showing again' : 'Banner hidden')
-                      }
-                      className={`${smallButton} border border-slate-200 text-slate-600`}
-                    >
-                      {b.hidden ? 'Show' : 'Hide'}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() =>
                         confirmDeleteBanner === b.id
-                          ? runBannerChange(b.id, () => deleteBanner(b.id), 'Banner deleted')
+                          ? runBannerChange(b.id, () => (b.builtIn ? setBuiltInBannerHidden(b.id, true) : deleteBanner(b.id)), 'Banner deleted')
                           : setConfirmDeleteBanner(b.id)
                       }
                       className={`${smallButton} ${confirmDeleteBanner === b.id ? 'bg-red-600 text-white' : 'text-red-600 hover:bg-red-50'}`}
@@ -3440,39 +3340,50 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
                     </button>
                   </div>
                 </div>
+                <div className="flex flex-col gap-1 shrink-0">
+                  <button
+                    type="button"
+                    aria-label={`Move "${b.title}" up`}
+                    disabled={i === 0 || Boolean(savingBanner)}
+                    onClick={() => moveBanner(shown, i, -1)}
+                    className="w-7 h-7 rounded-lg border border-slate-200 flex items-center justify-center text-slate-600 cursor-pointer disabled:opacity-30"
+                  >
+                    <ChevronUp size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Move "${b.title}" down`}
+                    disabled={i === shown.length - 1 || Boolean(savingBanner)}
+                    onClick={() => moveBanner(shown, i, 1)}
+                    className="w-7 h-7 rounded-lg border border-slate-200 flex items-center justify-center text-slate-600 cursor-pointer disabled:opacity-30"
+                  >
+                    <ChevronDown size={14} />
+                  </button>
+                </div>
               </div>
             );
           })}
         </div>
 
-        <div className="space-y-2 pt-2 border-t border-slate-100">
-          <p className="text-[11px] font-black text-slate-800">Haraka's own banners</p>
-          <p className="text-[11px] text-slate-500 -mt-1">Hide the ones you don't want on Home. You can show them again any time.</p>
-          {(Object.keys(BANNER_GROUP_LABELS) as BannerGroup[]).map((group) => (
-            <div key={group} className="space-y-1.5">
-              <p className="text-[10.5px] font-bold text-slate-400 uppercase tracking-wide">{BANNER_GROUP_LABELS[group]}</p>
-              {builtInBanners(group).map((b) => {
-                const hidden = hiddenIds.has(b.id);
-                return (
-                  <div key={b.id} className={`flex items-center gap-2.5 ${hidden ? 'opacity-60' : ''}`}>
-                    {thumb(b.background, b.image)}
-                    <p className="flex-1 min-w-0 text-[11px] font-bold text-slate-800 leading-snug">{b.title}</p>
-                    <button
-                      type="button"
-                      disabled={savingBanner === b.id}
-                      onClick={() =>
-                        runBannerChange(b.id, () => setBuiltInBannerHidden(b.id, !hidden), hidden ? 'Banner is showing again' : 'Banner hidden')
-                      }
-                      className={`${smallButton} shrink-0 ${hidden ? 'bg-slate-900 text-white' : 'border border-slate-200 text-slate-600'}`}
-                    >
-                      {savingBanner === b.id ? 'Saving…' : hidden ? 'Show' : 'Hide'}
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          ))}
-        </div>
+        {deleted.length > 0 && (
+          <div className="space-y-1.5 pt-2 border-t border-slate-100">
+            <p className="text-[11px] font-black text-slate-800">Deleted banners</p>
+            {deleted.map((b) => (
+              <div key={b.id} className="flex items-center gap-2.5 opacity-70">
+                {thumb(bannerBackground(b.bg), b.image)}
+                <p className="flex-1 min-w-0 text-[11px] font-bold text-slate-700 leading-snug truncate">{b.title}</p>
+                <button
+                  type="button"
+                  disabled={savingBanner === b.id}
+                  onClick={() => runBannerChange(b.id, () => deleteBanner(b.id), 'Banner restored')}
+                  className={`${smallButton} shrink-0 border border-slate-200 text-slate-600`}
+                >
+                  {savingBanner === b.id ? 'Saving…' : 'Restore'}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     );
   };

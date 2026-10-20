@@ -1,6 +1,6 @@
 /**
  * Home banners managed from Platform Settings (/banners/{id}): banners an admin added, and
- * built-in banners an admin hid. Everyone can read them; only admins with banner access change
+ * Haraka's starting banners an admin edited, moved or deleted. Everyone can read them; only admins with banner access change
  * them. The last list is remembered on the phone so banners show instantly on the next launch.
  */
 import { useSyncExternalStore } from 'react';
@@ -8,17 +8,17 @@ import { collection, onSnapshot } from 'firebase/firestore';
 import { db } from './firebase';
 
 /** Who sees a banner on Home */
-export type BannerAudience = 'everyone' | 'buyer' | 'seller' | 'artisan';
+export type BannerAudience = 'everyone' | 'buyer' | 'seller' | 'artisan' | 'applicant' | 'admin';
 
 export interface BannerDoc {
   id: string;
-  /** Set on records that only hide or show one of the app's own banners */
+  /** One of Haraka's starting banners (edited, moved or deleted by an admin) */
   builtIn?: boolean;
   hidden?: boolean;
   title: string;
   desc: string;
   btnText: string;
-  /** Where the button goes: 'search', 'post-ad', 'artisans', 'register-partner', 'messages' or 'category:<slug>' */
+  /** Where the button goes, e.g. 'search', 'post-ad', 'artisans', 'profile', 'dashboard' or 'category:<slug>' */
   target: string;
   /** A solid colour (#RRGGBB) or a left-to-right gradient of 2-3 colours */
   bg: string;
