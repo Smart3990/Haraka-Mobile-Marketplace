@@ -100,6 +100,18 @@ service cloud.firestore {
         && request.resource.data.get('welcomeImageUrl', '') is string && request.resource.data.get('welcomeImageUrl', '').size() < 600000;
     }
 
+    // Marketplace categories changed or added by the system admin; everyone reads them
+    match /categories/{slug} {
+      allow get, list: if true;
+      allow create, update: if isSystemAdmin() && isValidId(slug)
+        && request.resource.data.slug == slug
+        && request.resource.data.keys().hasOnly(['slug', 'name', 'image', 'subcategories', 'custom', 'order', 'updatedAtISO'])
+        && request.resource.data.get('image', '') is string && request.resource.data.get('image', '').size() < 200000
+        && request.resource.data.get('name', 'x') is string && request.resource.data.get('name', 'x').size() <= 40
+        && request.resource.data.get('subcategories', []) is list && request.resource.data.get('subcategories', []).size() <= 20;
+      allow delete: if isSystemAdmin();
+    }
+
     // Why something failed on a user's phone (error text and device type), read only by admins
     match /clientErrors/{errorId} {
       allow create: if isSignedIn()

@@ -149,6 +149,9 @@ import {
   requestVerification,
   reportClientError,
   saveBrandingImage,
+  setCategoryImage,
+  addCategory,
+  removeCategory,
   deleteListing as deleteRemoteListing,
   fileToPhotoDataUrl,
   getPlatformStats,
@@ -207,6 +210,7 @@ import { HarakaLogo } from './components/HarakaLogo';
 import { HARAKA_LOGO, HARAKA_MARK, WELCOME_HERO, WELCOME_HERO_TRANS } from './lib/images';
 import { useBranding } from './lib/branding';
 import { CATEGORY_IMAGES } from './lib/categoryImages';
+import { categoryDocs, useCategories, type AppCategory } from './lib/categories';
 import SplashScreen from './components/SplashScreen';
 import WelcomeScreen from './components/WelcomeScreen';
 import OnboardingScreen from './components/OnboardingScreen';
@@ -653,6 +657,8 @@ export interface NativeBridge {
 }
 
 export default function App({ native = false, nativeBridge }: { native?: boolean; nativeBridge?: NativeBridge } = {}) {
+  // Built-in categories plus photo changes and new categories from the system admin (live)
+  const CATEGORIES = useCategories();
   // View mode (inside the mobile app only the full-screen 'frameless' view is used)
   const [viewMode, setViewMode] = useState<'preview' | 'frameless' | 'split' | 'code'>(native ? 'frameless' : 'split');
 
@@ -2921,6 +2927,221 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     );
   };
 
+  // ---------- System admin: category photos and new categories ----------
+  const categoryInputRef = useRef<HTMLInputElement>(null);
+  const categoryPickRef = useRef<string>(''); // a category's slug, or '__new__' for the new-category form
+  const [savingCategory, setSavingCategory] = useState('');
+  const [newCategory, setNewCategory] = useState<{ open: boolean; name: string; subs: string; image: string }>({
+    open: false,
+    name: '',
+    subs: '',
+    image: '',
+  });
+  const [confirmRemoveCategory, setConfirmRemoveCategory] = useState('');
+
+  const pickCategoryImage = (target: string) => {
+    categoryPickRef.current = target;
+    categoryInputRef.current?.click();
+  };
+
+  const handleCategoryImage = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    const target = categoryPickRef.current;
+    if (!file || !target) return;
+    if (!file.type.startsWith('image/')) {
+      showToast('⚠️ Please choose a photo.');
+      return;
+    }
+    const image = await readPickedFile(file);
+    if (target === '__new__') {
+      setNewCategory((c) => ({ ...c, image }));
+      return;
+    }
+    setSavingCategory(target);
+    try {
+      await setCategoryImage(target, image);
+      showToast('Category photo updated for everyone');
+    } catch (err) {
+      console.warn('Could not save category photo', err);
+      showToast('⚠️ Could not save the photo. Try again.');
+    } finally {
+      setSavingCategory('');
+    }
+  };
+
+  const resetCategoryImage = async (slug: string) => {
+    setSavingCategory(slug);
+    try {
+      await setCategoryImage(slug, '');
+      showToast('Back to the original photo');
+    } catch {
+      showToast('⚠️ Could not save. Try again.');
+    } finally {
+      setSavingCategory('');
+    }
+  };
+
+  const saveNewCategory = async () => {
+    if (savingCategory) return;
+    if (newCategory.name.trim().length < 2) {
+      showToast('⚠️ Enter a category name.');
+      return;
+    }
+    if (CATEGORIES.some((c) => c.name.toLowerCase() === newCategory.name.trim().toLowerCase())) {
+      showToast('⚠️ A category with this name already exists.');
+      return;
+    }
+    setSavingCategory('__new__');
+    try {
+      await addCategory(newCategory.name, newCategory.subs.split(','), newCategory.image, CATEGORIES.map((c) => c.slug));
+      setNewCategory({ open: false, name: '', subs: '', image: '' });
+      showToast('Category added for everyone');
+    } catch (err) {
+      console.warn('Could not add category', err);
+      showToast(`⚠️ ${err instanceof Error && !/firebase|firestore/i.test(err.message) ? err.message : 'Could not add the category. Try again.'}`);
+    } finally {
+      setSavingCategory('');
+    }
+  };
+
+  const deleteCustomCategory = async (slug: string) => {
+    // Tap twice to remove, so a category is never removed by accident
+    if (confirmRemoveCategory !== slug) {
+      setConfirmRemoveCategory(slug);
+      return;
+    }
+    setConfirmRemoveCategory('');
+    setSavingCategory(slug);
+    try {
+      await removeCategory(slug);
+      showToast('Category removed');
+    } catch {
+      showToast('⚠️ Could not remove the category. Try again.');
+    } finally {
+      setSavingCategory('');
+    }
+  };
+
+  const renderCategoryManagerCard = () => {
+    if (!adminAccess.isSystemAdmin) return null;
+    const replaced = new Set(categoryDocs().filter((d) => d.image).map((d) => d.slug));
+    const smallButton = 'py-1.5 px-2.5 rounded-lg text-[11px] font-bold cursor-pointer disabled:opacity-50';
+    return (
+      <div className="bg-white rounded-2xl p-3.5 border border-slate-200/80 shadow-2xs space-y-3">
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <span className="text-xs font-black text-slate-900 block">Categories</span>
+            <span className="text-[11px] text-slate-500">System admin only. Change photos or add categories for everyone.</span>
+          </div>
+          {!newCategory.open && (
+            <button
+              type="button"
+              onClick={() => setNewCategory({ open: true, name: '', subs: '', image: '' })}
+              className={`${smallButton} bg-[#1FA971] text-white shrink-0 flex items-center gap-1`}
+            >
+              <Plus size={13} />
+              <span>Add</span>
+            </button>
+          )}
+        </div>
+
+        {newCategory.open && (
+          <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 space-y-2.5">
+            <p className="text-xs font-bold text-slate-900">New category</p>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => pickCategoryImage('__new__')}
+                aria-label="Choose category photo"
+                className="w-16 h-16 rounded-[8px] overflow-hidden border-2 border-dashed border-slate-300 bg-white flex items-center justify-center text-slate-400 shrink-0 cursor-pointer"
+              >
+                {newCategory.image ? <img src={newCategory.image} alt="" className="w-full h-full object-cover" /> : <Camera size={18} />}
+              </button>
+              <div className="flex-1 min-w-0 space-y-2">
+                <input
+                  id="new-category-name"
+                  value={newCategory.name}
+                  maxLength={40}
+                  onChange={(e) => setNewCategory((c) => ({ ...c, name: e.target.value }))}
+                  placeholder="Category name, e.g. Books"
+                  className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm text-slate-900 outline-none focus:border-[#1FA971]"
+                />
+                <input
+                  id="new-category-subs"
+                  value={newCategory.subs}
+                  onChange={(e) => setNewCategory((c) => ({ ...c, subs: e.target.value }))}
+                  placeholder="Subcategories, separated by commas (optional)"
+                  className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-900 outline-none focus:border-[#1FA971]"
+                />
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setNewCategory({ open: false, name: '', subs: '', image: '' })}
+                className="flex-1 py-2 rounded-lg border border-slate-200 bg-white text-slate-600 text-xs font-bold cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={saveNewCategory}
+                disabled={savingCategory === '__new__'}
+                className="flex-1 py-2 rounded-lg bg-slate-900 text-white text-xs font-bold cursor-pointer disabled:opacity-60"
+              >
+                {savingCategory === '__new__' ? 'Adding…' : 'Add Category'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="divide-y divide-slate-100">
+          {CATEGORIES.map((cat) => (
+            <div key={cat.slug} className="flex items-center gap-3 py-2">
+              <div className="w-11 h-11 rounded-[8px] overflow-hidden bg-[#E8EDF2] flex items-center justify-center shrink-0">
+                {categoryImage(cat) ? <img src={categoryImage(cat)} alt="" className="w-full h-full object-cover" /> : getCategoryIcon(cat.slug)}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-bold text-slate-900 truncate">{CATEGORY_SHORT_NAMES[cat.slug] || cat.name}</p>
+                <p className="text-[10.5px] text-slate-500">{cat.custom ? 'Added by you' : replaced.has(cat.slug) ? 'Your photo' : 'Original photo'}</p>
+              </div>
+              <div className="flex gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  disabled={Boolean(savingCategory)}
+                  onClick={() => pickCategoryImage(cat.slug)}
+                  className={`${smallButton} bg-slate-900 text-white`}
+                >
+                  {savingCategory === cat.slug ? '…' : 'Photo'}
+                </button>
+                {!cat.custom && replaced.has(cat.slug) && (
+                  <button
+                    type="button"
+                    disabled={Boolean(savingCategory)}
+                    onClick={() => resetCategoryImage(cat.slug)}
+                    className={`${smallButton} border border-slate-200 text-slate-600`}
+                  >
+                    Original
+                  </button>
+                )}
+                {cat.custom && (
+                  <button
+                    type="button"
+                    disabled={Boolean(savingCategory)}
+                    onClick={() => deleteCustomCategory(cat.slug)}
+                    className={`${smallButton} border ${confirmRemoveCategory === cat.slug ? 'border-red-500 bg-red-50 text-red-600' : 'border-slate-200 text-slate-600'}`}
+                  >
+                    {confirmRemoveCategory === cat.slug ? 'Tap again' : 'Remove'}
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
   // ---------- System admin: correct any seller's ad from the ad page ----------
   const [adminEditAd, setAdminEditAd] = useState<{
     id: string;
@@ -3274,6 +3495,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
         <input type="file" ref={storePhysicalInputRef} accept="image/*" className="hidden" onClick={clearPicked} onChange={handleStorePhysicalChange} />
         <input type="file" ref={verifyIdInputRef} accept="image/*" className="hidden" onClick={clearPicked} onChange={handleVerifyIdPhoto} />
         <input type="file" ref={brandingInputRef} accept="image/*" className="hidden" onClick={clearPicked} onChange={handleBrandingImage} />
+        <input type="file" ref={categoryInputRef} accept="image/*" className="hidden" onClick={clearPicked} onChange={handleCategoryImage} />
     </div>
   );
 
@@ -5760,7 +5982,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
       case 'commercial':
         return <Building2 size={22} strokeWidth={2} className="text-slate-800" />;
       default:
-        return <Car size={22} strokeWidth={2} className="text-slate-800" />;
+        return <Package size={22} strokeWidth={2} className="text-slate-800" />;
     }
   };
 
@@ -5781,16 +6003,19 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
   };
 
   /** A category as a photo tile with its name underneath (Home row and the Categories page) */
-  const renderCategoryTile = (cat: (typeof CATEGORIES)[number], sizeClass: string) => (
+  /** The category's photo: the admin's one, else the built-in one */
+  const categoryImage = (cat: AppCategory) => (cat.image ? thumbnailUrl(cat.image, 240) : CATEGORY_IMAGES[cat.slug]) || '';
+
+  const renderCategoryTile = (cat: AppCategory, sizeClass: string) => (
     <button
       key={cat.id}
       type="button"
       onClick={() => navigateTo({ type: 'category', slug: cat.slug })}
       className="flex flex-col items-center gap-1.5 min-w-0 active:scale-95 transition-transform cursor-pointer"
     >
-      <div className={`${sizeClass} rounded-2xl overflow-hidden bg-[#E8EDF2] flex items-center justify-center shadow-2xs`}>
-        {CATEGORY_IMAGES[cat.slug] ? (
-          <img src={CATEGORY_IMAGES[cat.slug]} alt="" className="w-full h-full object-cover" decoding="async" />
+      <div className={`${sizeClass} rounded-[8px] overflow-hidden bg-[#E8EDF2] flex items-center justify-center shadow-2xs`}>
+        {categoryImage(cat) ? (
+          <img src={categoryImage(cat)} alt="" className="w-full h-full object-cover" decoding="async" />
         ) : (
           getCategoryIcon(cat.slug)
         )}
@@ -9409,6 +9634,7 @@ export default function RootLayout() {
                 </div>
 
                 {renderBrandingCard()}
+                {renderCategoryManagerCard()}
 
                 {/* Applications Section - Stacked Header & Below Statuses Bar */}
                 <div className="space-y-2.5">
@@ -12663,8 +12889,12 @@ export default function RootLayout() {
                     <ArrowLeft size={20} />
                   </button>
                   <div className="flex items-center gap-2">
-                    <div className="w-9 h-9 rounded-xl flex items-center justify-center bg-[#E8EDF2] text-slate-800">
-                      {getCategoryIcon(currentCategory.slug)}
+                    <div className="w-9 h-9 rounded-[8px] overflow-hidden flex items-center justify-center bg-[#E8EDF2] text-slate-800">
+                      {categoryImage(currentCategory) ? (
+                        <img src={categoryImage(currentCategory)} alt="" className="w-full h-full object-cover" />
+                      ) : (
+                        getCategoryIcon(currentCategory.slug)
+                      )}
                     </div>
                     <div>
                       <h1 className="text-base font-black text-slate-900 leading-tight">
@@ -14478,8 +14708,8 @@ export default function RootLayout() {
                           onClick={() => setCategoryFilter(c.slug)}
                           className="bg-white p-3 rounded-2xl border border-slate-100 flex items-center gap-2.5 cursor-pointer hover:shadow-xs hover:border-slate-200 transition-all active:scale-98"
                         >
-                          <div className="w-8 h-8 rounded-xl bg-slate-100 flex items-center justify-center text-slate-800 shrink-0">
-                            {getCategoryIcon(c.slug)}
+                          <div className="w-8 h-8 rounded-[8px] overflow-hidden bg-slate-100 flex items-center justify-center text-slate-800 shrink-0">
+                            {categoryImage(c) ? <img src={categoryImage(c)} alt="" className="w-full h-full object-cover" /> : getCategoryIcon(c.slug)}
                           </div>
                           <div className="min-w-0">
                             <h4 className="text-xs font-bold text-slate-900 truncate">{c.name}</h4>

@@ -867,6 +867,46 @@ export async function saveBrandingImage(field: 'logoUrl' | 'welcomeImageUrl', im
   );
 }
 
+function requireSystemAdmin(): string {
+  const email = auth.currentUser?.email?.toLowerCase();
+  if (email !== SYSTEM_ADMIN_EMAIL) throw new Error('Only the system admin can change categories.');
+  return email;
+}
+
+/** System admin: new photo for a category (pass '' to go back to the original photo). */
+export async function setCategoryImage(slug: string, image: string): Promise<void> {
+  requireSystemAdmin();
+  const url = image ? (await storeMedia(image, 'categories', 60_000)) || '' : '';
+  await setDoc(doc(db, 'categories', slug), { slug, image: url, updatedAtISO: new Date().toISOString() }, { merge: true });
+}
+
+/** System admin: adds a new category for everyone. Returns its slug. */
+export async function addCategory(name: string, subcategories: string[], image: string, takenSlugs: string[]): Promise<string> {
+  requireSystemAdmin();
+  const clean = name.trim().replace(/\s+/g, ' ').slice(0, 40);
+  if (clean.length < 2) throw new Error('Enter a category name.');
+  const base = clean.toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'category';
+  let slug = base;
+  for (let n = 2; takenSlugs.includes(slug); n++) slug = `${base}-${n}`;
+  const url = image ? (await storeMedia(image, 'categories', 60_000)) || '' : '';
+  await setDoc(doc(db, 'categories', slug), {
+    slug,
+    name: clean,
+    image: url,
+    subcategories: subcategories.map((s) => s.trim()).filter(Boolean).slice(0, 20),
+    custom: true,
+    order: Date.now(),
+    updatedAtISO: new Date().toISOString(),
+  });
+  return slug;
+}
+
+/** System admin: removes a category they added (built-in categories can't be removed). */
+export async function removeCategory(slug: string): Promise<void> {
+  requireSystemAdmin();
+  await deleteDoc(doc(db, 'categories', slug));
+}
+
 /**
  * Records why something failed on a user's phone (error text and device type only), so problems
  * that can't be reproduced elsewhere can be fixed. Admins read these in the database.
