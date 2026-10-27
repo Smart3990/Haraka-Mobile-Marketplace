@@ -4876,6 +4876,16 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     profileVoiceStopRef.current = playVoice(url, { onEnd: done, onError: done });
   };
 
+  /** Admin views: an artisan's services and projects as they are now (their live page), else as applied */
+  const adminServicesOf = (applicant: { uid?: string; id: string; servicesAndPricing?: { title: string; desc: string; price: string }[] }) => {
+    const live = artisanProfiles.find((a) => a.id === (applicant.uid || applicant.id))?.servicesAndPricing || [];
+    return live.length ? live : applicant.servicesAndPricing || [];
+  };
+  const adminProjectsOf = (applicant: { uid?: string; id: string; verifiedWorkPortfolio?: { title: string; tag: string; sub: string; img: string }[] }) => {
+    const live = artisanProfiles.find((a) => a.id === (applicant.uid || applicant.id))?.verifiedWorkPortfolio || [];
+    return live.length ? live : applicant.verifiedWorkPortfolio || [];
+  };
+
   // Voice intro on artisan cards and pages: one plays at a time
   const [introPlayingId, setIntroPlayingId] = useState('');
   const introStopRef = useRef<(() => void) | null>(null);
@@ -10473,23 +10483,25 @@ export default function RootLayout() {
                   {/* Services & Pricing Section (All Black Icons) */}
                   <div className="space-y-2 pt-2 border-t border-slate-200/60">
                     <div className="flex items-center justify-between">
-                      <span className="text-slate-900 font-extrabold text-xs">Services &amp; Pricing</span>
-                      <span className="text-[11px] text-slate-400 font-medium">Standard rates</span>
+                      <span className="text-slate-900 font-extrabold text-xs">
+                        Services &amp; Pricing <span className="text-slate-400 font-normal">({adminServicesOf(applicant).length})</span>
+                      </span>
                     </div>
 
+                    {adminServicesOf(applicant).length === 0 && <p className="text-[11px] text-slate-400">No services added yet.</p>}
                     <div className="space-y-2">
-                      {(applicant.servicesAndPricing || []).map((srv, idx) => (
+                      {adminServicesOf(applicant).map((srv, idx) => (
                         <div
                           key={idx}
                           className="bg-white rounded-xl p-2.5 border border-slate-200/80 flex items-center justify-between gap-2.5 shadow-2xs"
                         >
                           <div className="flex items-center gap-2.5 min-w-0">
                             <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-[#E8EDF2] text-black">
-                              {renderServiceBlackIcon(srv.icon)}
+                              <Cog size={16} />
                             </div>
                             <div className="min-w-0">
-                              <h6 className="text-[11.5px] font-bold text-slate-900 truncate">{srv.title}</h6>
-                              <p className="text-[11px] text-slate-500 truncate">{srv.desc}</p>
+                              <h6 className="text-[11.5px] font-bold text-slate-900 break-words">{srv.title}</h6>
+                              {srv.desc && <p className="text-[11px] text-slate-500 break-words leading-snug">{srv.desc}</p>}
                             </div>
                           </div>
                           <span className={`text-[11px] font-black shrink-0 ${srv.price === 'Free' ? 'text-brand' : 'text-orange-600'}`}>
@@ -10504,30 +10516,33 @@ export default function RootLayout() {
                   <div className="space-y-2 pt-2 border-t border-slate-200/60">
                     <div className="flex items-center justify-between">
                       <span className="text-slate-900 font-extrabold text-xs">
-                        Verified Work <span className="text-slate-400 font-normal">({(applicant.verifiedWorkPortfolio || []).length})</span>
+                        Past Projects <span className="text-slate-400 font-normal">({adminProjectsOf(applicant).length})</span>
                       </span>
-                      <span className="text-[11px] text-brand font-bold">Tap photo to inspect</span>
+                      {adminProjectsOf(applicant).length > 0 && <span className="text-[11px] text-brand font-bold">Tap photo to inspect</span>}
                     </div>
 
+                    {adminProjectsOf(applicant).length === 0 && <p className="text-[11px] text-slate-400">No projects added yet.</p>}
                     <div className="grid grid-cols-2 gap-2">
-                      {(applicant.verifiedWorkPortfolio || []).map((work, idx) => (
+                      {adminProjectsOf(applicant).map((work, idx) => (
                         <div
                           key={idx}
                           onClick={() =>
                             setPreviewDocumentModal({
                               url: work.img,
                               title: work.title,
-                              subtitle: `${applicant.name} • ${work.tag} • ${work.sub}`,
+                              subtitle: [applicant.name, work.tag, work.sub].filter(Boolean).join(' • '),
                             })
                           }
                           className="bg-white rounded-xl overflow-hidden border border-slate-200/80 shadow-2xs group cursor-pointer hover:border-orange-300 transition-all"
                         >
                           <div className="relative aspect-4/3 overflow-hidden bg-slate-100">
-                            <img
-                              src={work.img}
-                              alt={work.title}
-                              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                            />
+                            {work.img && (
+                              <img
+                                src={work.img.startsWith('data:') ? work.img : thumbnailUrl(work.img, 400)}
+                                alt={work.title}
+                                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                              />
+                            )}
                             <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-[11px] font-bold gap-1">
                               <Maximize2 size={12} />
                               <span>Inspect</span>
@@ -10535,10 +10550,10 @@ export default function RootLayout() {
                           </div>
                           <div className="p-2">
                             <div className="flex items-center justify-between gap-1 mb-0.5">
-                              <h6 className="text-[11px] font-bold text-slate-900 truncate">{work.title}</h6>
-                              <span className="text-[10.5px] font-bold text-orange-600 shrink-0">{work.tag}</span>
+                              <h6 className="text-[11px] font-bold text-slate-900 break-words">{work.title}</h6>
                             </div>
-                            <p className="text-[10.5px] text-slate-400 font-medium truncate">{work.sub}</p>
+                            {work.tag && <p className="text-[10.5px] font-bold text-orange-600 break-words">{work.tag}</p>}
+                            {work.sub && <p className="text-[10.5px] text-slate-400 font-medium break-words">{work.sub}</p>}
                           </div>
                         </div>
                       ))}
