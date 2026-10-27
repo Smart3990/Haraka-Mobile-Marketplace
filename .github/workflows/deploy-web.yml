@@ -1,0 +1,42 @@
+# Publishes the website (https://harakaapp.web.app) and the database rules every time main is pushed.
+# Needs one repository secret (Settings > Secrets and variables > Actions):
+#   FIREBASE_TOKEN — from running `npx firebase-tools login:ci` on a computer logged in to the Firebase project
+# The Android APK is separate and still only builds when "Android APK" is run by hand.
+name: Deploy website
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A newer push replaces a deploy that is still running
+concurrency:
+  group: deploy-web
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - name: Deploy to Firebase Hosting and Firestore rules
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+        run: |
+          if [ -z "$FIREBASE_TOKEN" ]; then
+            echo "::error::Add the FIREBASE_TOKEN repository secret (see the top of this file)."
+            exit 1
+          fi
+          npx --yes firebase-tools@14 deploy --only hosting,firestore:rules \
+            --project ga4-viewer-kiyumart-platform --non-interactive
