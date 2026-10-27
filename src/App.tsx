@@ -1165,6 +1165,13 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
   const navigateTo = (newRoute: ScreenRoute) => {
     let targetRoute = newRoute;
     if (
+      partnerLockedRef.current &&
+      ['post-ad-step1', 'register-partner', 'register-seller', 'register-artisan', 'manage-my-ads'].includes(targetRoute.type)
+    ) {
+      showToast('Finish your profile first to unlock your seller and artisan tools.');
+      targetRoute = { type: 'partner-setup' };
+    }
+    if (
       (targetRoute.type === 'register-seller' || targetRoute.type === 'register-partner') &&
       submittedSellerApplicantId
     ) {
@@ -1318,7 +1325,17 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
   disabledUserIdsRef.current = disabledUserIds;
   useEffect(() => watchDisabledUserIds(setDisabledUserIds), []);
   const [artisanReviews, setArtisanReviews] = useState<ReviewDoc[]>([]);
-  useEffect(() => watchArtisans(setArtisanProfiles), []);
+  const [artisansLoaded, setArtisansLoaded] = useState(false);
+  useEffect(
+    () =>
+      watchArtisans((list) => {
+        setArtisanProfiles(list);
+        setArtisansLoaded(true);
+      }),
+    []
+  );
+  /** True while an approved seller/artisan still has required profile details missing */
+  const partnerLockedRef = useRef(false);
   useEffect(() => watchReviews(setArtisanReviews), []);
   const ARTISANS_DIRECTORY: ArtisanItem[] = useMemo(
     () =>
@@ -4453,7 +4470,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
 
   /** The signed-in partner's own application, when it is approved without the badge. */
   const myUnverifiedApplication = () => {
-    if (currentUserRole !== 'seller' && currentUserRole !== 'artisan') return null;
+    if (myProfileDoc?.role !== 'seller' && myProfileDoc?.role !== 'artisan') return null;
     const app = adminApplicants.find((a) => a.id === firebaseUid);
     return app && app.status === 'approved' && !app.verifiedBadge ? app : null;
   };
@@ -4589,25 +4606,25 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
   const partnerChecklist = (d: PartnerDraft) =>
     partnerRole === 'artisan'
       ? [
-          { label: 'Profile photo', done: Boolean(d.avatar) },
-          { label: 'Headline', done: d.headline.trim().length >= 5 },
-          { label: 'About your work', done: d.bio.trim().length >= 20 },
-          { label: 'Voice introduction', done: Boolean(d.voiceIntroUrl) },
-          { label: 'Services & prices', done: d.services.some((x) => x.title.trim() && x.price.trim()) },
-          { label: 'Past projects with photos', done: d.portfolio.some((p) => p.img && p.title.trim()) },
-          { label: 'Areas you cover', done: d.coverage.length > 0 },
-          { label: 'Languages', done: d.languages.length > 0 },
-          { label: 'Response time', done: Boolean(d.responseTime) },
+          { label: 'Profile photo', done: Boolean(d.avatar), required: true },
+          { label: 'Headline', done: d.headline.trim().length >= 5, required: true },
+          { label: 'About your work', done: d.bio.trim().length >= 20, required: true },
+          { label: 'Voice introduction', done: Boolean(d.voiceIntroUrl), required: false },
+          { label: 'Services & prices', done: d.services.some((x) => x.title.trim() && x.price.trim()), required: true },
+          { label: 'Past projects with photos', done: d.portfolio.some((p) => p.img && p.title.trim()), required: true },
+          { label: 'Areas you cover', done: d.coverage.length > 0, required: true },
+          { label: 'Languages', done: d.languages.length > 0, required: true },
+          { label: 'Response time', done: Boolean(d.responseTime), required: true },
         ]
       : [
-          { label: 'Profile photo', done: Boolean(d.avatar) },
-          { label: 'Store or display name', done: d.storeName.trim().length >= 2 },
-          { label: 'About your business', done: d.bio.trim().length >= 20 },
-          { label: 'WhatsApp number', done: isValidGhanaPhoneNumber(d.whatsapp) },
-          { label: 'Town / area', done: Boolean(d.location.trim()) },
-          { label: 'Safe meetup spots', done: d.meetupSpots.length > 0 },
-          { label: 'Opening hours', done: Boolean(d.operatingHours.trim()) },
-          { label: 'Response time', done: Boolean(d.responseTime) },
+          { label: 'Profile photo', done: Boolean(d.avatar), required: true },
+          { label: 'Store or display name', done: d.storeName.trim().length >= 2, required: true },
+          { label: 'About your business', done: d.bio.trim().length >= 20, required: true },
+          { label: 'WhatsApp number', done: isValidGhanaPhoneNumber(d.whatsapp), required: true },
+          { label: 'Town / area', done: Boolean(d.location.trim()), required: true },
+          { label: 'Safe meetup spots', done: d.meetupSpots.length > 0, required: true },
+          { label: 'Opening hours', done: Boolean(d.operatingHours.trim()), required: false },
+          { label: 'Response time', done: Boolean(d.responseTime), required: true },
         ];
 
   const partnerSetupDraftKey = `partnerSetup.${firebaseUid || ''}`;
@@ -4616,6 +4633,23 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     const timer = setTimeout(() => saveDraft(partnerSetupDraftKey, partnerDraft, stripMedia), 500);
     return () => clearTimeout(timer);
   }, [currentRoute.type, partnerDraft, partnerSetupDraftKey]);
+
+  const partnerBasicsDone = partnerChecklist(draftFromSaved()).every((i) => !i.required || i.done);
+  const partnerReady = partnerRole !== 'artisan' || artisansLoaded;
+  const partnerLocked = Boolean(partnerRole) && partnerReady && !partnerBasicsDone && !adminAccess.isAdmin;
+  partnerLockedRef.current = partnerLocked;
+  useEffect(() => {
+    if (!partnerRole || !partnerReady || adminAccess.isAdmin) return;
+    if (partnerLocked && currentUserRole !== 'buyer') setCurrentUserRole('buyer');
+    if (!partnerLocked && currentUserRole === 'buyer') setCurrentUserRole(partnerRole);
+  }, [partnerRole, partnerReady, partnerLocked, currentUserRole, adminAccess.isAdmin]);
+  const sentToSetupRef = useRef('');
+  useEffect(() => {
+    if (!partnerLocked || !firebaseUid || sentToSetupRef.current === firebaseUid) return;
+    if (currentRoute.type !== 'tabs') return;
+    sentToSetupRef.current = firebaseUid;
+    openPartnerSetup();
+  }, [partnerLocked, firebaseUid, currentRoute.type]);
 
   const openPartnerSetup = () => {
     const kept = loadDraft<PartnerDraft>(partnerSetupDraftKey);
@@ -4742,8 +4776,16 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
       goBack();
     } catch (err) {
       console.warn('Could not save partner profile', err);
+      reportClientError('partner-setup', err);
+      const code = (err as { code?: string })?.code || '';
       setPartnerSetupError(
-        err instanceof Error && !/firebase|firestore|permission|internal/i.test(err.message) ? err.message : 'Could not save. Check your connection and try again.'
+        code === 'permission-denied'
+          ? 'Haraka refused to save this profile. Please log out and in again, then try once more. (permission-denied)'
+          : code === 'not-found'
+          ? 'Your artisan page is missing. Please contact Haraka support. (not-found)'
+          : err instanceof Error && !code && !/firebase|firestore|internal/i.test(err.message)
+          ? err.message
+          : `Could not save. Check your connection and try again.${code ? ` (${code})` : ''}`
       );
     } finally {
       setPartnerSaving(false);
@@ -4786,6 +4828,9 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-sm font-black text-slate-900">Finish your {what} profile</p>
+            {partnerLocked && (
+              <p className="text-[11px] font-bold text-orange-700 mt-0.5">Your {what} tools unlock when the required details are done.</p>
+            )}
             <p className="text-xs text-slate-600 leading-relaxed mt-0.5">
               Buyers choose {partnerRole === 'artisan' ? 'artisans' : 'sellers'} with full profiles. Still missing: {missing.slice(0, 3).join(', ')}
               {missing.length > 3 ? ` and ${missing.length - 3} more` : ''}.
@@ -4858,6 +4903,12 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
         </div>
 
         <div className="p-3.5 space-y-3 pb-28">
+          {partnerLocked && (
+            <div className="rounded-2xl border border-orange-200 bg-orange-50 p-3 text-xs text-orange-900 leading-relaxed">
+              <span className="font-black block">Almost there</span>
+              Fill in the required details below and save to unlock your {partnerRole} tools. Until then you can use Haraka as a buyer.
+            </div>
+          )}
           <div className={card}>
             <div className="flex items-center gap-3">
               <button
@@ -5119,7 +5170,10 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
               {items.map((item) => (
                 <div key={item.label} className="flex items-center gap-2 text-[11.5px]">
                   {item.done ? <CheckCircle2 size={15} className="text-brand shrink-0" /> : <Circle size={15} className="text-slate-300 shrink-0" />}
-                  <span className={item.done ? 'text-slate-700 font-semibold' : 'text-slate-500'}>{item.label}</span>
+                  <span className={item.done ? 'text-slate-700 font-semibold' : 'text-slate-500'}>
+                    {item.label}
+                    {!item.required && <span className="text-slate-400 font-normal"> (optional)</span>}
+                  </span>
                 </div>
               ))}
             </div>
