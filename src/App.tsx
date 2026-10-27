@@ -4632,6 +4632,8 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
   type ServiceSheet = { target: 'registration' | 'profile'; index: number | null; title: string; price: string; desc: string };
   type ProjectSheet = { target: 'registration' | 'profile'; index: number | null; title: string; where: string; img: string };
   const [serviceSheet, setServiceSheet] = useState<ServiceSheet | null>(null);
+  /** Registration: Services & Pricing and Past Projects open and close */
+  const [regOpen, setRegOpen] = useState({ services: false, projects: false });
   const [projectSheet, setProjectSheet] = useState<ProjectSheet | null>(null);
   const [sheetError, setSheetError] = useState('');
 
@@ -4862,8 +4864,8 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
           { label: 'Headline', done: d.headline.trim().length >= 5, required: true },
           { label: 'About your work', done: d.bio.trim().length >= 20, required: true },
           { label: 'Voice introduction', done: Boolean(d.voiceIntroUrl), required: false },
-          { label: 'Services & prices', done: d.services.some((x) => x.title.trim() && x.price.trim()), required: true },
-          { label: 'Past projects with photos', done: d.portfolio.some((p) => p.img && p.title.trim()), required: true },
+          { label: 'Services & prices', done: d.services.some((x) => x.title.trim() && x.price.trim()), required: false },
+          { label: 'Past projects with photos', done: d.portfolio.some((p) => p.img && p.title.trim()), required: false },
           { label: 'Areas you cover', done: d.coverage.length > 0, required: true },
           { label: 'Languages', done: d.languages.length > 0, required: true },
           { label: 'Response time', done: Boolean(d.responseTime), required: true },
@@ -6904,13 +6906,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
       if (!sellerRegForm.allowWhatsApp) {
         errs.allowWhatsApp = 'Please provide consent to how information is used';
       }
-      // Services & Pricing and Verified Work are REQUIRED (NON-SKIPPABLE)
-      if (artisanServices.length === 0) {
-        errs.artisanServices = 'Services & Pricing section is required (*). Please add at least one trade service with rate.';
-      }
-      if (artisanPortfolio.length === 0) {
-        errs.artisanPortfolio = 'Verified Work section is required (*). Please add at least one past completed project with photo.';
-      }
+      // Services & Pricing and Past Projects are optional: new artisans can add them later from their profile
     } else {
       if (!sellerRegForm.displayName || !sellerRegForm.displayName.trim()) {
         errs.displayName = 'Business or Display Name is required';
@@ -6950,14 +6946,6 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
       errs.sellerAvatarPhoto = 'Applicant profile picture is required (*). Please upload a profile photo.';
     }
     if (sellerRegType === 'artisan') {
-      if (artisanServices.length === 0) {
-        errs.artisanServices = 'Services & Pricing section is required (*). Please add at least one trade service with rate.';
-        setSellerRegStep(2);
-      }
-      if (artisanPortfolio.length === 0) {
-        errs.artisanPortfolio = 'Verified Work section is required (*). Please add at least one past completed project with photo.';
-        setSellerRegStep(2);
-      }
       if (!confirmSafeTradePayout) {
         errs.confirmSafeTradePayout = 'Please confirm the trade callout and zero platform cut agreement';
       }
@@ -23145,153 +23133,136 @@ export default function RootLayout() {
                         </div>
                       </div>
 
-                      {/* Card: Services & Pricing (All icons black + selectable black icons) - REQUIRED (NON-SKIPPABLE) */}
-                      <div className={`bg-white rounded-3xl p-4.5 shadow-2xs space-y-3.5 ${sellerErrors.artisanServices ? 'border-2 border-red-500 ring-2 ring-red-100' : ''}`}>
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <h3 className="text-sm font-black text-slate-900 flex items-center gap-1.5 flex-wrap">
-                              <span>Services &amp; Pricing</span>
-                              <span className="text-red-500 font-black text-base">*</span>
-                              <span className="text-[11px] font-black uppercase text-red-600">
-                                Required • Non-Skippable
-                              </span>
-                            </h3>
-                            <p className="text-xs text-slate-500 mt-0.5">
-                              Standard diagnostic and installation rates shown to clients. Must provide at least 1 service.
-                            </p>
-                          </div>
+                      {/* Card: Services & Pricing (optional; opens and closes) */}
+                      <div className="bg-white rounded-3xl p-4.5 shadow-2xs space-y-3">
+                        <div className="flex items-center justify-between gap-2">
                           <button
                             type="button"
-                            onClick={() => openServiceSheet('registration', null)}
+                            onClick={() => setRegOpen((o) => ({ ...o, services: !o.services }))}
+                            className="flex-1 min-w-0 flex items-center gap-2 text-left cursor-pointer"
+                            aria-expanded={regOpen.services}
+                          >
+                            <ChevronDown size={16} className={`text-slate-500 shrink-0 transition-transform ${regOpen.services ? 'rotate-180' : ''}`} />
+                            <span className="min-w-0">
+                              <span className="text-sm font-black text-slate-900 flex items-center gap-1.5 flex-wrap">
+                                Services &amp; Pricing
+                                <span className="text-slate-400 font-normal">({artisanServices.length})</span>
+                                <span className="text-[11px] font-bold text-slate-500">Optional</span>
+                              </span>
+                              <span className="text-[11px] text-slate-500 block">What clients can book you for. You can add them later.</span>
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setRegOpen((o) => ({ ...o, services: true }));
+                              openServiceSheet('registration', null);
+                            }}
                             className="flex items-center gap-1 px-3 py-1.5 rounded-full text-white text-[11px] font-bold bg-accent hover:bg-orange-600 transition-all cursor-pointer shadow-xs active:scale-95 shrink-0"
                           >
                             <Plus size={13} />
-                            <span>Add Service</span>
+                            <span>Add</span>
                           </button>
                         </div>
 
-                        {sellerErrors.artisanServices && (
-                          <p className="text-red-600 text-xs font-bold flex items-center gap-1.5 bg-red-50 p-2.5 rounded-xl border border-red-200">
-                            <AlertCircle size={14} className="shrink-0 text-red-500" />
-                            <span>{sellerErrors.artisanServices}</span>
-                          </p>
-                        )}
-
-                        {/* Services List - ALL ICONS BLACK */}
-                        {artisanServices.length === 0 ? (
-                          <div className={`py-5 text-center border rounded-2xl p-4 bg-slate-50/50 ${sellerErrors.artisanServices ? 'border-red-300 bg-red-50/30' : 'border-dashed border-slate-200'}`}>
-                            <p className="text-xs font-bold text-slate-700">No services added yet <span className="text-red-500 font-black">*</span></p>
-                            <p className="text-[11px] text-slate-500 mt-0.5">Tap &quot;Add Service&quot; above to list your custom trade offerings and rates (Required)</p>
-                          </div>
-                        ) : (
-                          <div className="space-y-2">
-                          {artisanServices.map((srv, idx) => (
-                            <div
-                              key={idx}
-                              className="bg-slate-50 rounded-2xl p-3 border border-slate-200/80 flex items-center justify-between gap-2.5 shadow-2xs hover:border-slate-300 transition-all"
-                            >
-                              <div className="flex items-center gap-2.5 min-w-0 cursor-pointer" onClick={() => openServiceSheet('registration', idx, srv)}>
-                                <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0 bg-[#E8EDF2] text-black">
-                                  {tradeIcon(artisanCategoryFor(sellerRegForm.tradeSkill || ''))}
-                                </div>
-                                <div className="min-w-0">
-                                  <h4 className="text-xs font-bold text-slate-900 truncate">{srv.title}</h4>
-                                  {srv.desc && <p className="text-[10.5px] text-slate-500 truncate">{srv.desc}</p>}
-                                </div>
-                              </div>
-                              <div className="flex items-center gap-2 shrink-0">
-                                <span className={`text-xs font-black ${srv.price === 'Free' ? 'text-brand' : 'text-accent'}`}>
-                                  {srv.price}
-                                </span>
-                                <button
-                                  type="button"
-                                  onClick={() => setArtisanServices((prev) => prev.filter((_, i) => i !== idx))}
-                                  className="text-slate-400 hover:text-red-500 p-1 rounded-lg transition-colors cursor-pointer"
-                                  title="Remove service"
+                        {regOpen.services && (
+                          artisanServices.length === 0 ? (
+                            <p className="text-[11px] text-slate-400 py-1">No services yet. Tap Add to list one.</p>
+                          ) : (
+                            <div className="space-y-2">
+                              {artisanServices.map((srv, idx) => (
+                                <div
+                                  key={idx}
+                                  className="bg-slate-50 rounded-2xl p-3 border border-slate-200/80 flex items-center justify-between gap-2.5"
                                 >
-                                  <Trash2 size={13} />
-                                </button>
-                              </div>
+                                  <div className="flex items-center gap-2.5 min-w-0 cursor-pointer" onClick={() => openServiceSheet('registration', idx, srv)}>
+                                    <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0 bg-[#E8EDF2] text-black">
+                                      {tradeIcon(artisanCategoryFor(sellerRegForm.tradeSkill || ''))}
+                                    </div>
+                                    <div className="min-w-0">
+                                      <h4 className="text-xs font-bold text-slate-900 truncate">{srv.title}</h4>
+                                      {srv.desc && <p className="text-[10.5px] text-slate-500 truncate">{srv.desc}</p>}
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-2 shrink-0">
+                                    <span className={`text-xs font-black ${srv.price === 'Free' ? 'text-brand' : 'text-accent'}`}>{srv.price}</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => setArtisanServices((prev) => prev.filter((_, i) => i !== idx))}
+                                      className="text-slate-400 hover:text-red-500 p-1 rounded-lg transition-colors cursor-pointer"
+                                      title="Remove service"
+                                    >
+                                      <Trash2 size={13} />
+                                    </button>
+                                  </div>
+                                </div>
+                              ))}
                             </div>
-                          ))}
-                          </div>
+                          )
                         )}
-
                       </div>
 
-                      {/* Card: Verified Work Portfolio - REQUIRED (NON-SKIPPABLE) */}
-                      <div className={`bg-white rounded-3xl p-4.5 shadow-2xs space-y-3.5 ${sellerErrors.artisanPortfolio ? 'border-2 border-red-500 ring-2 ring-red-100' : ''}`}>
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <h3 className="text-sm font-black text-slate-900 flex items-center gap-1.5 flex-wrap">
-                              <span>Past Projects</span>
-                              <span className="text-red-500 font-black text-base">*</span>
-                              <span className="text-slate-400 font-normal">({artisanPortfolio.length})</span>
-                              <span className="text-[11px] font-black uppercase text-red-600">
-                                Required • Non-Skippable
-                              </span>
-                            </h3>
-                            <p className="text-xs text-slate-500 mt-0.5">
-                              Upload past job photos to demonstrate craftsmanship. Must provide at least 1 project.
-                            </p>
-                          </div>
+                      {/* Card: Past Projects (optional; opens and closes) */}
+                      <div className="bg-white rounded-3xl p-4.5 shadow-2xs space-y-3">
+                        <div className="flex items-center justify-between gap-2">
                           <button
                             type="button"
-                            onClick={() => openProjectSheet('registration', null)}
+                            onClick={() => setRegOpen((o) => ({ ...o, projects: !o.projects }))}
+                            className="flex-1 min-w-0 flex items-center gap-2 text-left cursor-pointer"
+                            aria-expanded={regOpen.projects}
+                          >
+                            <ChevronDown size={16} className={`text-slate-500 shrink-0 transition-transform ${regOpen.projects ? 'rotate-180' : ''}`} />
+                            <span className="min-w-0">
+                              <span className="text-sm font-black text-slate-900 flex items-center gap-1.5 flex-wrap">
+                                Past Projects
+                                <span className="text-slate-400 font-normal">({artisanPortfolio.length})</span>
+                                <span className="text-[11px] font-bold text-slate-500">Optional</span>
+                              </span>
+                              <span className="text-[11px] text-slate-500 block">Photos of work you have done. You can add them later.</span>
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setRegOpen((o) => ({ ...o, projects: true }));
+                              openProjectSheet('registration', null);
+                            }}
                             className="flex items-center gap-1 px-3 py-1.5 rounded-full text-white text-[11px] font-bold bg-accent hover:bg-orange-600 transition-all cursor-pointer shadow-xs active:scale-95 shrink-0"
                           >
                             <Plus size={13} />
-                            <span>Add Project</span>
+                            <span>Add</span>
                           </button>
                         </div>
 
-                        {sellerErrors.artisanPortfolio && (
-                          <p className="text-red-600 text-xs font-bold flex items-center gap-1.5 bg-red-50 p-2.5 rounded-xl border border-red-200">
-                            <AlertCircle size={14} className="shrink-0 text-red-500" />
-                            <span>{sellerErrors.artisanPortfolio}</span>
-                          </p>
-                        )}
-
-                        {artisanPortfolio.length === 0 && (
-                          <div className={`py-5 text-center border rounded-2xl p-4 bg-slate-50/50 ${sellerErrors.artisanPortfolio ? 'border-red-300 bg-red-50/30' : 'border-dashed border-slate-200'}`}>
-                            <p className="text-xs font-bold text-slate-700">No past projects added yet <span className="text-red-500 font-black">*</span></p>
-                            <p className="text-[11px] text-slate-500 mt-0.5">Tap &quot;Add Project&quot; above to add at least one past project with photo (Required)</p>
-                          </div>
-                        )}
-
-                        {/* Projects Grid */}
-                        <div className="grid grid-cols-2 gap-2.5">
-                          {artisanPortfolio.map((work, idx) => (
-                            <div
-                              key={idx}
-                              className="bg-slate-50 rounded-2xl overflow-hidden border border-slate-200/80 shadow-2xs group relative"
-                            >
-                              <div className="relative aspect-4/3 overflow-hidden bg-slate-100">
-                                <img
-                                  src={work.img}
-                                  alt={work.title}
-                                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                                />
-                                <button
-                                  type="button"
-                                  onClick={() => setArtisanPortfolio((prev) => prev.filter((_, i) => i !== idx))}
-                                  className="absolute top-1.5 right-1.5 w-6 h-6 rounded-full bg-black/60 text-white flex items-center justify-center hover:bg-red-600 transition-colors cursor-pointer"
-                                  title="Remove photo"
-                                >
-                                  <X size={12} />
-                                </button>
-                              </div>
-                              <div className="p-2">
-                                <div className="flex items-center justify-between gap-1 mb-0.5">
-                                  <h6 className="text-[11px] font-bold text-slate-900 truncate">{work.title}</h6>
-                                  <span className="text-[10.5px] font-bold text-orange-600 shrink-0">{work.tag}</span>
+                        {regOpen.projects && (
+                          artisanPortfolio.length === 0 ? (
+                            <p className="text-[11px] text-slate-400 py-1">No projects yet. Tap Add to choose a photo.</p>
+                          ) : (
+                            <div className="grid grid-cols-2 gap-2.5">
+                              {artisanPortfolio.map((work, idx) => (
+                                <div key={idx} className="bg-slate-50 rounded-2xl overflow-hidden border border-slate-200/80 relative">
+                                  <button type="button" onClick={() => openProjectSheet('registration', idx, work)} className="block w-full text-left cursor-pointer">
+                                    <div className="aspect-[4/3] overflow-hidden bg-slate-100">
+                                      {work.img && <img src={work.img} alt={work.title} className="w-full h-full object-cover" />}
+                                    </div>
+                                    <div className="p-2">
+                                      <h6 className="text-[11px] font-bold text-slate-900 truncate">{work.title}</h6>
+                                      {work.tag && <p className="text-[10.5px] text-slate-500 truncate">{work.tag}</p>}
+                                    </div>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setArtisanPortfolio((prev) => prev.filter((_, i) => i !== idx))}
+                                    className="absolute top-1.5 right-1.5 w-6 h-6 rounded-full bg-black/60 text-white flex items-center justify-center hover:bg-red-600 transition-colors cursor-pointer"
+                                    title="Remove project"
+                                  >
+                                    <X size={12} />
+                                  </button>
                                 </div>
-                                <p className="text-[10.5px] text-slate-400 font-medium truncate">{work.sub}</p>
-                              </div>
+                              ))}
                             </div>
-                          ))}
-                        </div>
-
+                          )
+                        )}
                       </div>
 
                       {/* Card: Identity Verification (Ghana Card) - Optional/Skippable */}
