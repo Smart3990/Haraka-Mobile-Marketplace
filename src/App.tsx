@@ -4856,6 +4856,46 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     profileVoiceStopRef.current = playVoice(url, { onEnd: done, onError: done });
   };
 
+  // Voice intro on artisan cards and pages: one plays at a time
+  const [introPlayingId, setIntroPlayingId] = useState('');
+  const introStopRef = useRef<(() => void) | null>(null);
+  const stopIntro = () => {
+    introStopRef.current?.();
+    introStopRef.current = null;
+    setIntroPlayingId('');
+  };
+  useEffect(() => stopIntro, [currentRoute]);
+  const toggleIntro = (artisanId: string, url: string) => {
+    const wasPlaying = introPlayingId === artisanId;
+    stopIntro();
+    if (wasPlaying) return;
+    setIntroPlayingId(artisanId);
+    const done = () => {
+      introStopRef.current = null;
+      setIntroPlayingId((id) => (id === artisanId ? '' : id));
+    };
+    introStopRef.current = playVoice(url, { onEnd: done, onError: done });
+  };
+  /** Mic icon and Listen / Stop, the same button the artisan uses on their profile page */
+  const renderIntroButton = (artisanId: string, url: string) => {
+    const playing = introPlayingId === artisanId;
+    return (
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          toggleIntro(artisanId, url);
+        }}
+        aria-label={playing ? 'Stop voice intro' : 'Listen to voice intro'}
+        className="py-1.5 px-3 rounded-xl border border-slate-200 bg-white text-slate-700 text-[11px] font-bold cursor-pointer flex items-center gap-1.5 active:scale-95 transition-transform"
+      >
+        <Mic size={13} className="text-accent shrink-0" />
+        {playing ? <Pause size={12} /> : <Play size={12} />}
+        <span>{playing ? 'Stop' : 'Listen'}</span>
+      </button>
+    );
+  };
+
   /** The seller's or artisan's own details on their Profile, as buyers see them, one section per card */
   const renderPartnerDetails = () => {
     if (!partnerRole || adminAccess.isAdmin) return null;
@@ -10283,10 +10323,10 @@ export default function RootLayout() {
                     <div className="flex items-center gap-3 py-1">
                       <button
                         type="button"
-                        onClick={() => showToast(`Playing ${applicant.name}'s voice intro (22s)`)}
+                        onClick={() => ((applicant as any).voiceIntroUrl ? toggleIntro(`app-${applicant.id}`, (applicant as any).voiceIntroUrl) : showToast('No voice intro was recorded.'))}
                         className="w-8 h-8 rounded-full bg-orange-500 hover:bg-orange-600 text-white flex items-center justify-center shadow-xs cursor-pointer shrink-0 active:scale-95 transition-transform"
                       >
-                        <Play size={14} className="fill-white ml-0.5" />
+                        {introPlayingId === `app-${applicant.id}` ? <Pause size={14} className="fill-white" /> : <Play size={14} className="fill-white ml-0.5" />}
                       </button>
                       <div className="flex-1 flex items-center gap-1 h-6">
                         {[40, 65, 30, 85, 95, 55, 75, 45, 90, 60, 80, 40, 70, 50, 85, 60, 35, 20].map((h, i) => (
@@ -13750,19 +13790,11 @@ export default function RootLayout() {
 
                       {/* Intro Voice with Microphone & Portfolio stats - Clean text without background color */}
                       <div className={`flex items-center ${artisan.audioIntro ? 'justify-between' : 'justify-end'} text-[11px] text-slate-500 pb-3 border-b border-slate-100 mb-3`}>
-                        {artisan.audioIntro && (
-                          <button
-                            onClick={() => showToast(`Playing ${artisan.name}'s voice intro (22s)`)}
-                            className="flex items-center gap-1.5 text-orange-600 hover:text-orange-700 font-bold text-[11px] transition-colors active:scale-95 cursor-pointer"
-                          >
-                            <Mic size={13} className="text-orange-600 shrink-0" />
-                            <span>Listen to Work Intro ({artisan.audioIntro})</span>
-                          </button>
-                        )}
+                        {artisan.audioIntro && renderIntroButton(artisan.id, artisan.audioIntro)}
 
                         <div className="text-right">
                           <span className="font-semibold text-slate-700">
-                            View Portfolio ({artisan.portfolioCount || 10} photos)
+                            {artisan.portfolioCount ? `${artisan.portfolioCount} project photo${artisan.portfolioCount === 1 ? '' : 's'}` : 'No project photos yet'}
                           </span>
                           <span className="text-[11px] text-slate-400 block">
                             {isAvailable ? '🟢 Accepting bookings now' : '🟠 Busy on client site'}
@@ -17915,19 +17947,11 @@ export default function RootLayout() {
 
                   {/* Intro Voice with Microphone & Portfolio stats - No text background matching Image 2 */}
                   <div className={`flex items-center ${artisan.audioIntro ? 'justify-between' : 'justify-end'} text-[11px] text-slate-500 pb-3 border-b border-slate-100 mb-3`}>
-                    {artisan.audioIntro && (
-                      <button
-                        onClick={() => showToast(`Playing ${artisan.name}'s voice intro (22s)`)}
-                        className="flex items-center gap-1.5 text-orange-600 hover:text-orange-700 font-bold text-[11px] transition-colors active:scale-95 cursor-pointer"
-                      >
-                        <Mic size={13} className="text-orange-600 shrink-0" />
-                        <span>Listen to Work Intro ({artisan.audioIntro})</span>
-                      </button>
-                    )}
+                    {artisan.audioIntro && renderIntroButton(artisan.id, artisan.audioIntro)}
 
                     <div className="text-right">
                       <span className="font-semibold text-slate-700">
-                        View Portfolio ({artisan.portfolioCount || 10} photos)
+                        {artisan.portfolioCount ? `${artisan.portfolioCount} project photo${artisan.portfolioCount === 1 ? '' : 's'}` : 'No project photos yet'}
                       </span>
                       <span className="text-[11px] text-slate-400 block">
                         {isAvailable ? '🟢 Accepting bookings now' : '🟠 Busy on client site'}
@@ -18738,20 +18762,11 @@ export default function RootLayout() {
 
                 {/* Intro Voice with Microphone & Portfolio stats */}
                 <div className={`flex items-center ${artisan.audioIntro ? 'justify-between' : 'justify-end'} text-[11px] text-slate-500 pt-2.5 mt-2 border-t border-slate-100`}>
-                  {artisan.audioIntro && (
-                    <button
-                      type="button"
-                      onClick={() => showToast(`Playing ${artisan.name}'s voice intro (22s)`)}
-                      className="flex items-center gap-1.5 text-orange-600 hover:text-orange-700 font-bold text-[11px] transition-colors active:scale-95 cursor-pointer"
-                    >
-                      <Mic size={13} className="text-orange-600 shrink-0" />
-                      <span>Listen to Work Intro ({artisan.audioIntro})</span>
-                    </button>
-                  )}
+                  {artisan.audioIntro && renderIntroButton(artisan.id, artisan.audioIntro)}
 
                   <div className="text-right">
                     <span className="font-semibold text-slate-700">
-                      View Portfolio ({artisan.portfolioCount || profileData.portfolio?.length || 18} photos)
+                      {artisan.portfolioCount ? `${artisan.portfolioCount} project photo${artisan.portfolioCount === 1 ? '' : 's'}` : 'No project photos yet'}
                     </span>
                   </div>
                 </div>
