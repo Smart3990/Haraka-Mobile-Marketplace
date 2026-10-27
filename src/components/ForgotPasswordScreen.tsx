@@ -145,7 +145,7 @@ export default function ForgotPasswordScreen({
                     <button
                       type="button"
                       onClick={onNavigateSignUp}
-                      className="text-xs font-bold text-[#FF7A00] hover:underline cursor-pointer inline-flex items-center gap-1"
+                      className="text-xs font-bold text-accent hover:underline cursor-pointer inline-flex items-center gap-1"
                     >
                       <span>Create a new Haraka account instead &rarr;</span>
                     </button>
@@ -405,7 +405,7 @@ export default function ForgotPasswordScreen({
             <button
               type="button"
               onClick={onNavigateLogin}
-              className="font-bold text-[#FF7A00] hover:text-[#E06C00] transition-colors ml-1 cursor-pointer underline-offset-2 hover:underline"
+              className="font-bold text-accent hover:text-[#E06C00] transition-colors ml-1 cursor-pointer underline-offset-2 hover:underline"
             >
               Log In
             </button>

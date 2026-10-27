@@ -44,6 +44,7 @@ import { isCloudinaryConfigured, uploadMedia } from './cloudinary';
 import { auth, db } from './firebase';
 import type { Listing } from './listingData';
 import type { BannerDoc } from './banners';
+import type { ThemeColorKey } from './branding';
 
 export type UserRole = 'buyer' | 'seller' | 'artisan' | 'admin';
 
@@ -1014,13 +1015,16 @@ export async function saveBrandingImage(field: 'logoUrl' | 'welcomeImageUrl', im
   );
 }
 
-/** System admin (or an admin given branding access): sets the app's primary colour (#RRGGBB) for everyone. */
-export async function saveBrandingColor(color: string): Promise<void> {
+/** System admin (or an admin given branding access): sets the app's theme colours (#RRGGBB) for everyone. */
+export async function saveBrandingColors(colors: Partial<Record<ThemeColorKey, string>>): Promise<void> {
   const email = requirePermission('branding', 'You do not have permission to change the app branding.');
-  if (!/^#[0-9a-f]{6}$/i.test(color)) throw new Error('Choose a colour like #25D366.');
+  for (const color of Object.values(colors)) {
+    if (!/^#[0-9a-f]{6}$/i.test(color || '')) throw new Error('Each colour must look like #25D366.');
+  }
+  const upper = Object.fromEntries(Object.entries(colors).map(([key, color]) => [key, color!.toUpperCase()]));
   await setDoc(
     doc(db, 'settings', 'branding'),
-    { primaryColor: color.toUpperCase(), updatedAtISO: new Date().toISOString(), updatedBy: email },
+    { ...upper, updatedAtISO: new Date().toISOString(), updatedBy: email },
     { merge: true }
   );
 }

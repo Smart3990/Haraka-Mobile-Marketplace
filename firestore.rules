@@ -103,14 +103,20 @@ service cloud.firestore {
       allow delete: if canAddAdmins();
     }
 
-    // App branding (app bar logo, Welcome page picture): everyone reads it; the system admin (or an admin given access) changes it
+    // App branding (app bar logo, Welcome page picture, theme colours): everyone reads it; the system admin (or an admin given access) changes it
+    function isThemeColor(field) {
+      return request.resource.data.get(field, '#000000') is string
+        && request.resource.data.get(field, '#000000').matches('^#[0-9A-Fa-f]{6}$');
+    }
     match /settings/branding {
       allow get: if true;
       allow create, update: if hasPermission('branding')
-        && request.resource.data.keys().hasOnly(['logoUrl', 'welcomeImageUrl', 'primaryColor', 'updatedAtISO', 'updatedBy'])
+        && request.resource.data.keys().hasOnly(['logoUrl', 'welcomeImageUrl', 'primaryColor', 'deepColor', 'accentColor',
+          'inkColor', 'backgroundColor', 'updatedAtISO', 'updatedBy'])
         && request.resource.data.get('logoUrl', '') is string && request.resource.data.get('logoUrl', '').size() < 600000
         && request.resource.data.get('welcomeImageUrl', '') is string && request.resource.data.get('welcomeImageUrl', '').size() < 600000
-        && request.resource.data.get('primaryColor', '#000000').matches('^#[0-9A-Fa-f]{6}$');
+        && isThemeColor('primaryColor') && isThemeColor('deepColor') && isThemeColor('accentColor')
+        && isThemeColor('inkColor') && isThemeColor('backgroundColor');
     }
 
     // Admins whose phones are told about new applications and verification requests.

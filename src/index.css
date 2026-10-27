@@ -1,10 +1,32 @@
 @import "tailwindcss";
 
-/* Haraka's primary green. The system admin can change it from Platform Settings: the app then
-   sets --color-brand on <html>, and the darker pressed shade follows it. */
+/* Haraka's theme colours. The system admin changes them in Platform Settings > App Branding: the
+   app then sets these variables on <html> (src/lib/branding.ts) and every shade follows. */
 @theme {
   --color-brand: #25D366;
   --color-brand-dark: color-mix(in srgb, var(--color-brand) 80%, black);
+  --color-brand-deep: #065F46;
+
+  /* The whole orange palette is built from the accent colour */
+  --color-accent: #FF6A00;
+  --color-orange-50: color-mix(in srgb, var(--color-accent) 7%, white);
+  --color-orange-100: color-mix(in srgb, var(--color-accent) 15%, white);
+  --color-orange-200: color-mix(in srgb, var(--color-accent) 30%, white);
+  --color-orange-300: color-mix(in srgb, var(--color-accent) 50%, white);
+  --color-orange-400: color-mix(in srgb, var(--color-accent) 75%, white);
+  --color-orange-500: var(--color-accent);
+  --color-orange-600: color-mix(in srgb, var(--color-accent) 88%, black);
+  --color-orange-700: color-mix(in srgb, var(--color-accent) 72%, black);
+  --color-orange-800: color-mix(in srgb, var(--color-accent) 58%, black);
+  --color-orange-900: color-mix(in srgb, var(--color-accent) 46%, black);
+
+  /* Headings, main text and dark buttons */
+  --color-ink: #0F172A;
+  --color-slate-900: var(--color-ink);
+
+  /* Page background */
+  --color-surface: #F8FAFC;
+  --color-slate-50: var(--color-surface);
 }
 
 /* Universally eliminate all browser scrollbars for clean native mobile look */

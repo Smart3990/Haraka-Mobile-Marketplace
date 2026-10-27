@@ -66,17 +66,17 @@ export default function OnboardingScreen({ onFinish, onSkip }: OnboardingScreenP
         <div className="flex items-center justify-center gap-2 pt-1 pb-3">
           <div
             className={`h-2 rounded-full transition-all duration-300 ${
-              currentSlide === 0 ? 'w-7 bg-[#006c45]' : 'w-2 bg-[#dae2fd]'
+              currentSlide === 0 ? 'w-7 bg-brand-deep' : 'w-2 bg-[#dae2fd]'
             }`}
           />
           <div
             className={`h-2 rounded-full transition-all duration-300 ${
-              currentSlide === 1 ? 'w-7 bg-[#ff7a00]' : 'w-2 bg-[#dae2fd]'
+              currentSlide === 1 ? 'w-7 bg-accent' : 'w-2 bg-[#dae2fd]'
             }`}
           />
           <div
             className={`h-2 rounded-full transition-all duration-300 ${
-              currentSlide === 2 ? 'w-7 bg-[#006c45]' : 'w-2 bg-[#dae2fd]'
+              currentSlide === 2 ? 'w-7 bg-brand-deep' : 'w-2 bg-[#dae2fd]'
             }`}
           />
         </div>
@@ -98,7 +98,7 @@ export default function OnboardingScreen({ onFinish, onSkip }: OnboardingScreenP
 
                 {/* Simulated search bar */}
                 <div className="w-full bg-[#f2f3ff] rounded-xl px-2.5 py-1.5 flex items-center gap-2 mb-2.5 shadow-2xs">
-                  <Search size={15} className="text-[#006c45] stroke-[2.5]" />
+                  <Search size={15} className="text-brand-deep stroke-[2.5]" />
                   <span className="text-[11px] text-slate-400 truncate">
                     iPhone 14 Pro, Toyota, Yeezy...
                   </span>
@@ -109,14 +109,14 @@ export default function OnboardingScreen({ onFinish, onSkip }: OnboardingScreenP
                   {/* Item 1: iPhone 13 */}
                   <div className="flex items-center gap-2.5 p-2 rounded-xl bg-[#f2f3ff] shadow-2xs">
                     <div className="w-10 h-10 rounded-lg bg-[#dae2fd] flex items-center justify-center shrink-0">
-                      <Smartphone size={20} className="text-[#006c45] stroke-[2.2]" />
+                      <Smartphone size={20} className="text-brand-deep stroke-[2.2]" />
                     </div>
                     <div className="flex flex-col min-w-0 flex-1">
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-bold text-slate-900 truncate">
                           iPhone 13 128GB
                         </span>
-                        <CheckCircle2 size={14} className="text-[#006c45] fill-[#006c45]/20 stroke-[2.5]" />
+                        <CheckCircle2 size={14} className="text-brand-deep fill-brand-deep/20 stroke-[2.5]" />
                       </div>
                       <div className="flex items-center justify-between mt-0.5">
                         <span className="text-xs text-[#994700] font-black">GH₵ 4,200</span>
@@ -128,14 +128,14 @@ export default function OnboardingScreen({ onFinish, onSkip }: OnboardingScreenP
                   {/* Item 2: Toyota Vitz */}
                   <div className="flex items-center gap-2.5 p-2 rounded-xl bg-[#f2f3ff] shadow-2xs">
                     <div className="w-10 h-10 rounded-lg bg-[#dae2fd] flex items-center justify-center shrink-0">
-                      <Car size={20} className="text-[#006c45] stroke-[2.2]" />
+                      <Car size={20} className="text-brand-deep stroke-[2.2]" />
                     </div>
                     <div className="flex flex-col min-w-0 flex-1">
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-bold text-slate-900 truncate">
                           Toyota Vitz 2018
                         </span>
-                        <CheckCircle2 size={14} className="text-[#006c45] fill-[#006c45]/20 stroke-[2.5]" />
+                        <CheckCircle2 size={14} className="text-brand-deep fill-brand-deep/20 stroke-[2.5]" />
                       </div>
                       <div className="flex items-center justify-between mt-0.5">
                         <span className="text-xs text-[#994700] font-black">GH₵ 48,000</span>
@@ -147,14 +147,14 @@ export default function OnboardingScreen({ onFinish, onSkip }: OnboardingScreenP
                   {/* Item 3: Sneakers Edition */}
                   <div className="flex items-center gap-2.5 p-2 rounded-xl bg-[#f2f3ff] shadow-2xs">
                     <div className="w-10 h-10 rounded-lg bg-[#dae2fd] flex items-center justify-center shrink-0">
-                      <Shirt size={20} className="text-[#006c45] stroke-[2.2]" />
+                      <Shirt size={20} className="text-brand-deep stroke-[2.2]" />
                     </div>
                     <div className="flex flex-col min-w-0 flex-1">
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-bold text-slate-900 truncate">
                           Sneakers Edition
                         </span>
-                        <CheckCircle2 size={14} className="text-[#006c45] fill-[#006c45]/20 stroke-[2.5]" />
+                        <CheckCircle2 size={14} className="text-brand-deep fill-brand-deep/20 stroke-[2.5]" />
                       </div>
                       <div className="flex items-center justify-between mt-0.5">
                         <span className="text-xs text-[#994700] font-black">GH₵ 350</span>
@@ -237,7 +237,7 @@ export default function OnboardingScreen({ onFinish, onSkip }: OnboardingScreenP
                   {/* Top Tags row */}
                   <div className="w-full flex items-center justify-between gap-1">
                     <div className="flex items-center gap-1.5 bg-[#eaedff] px-2.5 py-1 rounded-full whitespace-nowrap shrink-0">
-                      <ShieldCheck size={14} className="text-[#006c45]" />
+                      <ShieldCheck size={14} className="text-brand-deep" />
                       <span className="text-[11px] text-[#131b2e] font-bold">Verified Sellers</span>
                     </div>
                     <div className="flex items-center gap-1 bg-[#e2e7ff] px-2.5 py-1 rounded-full whitespace-nowrap shrink-0">
@@ -248,8 +248,8 @@ export default function OnboardingScreen({ onFinish, onSkip }: OnboardingScreenP
 
                   {/* Center Shield Icon */}
                   <div className="relative my-auto flex items-center justify-center">
-                    <div className="w-24 h-24 rounded-full bg-[#006c45]/10 flex items-center justify-center">
-                      <div className="w-16 h-16 rounded-full bg-[#006c45] flex items-center justify-center shadow-lg transform transition-transform hover:scale-105 duration-300">
+                    <div className="w-24 h-24 rounded-full bg-brand-deep/10 flex items-center justify-center">
+                      <div className="w-16 h-16 rounded-full bg-brand-deep flex items-center justify-center shadow-lg transform transition-transform hover:scale-105 duration-300">
                         <Shield size={32} className="text-white fill-white" />
                       </div>
                     </div>
@@ -262,11 +262,11 @@ export default function OnboardingScreen({ onFinish, onSkip }: OnboardingScreenP
                         <Mic size={14} className="text-[#005233]" />
                       </div>
                       <div className="flex items-center gap-0.5">
-                        <span className="w-1 h-2 bg-[#006c45] rounded-full inline-block" />
-                        <span className="w-1 h-4 bg-[#006c45] rounded-full inline-block" />
-                        <span className="w-1 h-3 bg-[#006c45] rounded-full inline-block" />
-                        <span className="w-1 h-5 bg-[#006c45] rounded-full inline-block" />
-                        <span className="w-1 h-2 bg-[#006c45] rounded-full inline-block" />
+                        <span className="w-1 h-2 bg-brand-deep rounded-full inline-block" />
+                        <span className="w-1 h-4 bg-brand-deep rounded-full inline-block" />
+                        <span className="w-1 h-3 bg-brand-deep rounded-full inline-block" />
+                        <span className="w-1 h-5 bg-brand-deep rounded-full inline-block" />
+                        <span className="w-1 h-2 bg-brand-deep rounded-full inline-block" />
                       </div>
                     </div>
                     <span className="text-[11px] text-slate-500 font-medium">Audio description</span>
@@ -315,7 +315,7 @@ export default function OnboardingScreen({ onFinish, onSkip }: OnboardingScreenP
             type="button"
             onClick={handleNext}
             className={`w-full h-12 rounded-full text-white font-bold text-sm sm:text-base flex items-center justify-center gap-2 shadow-md hover:opacity-95 active:scale-[0.98] transition-all cursor-pointer ${
-              currentSlide === 1 ? 'bg-[#ff7a00] hover:bg-[#ea6e00]' : 'bg-[#006c45] hover:bg-[#005a39]'
+              currentSlide === 1 ? 'bg-accent hover:bg-[#ea6e00]' : 'bg-brand-deep hover:bg-[#005a39]'
             }`}
           >
             <span>{currentSlide === 2 ? 'Get Started with Haraka 🎉' : 'Next'}</span>

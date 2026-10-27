@@ -275,7 +275,7 @@ export default function SignInScreen({
             <button
               type="button"
               onClick={handleForgotPass}
-              className="text-sm font-semibold text-[#FF7A00] hover:text-[#E06C00] transition-colors cursor-pointer"
+              className="text-sm font-semibold text-accent hover:text-[#E06C00] transition-colors cursor-pointer"
             >
               Forgot Password?
             </button>
@@ -360,7 +360,7 @@ export default function SignInScreen({
           <button
             type="button"
             onClick={onOpenDemo}
-            className="text-sm font-bold text-[#FF7A00] hover:text-[#E06800] transition-colors cursor-pointer bg-transparent border-none p-0 inline-block hover:underline"
+            className="text-sm font-bold text-accent hover:text-[#E06800] transition-colors cursor-pointer bg-transparent border-none p-0 inline-block hover:underline"
           >
             Demo
           </button>
@@ -375,7 +375,7 @@ export default function SignInScreen({
           <button
             type="button"
             onClick={onNavigateSignUp}
-            className="font-bold text-[#FF7A00] hover:text-[#E06C00] transition-colors ml-1 cursor-pointer underline-offset-2 hover:underline"
+            className="font-bold text-accent hover:text-[#E06C00] transition-colors ml-1 cursor-pointer underline-offset-2 hover:underline"
           >
             Sign Up Free
           </button>

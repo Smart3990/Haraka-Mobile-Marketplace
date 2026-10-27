@@ -261,7 +261,7 @@ export default function SignUpScreen({
             <input
               checked={agreeTerms}
               onChange={(e) => setAgreeTerms(e.target.checked)}
-              className="mt-0.5 w-5 h-5 rounded text-[#006B44] focus:ring-0 focus:ring-offset-0 border-gray-300 cursor-pointer accent-[#006B44]"
+              className="mt-0.5 w-5 h-5 rounded text-brand-deep focus:ring-0 focus:ring-offset-0 border-gray-300 cursor-pointer accent-brand-deep"
               id="terms"
               type="checkbox"
             />
@@ -273,7 +273,7 @@ export default function SignUpScreen({
                   e.preventDefault();
                   onOpenPolicy?.('terms');
                 }}
-                className="font-bold text-[#006B44] hover:underline cursor-pointer"
+                className="font-bold text-brand-deep hover:underline cursor-pointer"
               >
                 Terms of Service
               </button>{' '}
@@ -284,7 +284,7 @@ export default function SignUpScreen({
                   e.preventDefault();
                   onOpenPolicy?.('privacy');
                 }}
-                className="font-bold text-[#006B44] hover:underline cursor-pointer"
+                className="font-bold text-brand-deep hover:underline cursor-pointer"
               >
                 Privacy Policy
               </button>
@@ -293,7 +293,7 @@ export default function SignUpScreen({
 
           {/* Primary CTA: Create Account */}
           <button
-            className="w-full h-13 py-3.5 bg-[#006B44] hover:bg-[#005435] active:scale-[0.99] text-white font-bold rounded-2xl flex items-center justify-center gap-2 shadow-[0px_8px_20px_-4px_rgba(0,107,68,0.35)] transition-all text-base cursor-pointer disabled:opacity-60"
+            className="w-full h-13 py-3.5 bg-brand-deep hover:bg-[#005435] active:scale-[0.99] text-white font-bold rounded-2xl flex items-center justify-center gap-2 shadow-[0px_8px_20px_-4px_rgba(0,107,68,0.35)] transition-all text-base cursor-pointer disabled:opacity-60"
             type="submit"
             disabled={isSubmitting}
           >
@@ -365,7 +365,7 @@ export default function SignUpScreen({
           <button
             type="button"
             onClick={onNavigateLogin}
-            className="font-bold text-[#FF7A00] hover:text-[#E66E00] ml-0.5 cursor-pointer underline-offset-2 hover:underline"
+            className="font-bold text-accent hover:text-[#E66E00] ml-0.5 cursor-pointer underline-offset-2 hover:underline"
           >
             Log In
           </button>

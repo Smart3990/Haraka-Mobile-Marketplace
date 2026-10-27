@@ -47,8 +47,8 @@ export default function SplashScreen({
         style={{ minHeight: 'calc(100% - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px))' }}
       >
         {/* Subtle Ambient Glow Rings */}
-        <div className="absolute -top-24 -left-24 w-80 h-80 bg-[#ff7a00]/10 rounded-full blur-3xl pointer-events-none" />
-        <div className="absolute -bottom-20 -right-20 w-80 h-80 bg-[#006c45]/10 rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute -top-24 -left-24 w-80 h-80 bg-accent/10 rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute -bottom-20 -right-20 w-80 h-80 bg-brand-deep/10 rounded-full blur-3xl pointer-events-none" />
 
         {/* Top Spacing Anchor */}
         <div className="w-full h-6" />
@@ -72,7 +72,7 @@ export default function SplashScreen({
         <div className="flex flex-col items-center justify-center w-full pb-8 z-10">
           {/* Fluid Smooth Spinner */}
           <div className="relative flex items-center justify-center w-8 h-8">
-            <svg className="animate-spin w-7 h-7 text-[#ff7a00]" fill="none" viewBox="0 0 24 24">
+            <svg className="animate-spin w-7 h-7 text-accent" fill="none" viewBox="0 0 24 24">
               <circle
                 className="opacity-20"
                 cx="12"

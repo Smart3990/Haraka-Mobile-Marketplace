@@ -158,7 +158,7 @@ import {
   requestVerification,
   reportClientError,
   saveBrandingImage,
-  saveBrandingColor,
+  saveBrandingColors,
   makeUserPartner,
   type AdminPartnerInput,
   setCategoryImage,
@@ -239,7 +239,7 @@ import {
 } from './lib/backend';
 import { HarakaLogo } from './components/HarakaLogo';
 import { HARAKA_LOGO, HARAKA_MARK, WELCOME_HERO, WELCOME_HERO_TRANS } from './lib/images';
-import { useBranding, DEFAULT_PRIMARY_COLOR } from './lib/branding';
+import { useBranding, THEME_COLORS, type ThemeColorKey } from './lib/branding';
 import { CATEGORY_IMAGES } from './lib/categoryImages';
 import {
   BANNER_GRADIENTS,
@@ -2236,7 +2236,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
             <label className="flex items-start gap-2.5 p-2.5 rounded-xl border border-slate-200 cursor-pointer select-none">
               <input
                 type="checkbox"
-                className="mt-0.5 accent-[#FF6A00]"
+                className="mt-0.5 accent-accent"
                 checked={addAdminForm.canAddAdmins}
                 onChange={(e) => setAddAdminForm({ ...addAdminForm, canAddAdmins: e.target.checked })}
               />
@@ -2262,7 +2262,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
               type="button"
               onClick={handleAddAdmin}
               disabled={isAddingAdmin}
-              className="flex-1 py-2.5 rounded-xl bg-[#FF6A00] hover:bg-orange-600 text-white font-bold text-xs cursor-pointer disabled:opacity-60"
+              className="flex-1 py-2.5 rounded-xl bg-accent hover:bg-orange-600 text-white font-bold text-xs cursor-pointer disabled:opacity-60"
             >
               {isAddingAdmin ? 'Adding…' : 'Add Admin'}
             </button>
@@ -2591,7 +2591,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
         <HarakaLogo className="h-10 w-auto" />
       </div>
       <div className="flex-1 flex flex-col items-center justify-center text-center py-6">
-        <Mail size={56} strokeWidth={1.6} className="text-[#FF6A00]" />
+        <Mail size={56} strokeWidth={1.6} className="text-accent" />
         <h1 className="text-xl font-black text-slate-900 mt-5">Confirm your email</h1>
         <p className="text-sm text-slate-600 mt-2 leading-relaxed">
           We sent a verification link to
@@ -2608,7 +2608,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
           type="button"
           onClick={() => confirmEmailVerified(true)}
           disabled={isCheckingVerification}
-          className="w-full py-3.5 rounded-2xl bg-[#FF6A00] hover:bg-orange-600 text-white font-bold text-sm cursor-pointer active:scale-98 transition-all disabled:opacity-60 flex items-center justify-center gap-2"
+          className="w-full py-3.5 rounded-2xl bg-accent hover:bg-orange-600 text-white font-bold text-sm cursor-pointer active:scale-98 transition-all disabled:opacity-60 flex items-center justify-center gap-2"
         >
           <CheckCircle size={17} />
           {isCheckingVerification ? 'Checking…' : "I've Confirmed My Email"}
@@ -3100,17 +3100,38 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
   const branding = useBranding();
   const brandingInputRef = useRef<HTMLInputElement>(null);
   const brandingFieldRef = useRef<'logoUrl' | 'welcomeImageUrl'>('logoUrl');
-  const [savingBranding, setSavingBranding] = useState<'' | 'logoUrl' | 'welcomeImageUrl' | 'primaryColor'>('');
-  const [colorDraft, setColorDraft] = useState('');
+  const [savingBranding, setSavingBranding] = useState<'' | 'logoUrl' | 'welcomeImageUrl' | 'theme'>('');
+  const [themeDraft, setThemeDraft] = useState<Partial<Record<ThemeColorKey, string>>>({});
+  const savedThemeColor = (key: ThemeColorKey) =>
+    (branding[key] || THEME_COLORS.find((c) => c.key === key)!.fallback).toUpperCase();
+  const isHexColor = (value: string) => /^#[0-9A-F]{6}$/i.test(value);
+  const themeChanges = (Object.entries(themeDraft) as [ThemeColorKey, string][]).filter(
+    ([key, value]) => isHexColor(value) && value.toUpperCase() !== savedThemeColor(key)
+  );
 
-  const changePrimaryColor = async (color: string) => {
-    setSavingBranding('primaryColor');
+  // The app shows the colours being edited straight away (only on this phone until saved)
+  const previewThemeColor = (key: ThemeColorKey, value: string) => {
+    setThemeDraft((d) => ({ ...d, [key]: value }));
+    const { cssVar } = THEME_COLORS.find((c) => c.key === key)!;
+    if (isHexColor(value)) document.documentElement.style.setProperty(cssVar, value);
+  };
+  const cancelThemeDraft = () => {
+    for (const { key, cssVar } of THEME_COLORS) {
+      if (branding[key]) document.documentElement.style.setProperty(cssVar, branding[key]);
+      else document.documentElement.style.removeProperty(cssVar);
+    }
+    setThemeDraft({});
+  };
+
+  const saveTheme = async () => {
+    if (themeChanges.length === 0) return;
+    setSavingBranding('theme');
     try {
-      await saveBrandingColor(color);
-      setColorDraft('');
-      showToast('Colour updated for everyone');
+      await saveBrandingColors(Object.fromEntries(themeChanges));
+      setThemeDraft({});
+      showToast('Theme updated for everyone');
     } catch (err) {
-      console.warn('Could not save the colour', err);
+      console.warn('Could not save the theme', err);
       showToast(`⚠️ ${err instanceof Error && !/firebase|firestore/i.test(err.message) ? err.message : 'Could not save. Try again.'}`);
     } finally {
       setSavingBranding('');
@@ -3180,47 +3201,65 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
             </div>
           </div>
         ))}
-        {(() => {
-          const saved = (branding.primaryColor || DEFAULT_PRIMARY_COLOR).toUpperCase();
-          const shown = (colorDraft || saved).toUpperCase();
-          const valid = /^#[0-9A-F]{6}$/.test(shown);
-          return (
-            <div className="flex items-center gap-3 pt-3 border-t border-slate-100">
-              <label
-                className="w-20 h-14 rounded-xl border border-slate-100 shrink-0 cursor-pointer relative overflow-hidden"
-                style={{ background: valid ? shown : saved }}
-              >
-                <input
-                  type="color"
-                  value={valid ? shown.toLowerCase() : saved.toLowerCase()}
-                  onChange={(e) => setColorDraft(e.target.value.toUpperCase())}
-                  className="absolute inset-0 opacity-0 cursor-pointer"
-                  aria-label="Pick the primary colour"
-                />
-              </label>
-              <div className="flex-1 min-w-0">
-                <p className="text-xs font-bold text-slate-900">Primary colour</p>
-                <p className="text-[11px] text-slate-500 truncate">Buttons, links and highlights • tap the box to pick</p>
-                <div className="flex gap-2 mt-1.5">
+        <div className="pt-3 border-t border-slate-100 space-y-3">
+          <div>
+            <span className="text-xs font-black text-slate-900 block">Theme colours</span>
+            <span className="text-[11px] text-slate-500">Tap a box to pick, or type a code. You see it on this phone first; Save shows it to everyone.</span>
+          </div>
+          {THEME_COLORS.map(({ key, label, note }) => {
+            const shown = (themeDraft[key] ?? savedThemeColor(key)).toUpperCase();
+            const valid = isHexColor(shown);
+            return (
+              <div key={key} className="flex items-center gap-3">
+                <label
+                  className="w-12 h-12 rounded-xl border border-slate-200 shrink-0 cursor-pointer relative overflow-hidden"
+                  style={{ background: valid ? shown : savedThemeColor(key) }}
+                >
                   <input
-                    value={shown}
-                    onChange={(e) => setColorDraft(e.target.value.trim().toUpperCase())}
-                    maxLength={7}
-                    className="w-24 py-1.5 px-2 rounded-lg border border-slate-200 text-[11px] font-mono font-bold text-slate-800 focus:outline-none focus:border-brand"
+                    type="color"
+                    value={(valid ? shown : savedThemeColor(key)).toLowerCase()}
+                    onChange={(e) => previewThemeColor(key, e.target.value.toUpperCase())}
+                    className="absolute inset-0 opacity-0 cursor-pointer"
+                    aria-label={`Pick the ${label} colour`}
                   />
-                  <button
-                    type="button"
-                    disabled={Boolean(savingBranding) || !valid || shown === saved}
-                    onClick={() => changePrimaryColor(shown)}
-                    className="py-1.5 px-3 rounded-lg bg-slate-900 text-white text-[11px] font-bold cursor-pointer disabled:opacity-50"
-                  >
-                    {savingBranding === 'primaryColor' ? 'Saving…' : 'Save'}
-                  </button>
+                </label>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-bold text-slate-900">{label}</p>
+                  <p className="text-[10.5px] text-slate-500 leading-snug">{note}</p>
                 </div>
+                <input
+                  value={shown}
+                  onChange={(e) => previewThemeColor(key, e.target.value.trim().toUpperCase())}
+                  maxLength={7}
+                  aria-label={`${label} colour code`}
+                  className={`w-[76px] shrink-0 py-1.5 px-2 rounded-lg border text-[11px] font-mono font-bold text-slate-800 focus:outline-none ${
+                    valid ? 'border-slate-200 focus:border-brand' : 'border-red-400'
+                  }`}
+                />
               </div>
+            );
+          })}
+          {Object.keys(themeDraft).length > 0 && (
+            <div className="flex gap-2">
+              <button
+                type="button"
+                disabled={Boolean(savingBranding) || themeChanges.length === 0}
+                onClick={saveTheme}
+                className="flex-1 py-2 rounded-lg bg-slate-900 text-white text-[11px] font-bold cursor-pointer disabled:opacity-50"
+              >
+                {savingBranding === 'theme' ? 'Saving…' : `Save theme${themeChanges.length ? ` (${themeChanges.length})` : ''}`}
+              </button>
+              <button
+                type="button"
+                disabled={Boolean(savingBranding)}
+                onClick={cancelThemeDraft}
+                className="py-2 px-4 rounded-lg border border-slate-200 text-slate-600 text-[11px] font-bold cursor-pointer disabled:opacity-50"
+              >
+                Cancel
+              </button>
             </div>
-          );
-        })()}
+          )}
+        </div>
       </div>
     );
   };
@@ -3378,7 +3417,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
           <button
             type="button"
             onClick={() => setBannerDraft(newBannerDraft(everything))}
-            className="shrink-0 py-1.5 px-3 rounded-lg bg-[#FF6A00] text-white text-[11px] font-bold cursor-pointer flex items-center gap-1"
+            className="shrink-0 py-1.5 px-3 rounded-lg bg-accent text-white text-[11px] font-bold cursor-pointer flex items-center gap-1"
           >
             <Plus size={13} />
             <span>Add Banner</span>
@@ -3614,7 +3653,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
               type="button"
               onClick={saveBannerDraft}
               disabled={busy}
-              className="flex-1 py-3 rounded-xl bg-[#FF6A00] text-white font-bold text-xs cursor-pointer disabled:opacity-60"
+              className="flex-1 py-3 rounded-xl bg-accent text-white font-bold text-xs cursor-pointer disabled:opacity-60"
             >
               {busy ? 'Saving…' : draft.id ? 'Save Changes' : 'Add Banner'}
             </button>
@@ -4336,7 +4375,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
             <button
               type="button"
               onClick={openGetVerifiedSheet}
-              className="mt-2.5 py-2.5 px-4 rounded-xl bg-[#046A38] hover:bg-[#035a2f] text-white text-xs font-bold cursor-pointer shadow-2xs inline-flex items-center gap-1.5 active:scale-98 transition-transform"
+              className="mt-2.5 py-2.5 px-4 rounded-xl bg-brand-deep hover:bg-brand-deep text-white text-xs font-bold cursor-pointer shadow-2xs inline-flex items-center gap-1.5 active:scale-98 transition-transform"
             >
               <ShieldCheck size={14} />
               <span>{declined ? 'Send Documents Again' : 'Get Verified'}</span>
@@ -4420,7 +4459,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
               type="button"
               onClick={sendVerificationDocuments}
               disabled={isSendingVerification}
-              className="flex-[1.4] py-3 rounded-2xl bg-[#046A38] text-white text-sm font-bold cursor-pointer disabled:opacity-60"
+              className="flex-[1.4] py-3 rounded-2xl bg-brand-deep text-white text-sm font-bold cursor-pointer disabled:opacity-60"
             >
               {isSendingVerification ? 'Sending…' : 'Send for Verification'}
             </button>
@@ -8219,13 +8258,13 @@ export default function RootLayout() {
           {/* Connecting Line 1 -> 2 */}
           <div
             className={`absolute top-4 left-[16.66%] right-[50%] h-[3.5px] -translate-y-1/2 rounded-full transition-colors duration-200 z-0 ${
-              step >= 2 ? 'bg-[#FF6A00]' : 'bg-slate-200'
+              step >= 2 ? 'bg-accent' : 'bg-slate-200'
             }`}
           />
           {/* Connecting Line 2 -> 3 */}
           <div
             className={`absolute top-4 left-[50%] right-[16.66%] h-[3.5px] -translate-y-1/2 rounded-full transition-colors duration-200 z-0 ${
-              step >= 3 ? 'bg-[#FF6A00]' : 'bg-slate-200'
+              step >= 3 ? 'bg-accent' : 'bg-slate-200'
             }`}
           />
 
@@ -8235,9 +8274,9 @@ export default function RootLayout() {
               <div
                 className={`w-8 h-8 rounded-full flex items-center justify-center font-extrabold text-xs transition-all shadow-xs ${
                   step > 1
-                    ? 'bg-[#046A38] text-white'
+                    ? 'bg-brand-deep text-white'
                     : step === 1
-                    ? 'bg-[#FF6A00] text-white ring-4 ring-orange-100'
+                    ? 'bg-accent text-white ring-4 ring-orange-100'
                     : 'bg-[#EEF2F6] text-slate-500'
                 }`}
               >
@@ -8245,7 +8284,7 @@ export default function RootLayout() {
               </div>
               <span
                 className={`text-[11px] mt-1.5 font-bold tracking-tight text-center ${
-                  step > 1 ? 'text-brand' : step === 1 ? 'text-[#FF6A00]' : 'text-slate-400 font-medium'
+                  step > 1 ? 'text-brand' : step === 1 ? 'text-accent' : 'text-slate-400 font-medium'
                 }`}
               >
                 Item Details
@@ -8257,9 +8296,9 @@ export default function RootLayout() {
               <div
                 className={`w-8 h-8 rounded-full flex items-center justify-center font-extrabold text-xs transition-all shadow-xs ${
                   step > 2
-                    ? 'bg-[#046A38] text-white'
+                    ? 'bg-brand-deep text-white'
                     : step === 2
-                    ? 'bg-[#FF6A00] text-white ring-4 ring-orange-100'
+                    ? 'bg-accent text-white ring-4 ring-orange-100'
                     : 'bg-[#EEF2F6] text-slate-600'
                 }`}
               >
@@ -8279,7 +8318,7 @@ export default function RootLayout() {
               <div
                 className={`w-8 h-8 rounded-full flex items-center justify-center font-extrabold text-xs transition-all shadow-xs ${
                   step === 3
-                    ? 'bg-[#FF6A00] text-white ring-4 ring-orange-100'
+                    ? 'bg-accent text-white ring-4 ring-orange-100'
                     : 'bg-[#EEF2F6] text-slate-600'
                 }`}
               >
@@ -8458,7 +8497,7 @@ export default function RootLayout() {
           <button
             type="button"
             onClick={() => setPreviewDocumentModal(null)}
-            className="px-4 py-1.5 rounded-xl bg-[#FF6A00] hover:bg-orange-600 text-white font-bold text-xs transition-colors cursor-pointer shadow-xs active:scale-95"
+            className="px-4 py-1.5 rounded-xl bg-accent hover:bg-orange-600 text-white font-bold text-xs transition-colors cursor-pointer shadow-xs active:scale-95"
           >
             Done Reviewing
           </button>
@@ -8604,7 +8643,7 @@ export default function RootLayout() {
           {/* Section 1: Personal & Contact Information */}
           <div className="space-y-2.5 pt-1">
             <h5 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
-              <User size={13} className="text-[#FF6A00]" />
+              <User size={13} className="text-accent" />
               <span>Personal &amp; Contact Details</span>
             </h5>
 
@@ -8630,7 +8669,7 @@ export default function RootLayout() {
                 {applicant.email ? (
                   <a
                     href={`mailto:${applicant.email}`}
-                    className="font-bold text-[#FF6A00] hover:underline flex items-center gap-1 text-right truncate max-w-[65%]"
+                    className="font-bold text-accent hover:underline flex items-center gap-1 text-right truncate max-w-[65%]"
                   >
                     <Mail size={12} className="shrink-0" />
                     <span className="truncate">{applicant.email}</span>
@@ -8649,7 +8688,7 @@ export default function RootLayout() {
                 <span className="text-slate-500 font-medium">Primary Phone:</span>
                 <a
                   href={`tel:${applicant.phone.replace(/[^0-9+]/g, '')}`}
-                  className="font-mono font-bold text-[#FF6A00] hover:underline flex items-center gap-1 text-right"
+                  className="font-mono font-bold text-accent hover:underline flex items-center gap-1 text-right"
                 >
                   <Phone size={12} className="shrink-0" />
                   <span>{applicant.phone}</span>
@@ -8673,7 +8712,7 @@ export default function RootLayout() {
           {/* Section 2: Operating Location & Presence */}
           <div className="space-y-2.5 pt-1">
             <h5 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
-              <MapPin size={13} className="text-[#FF6A00]" />
+              <MapPin size={13} className="text-accent" />
               <span>Operating Location &amp; Presence</span>
             </h5>
 
@@ -8769,7 +8808,7 @@ export default function RootLayout() {
           {/* Section 3: Identity & Ghana Card Verification - ONLY SHOWN IF APPLICANT PROVIDED THEM */}
           <div className="space-y-2.5 pt-1">
             <h5 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
-              <ShieldCheck size={13} className="text-[#FF6A00]" />
+              <ShieldCheck size={13} className="text-accent" />
               <span>Identity Verification</span>
             </h5>
 
@@ -8897,7 +8936,7 @@ export default function RootLayout() {
           <div className="space-y-2.5 pt-1">
             <div className="flex items-center justify-between">
               <h5 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
-                <Briefcase size={13} className="text-[#FF6A00]" />
+                <Briefcase size={13} className="text-accent" />
                 <span>Business Documents &amp; Trade Compliance</span>
               </h5>
               <span className="text-[11px] text-slate-400 font-medium">Review prior to approval</span>
@@ -8965,7 +9004,7 @@ export default function RootLayout() {
 
                     <button
                       type="button"
-                      className="text-[#FF6A00] hover:underline font-bold text-xs shrink-0 flex items-center gap-1 cursor-pointer bg-transparent p-0 border-0"
+                      className="text-accent hover:underline font-bold text-xs shrink-0 flex items-center gap-1 cursor-pointer bg-transparent p-0 border-0"
                     >
                       <Maximize2 size={12} />
                       <span>Inspect Document</span>
@@ -9065,7 +9104,7 @@ export default function RootLayout() {
                   </div>
                   <div className="flex items-center justify-between py-0.5">
                     <span className="text-slate-500 font-medium">Diagnostic Inspection Fee:</span>
-                    <span className={`font-black text-right ${Number(applicant.inspectionFee ?? 0) === 0 ? 'text-brand' : 'text-[#FF6A00]'}`}>
+                    <span className={`font-black text-right ${Number(applicant.inspectionFee ?? 0) === 0 ? 'text-brand' : 'text-accent'}`}>
                       {Number(applicant.inspectionFee ?? 0) === 0 ? 'FREE on Arrival' : `GH₵ ${applicant.inspectionFee}.00`}
                     </span>
                   </div>
@@ -9289,7 +9328,7 @@ export default function RootLayout() {
                   decideOnApplicant(applicant.id, 'verify');
                   setViewingApplicantDetails(null);
                 }}
-                className="flex-1 py-2.5 px-3 rounded-xl bg-[#046A38] hover:bg-[#035a2f] text-white font-bold text-xs cursor-pointer shadow-2xs transition-colors flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                className="flex-1 py-2.5 px-3 rounded-xl bg-brand-deep hover:bg-brand-deep text-white font-bold text-xs cursor-pointer shadow-2xs transition-colors flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <ShieldCheck size={15} />
                 <span>Approve &amp; Verify</span>
@@ -9328,7 +9367,7 @@ export default function RootLayout() {
                   disabled={!hasRequiredDocuments(applicant)}
                   title={hasRequiredDocuments(applicant) ? 'Give the Verified badge' : 'Needs Ghana Card number and both card photos'}
                   onClick={() => decideOnApplicant(applicant.id, 'verify')}
-                  className="flex-1 py-2.5 px-3 rounded-xl bg-[#046A38] hover:bg-[#035a2f] text-white font-bold text-xs cursor-pointer shadow-2xs transition-colors flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="flex-1 py-2.5 px-3 rounded-xl bg-brand-deep hover:bg-brand-deep text-white font-bold text-xs cursor-pointer shadow-2xs transition-colors flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   <ShieldCheck size={15} />
                   <span>Verify</span>
@@ -9516,7 +9555,7 @@ export default function RootLayout() {
                   navigateTo({ type: 'chat', id: newConvId });
                 }
               }}
-              className="flex-1 py-2.5 px-3 rounded-xl bg-[#FF6A00] hover:bg-[#EA580C] text-white font-bold text-xs cursor-pointer shadow-xs active:scale-98 transition-all flex items-center justify-center gap-1.5"
+              className="flex-1 py-2.5 px-3 rounded-xl bg-accent hover:bg-orange-600 text-white font-bold text-xs cursor-pointer shadow-xs active:scale-98 transition-all flex items-center justify-center gap-1.5"
             >
               <MessageSquare size={14} />
               <span>Send Message</span>
@@ -9634,7 +9673,7 @@ export default function RootLayout() {
 
               <div className="flex items-center justify-between py-1 border-b border-slate-200/60">
                 <span className="text-slate-500 font-medium">Diagnostic / Callout Fee:</span>
-                <span className="font-extrabold text-[#FF6A00] text-sm">
+                <span className="font-extrabold text-accent text-sm">
                   GH₵ {booking.inspectionFee}.00
                 </span>
               </div>
@@ -9681,7 +9720,7 @@ export default function RootLayout() {
             <div className="space-y-2.5">
               <div className="flex items-center justify-between">
                 <h5 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
-                  <Mic size={14} className="text-[#FF6A00]" />
+                  <Mic size={14} className="text-accent" />
                   <span>Client Audio Explanation</span>
                 </h5>
               </div>
@@ -9691,7 +9730,7 @@ export default function RootLayout() {
                   <button
                     type="button"
                     onClick={() => togglePlayArtisanBookingAudio(booking)}
-                    className="w-11 h-11 rounded-full bg-[#FF6A00] hover:bg-[#EA580C] text-white flex items-center justify-center shrink-0 shadow-md active:scale-95 transition-all cursor-pointer"
+                    className="w-11 h-11 rounded-full bg-accent hover:bg-orange-600 text-white flex items-center justify-center shrink-0 shadow-md active:scale-95 transition-all cursor-pointer"
                     title={isPlayingArtisanBookingAudio && activeAudioBookingId === booking.id ? 'Pause' : 'Play'}
                   >
                     {isPlayingArtisanBookingAudio && activeAudioBookingId === booking.id ? (
@@ -9720,7 +9759,7 @@ export default function RootLayout() {
                           <span
                             key={i}
                             className={`w-[2.5px] rounded-full transition-colors ${
-                              isPlayed ? 'bg-[#FF6A00]' : 'bg-orange-200'
+                              isPlayed ? 'bg-accent' : 'bg-orange-200'
                             }`}
                             style={{ height: `${h}%` }}
                           />
@@ -9738,7 +9777,7 @@ export default function RootLayout() {
             <div className="space-y-2.5">
               <div className="flex items-center justify-between">
                 <h5 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
-                  <Camera size={14} className="text-[#FF6A00]" />
+                  <Camera size={14} className="text-accent" />
                   <span>Images of the Work</span>
                 </h5>
                 <span className="text-[11px] text-slate-400 font-medium">
@@ -9789,7 +9828,7 @@ export default function RootLayout() {
                   changeBookingStatus(booking.id, 'Confirmed', `Accepted visit for ${booking.clientName}!`);
                   setViewingArtisanBookingDetails((prev) => (prev ? { ...prev, status: 'Confirmed' } : null));
                 }}
-                className="flex-1 py-2.5 px-3 rounded-xl bg-[#FF6A00] hover:bg-[#EA580C] text-white font-bold text-xs shadow-xs cursor-pointer active:scale-98 transition-all text-center"
+                className="flex-1 py-2.5 px-3 rounded-xl bg-accent hover:bg-orange-600 text-white font-bold text-xs shadow-xs cursor-pointer active:scale-98 transition-all text-center"
               >
                 Accept Visit
               </button>
@@ -10025,7 +10064,7 @@ export default function RootLayout() {
                 showToast('🎉 You are now registered as a Verified Seller! You can now post ads.');
                 navigateTo({ type: 'post-ad-step1' });
               }}
-              className="flex-1 py-2.5 rounded-xl bg-[#FF6A00] hover:bg-orange-600 text-white font-bold text-xs cursor-pointer shadow-sm active:scale-95 transition-all text-center"
+              className="flex-1 py-2.5 rounded-xl bg-accent hover:bg-orange-600 text-white font-bold text-xs cursor-pointer shadow-sm active:scale-95 transition-all text-center"
             >
               Complete Registration
             </button>
@@ -10133,7 +10172,7 @@ export default function RootLayout() {
         <div className="bg-white px-4 pt-3.5 pb-3 border-b border-slate-200/80 sticky top-0 z-20 flex items-center justify-between">
           <div>
             <h1 className="text-base font-black text-slate-900 flex items-center gap-1.5">
-              <LayoutDashboard size={18} className="text-[#FF6A00]" />
+              <LayoutDashboard size={18} className="text-accent" />
               <span>
                 {currentUserRole === 'artisan'
                   ? 'Artisan Dashboard'
@@ -10405,7 +10444,7 @@ export default function RootLayout() {
                             <button
                               type="button"
                               onClick={() => setViewingClientProfile(booking)}
-                              className="text-xs font-bold text-[#FF6A00] hover:text-[#EA580C] hover:underline cursor-pointer shrink-0 transition-colors"
+                              className="text-xs font-bold text-accent hover:text-orange-600 hover:underline cursor-pointer shrink-0 transition-colors"
                             >
                               Profile
                             </button>
@@ -10422,7 +10461,7 @@ export default function RootLayout() {
                             </div>
 
                             <div className="flex items-center gap-2 text-slate-700 font-semibold text-[11px]">
-                              <Calendar size={13} className="text-[#FF6A00] shrink-0" />
+                              <Calendar size={13} className="text-accent shrink-0" />
                               <span className="truncate">{booking.scheduledDate} • {booking.scheduledTime}</span>
                             </div>
 
@@ -10433,7 +10472,7 @@ export default function RootLayout() {
 
                             <div className="pt-2 border-t border-slate-200/60 flex items-center justify-between">
                               <span className="text-slate-500 text-[11px] font-medium">Inspection Fee (On-Site):</span>
-                              <span className="font-black text-[#FF6A00] text-sm">GH₵ {booking.inspectionFee}.00</span>
+                              <span className="font-black text-accent text-sm">GH₵ {booking.inspectionFee}.00</span>
                             </div>
                           </div>
 
@@ -10443,12 +10482,12 @@ export default function RootLayout() {
                               <button
                                 type="button"
                                 onClick={() => togglePlayArtisanBookingAudio(booking)}
-                                className="inline-flex items-center gap-1.5 text-[#FF6A00] text-[11px] font-bold active:scale-95 transition-all cursor-pointer hover:opacity-85"
+                                className="inline-flex items-center gap-1.5 text-accent text-[11px] font-bold active:scale-95 transition-all cursor-pointer hover:opacity-85"
                               >
-                                <Mic size={13} className="text-[#FF6A00]" />
+                                <Mic size={13} className="text-accent" />
                                 <span>Voice Note ({booking.voiceNoteDuration || 18}s)</span>
                                 {isPlayingArtisanBookingAudio && activeAudioBookingId === booking.id && (
-                                  <span className="w-1.5 h-1.5 rounded-full bg-[#FF6A00] animate-ping" />
+                                  <span className="w-1.5 h-1.5 rounded-full bg-accent animate-ping" />
                                 )}
                               </button>
                             )}
@@ -10510,7 +10549,7 @@ export default function RootLayout() {
                                   navigateTo({ type: 'chat', id: newConvId });
                                 }
                               }}
-                              className="flex-1 py-2 px-3 rounded-xl bg-[#FF6A00] hover:bg-[#EA580C] text-white font-bold text-xs cursor-pointer shadow-xs active:scale-98 transition-all flex items-center justify-center gap-1.5"
+                              className="flex-1 py-2 px-3 rounded-xl bg-accent hover:bg-orange-600 text-white font-bold text-xs cursor-pointer shadow-xs active:scale-98 transition-all flex items-center justify-center gap-1.5"
                             >
                               <MessageSquare size={13} />
                               <span>Chat</span>
@@ -10670,7 +10709,7 @@ export default function RootLayout() {
                               <span className="inline-flex items-center gap-1">
                                 {`Approved (${adminApplicants.filter((a) => a.status === 'approved').length})`}
                                 {adminApplicants.some((a) => a.status === 'approved' && a.verificationRequestStatus === 'pending') && (
-                                  <span className="w-1.5 h-1.5 rounded-full bg-[#FF6A00]" aria-label="Verification requests waiting" />
+                                  <span className="w-1.5 h-1.5 rounded-full bg-accent" aria-label="Verification requests waiting" />
                                 )}
                               </span>
                             )
@@ -10758,7 +10797,7 @@ export default function RootLayout() {
                                 e.stopPropagation();
                                 decideOnApplicant(applicant.id, 'verify');
                               }}
-                              className="flex-1 py-1.5 px-2 rounded-xl bg-[#046A38] hover:bg-[#035a2f] text-white font-bold text-xs cursor-pointer shadow-2xs transition-colors flex items-center justify-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
+                              className="flex-1 py-1.5 px-2 rounded-xl bg-brand-deep hover:bg-brand-deep text-white font-bold text-xs cursor-pointer shadow-2xs transition-colors flex items-center justify-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
                             >
                               <ShieldCheck size={13} className="stroke-[2.5]" />
                               <span>Verify</span>
@@ -10790,7 +10829,7 @@ export default function RootLayout() {
                                 e.stopPropagation();
                                 decideOnApplicant(applicant.id, 'verify');
                               }}
-                              className="shrink-0 py-1.5 px-3 rounded-xl bg-[#046A38] hover:bg-[#035a2f] text-white font-bold text-xs cursor-pointer shadow-2xs flex items-center gap-1"
+                              className="shrink-0 py-1.5 px-3 rounded-xl bg-brand-deep hover:bg-brand-deep text-white font-bold text-xs cursor-pointer shadow-2xs flex items-center gap-1"
                             >
                               <ShieldCheck size={13} className="stroke-[2.5]" />
                               <span>Verify</span>
@@ -10828,7 +10867,7 @@ export default function RootLayout() {
           {/* Fallback for buyer/seller role landing on dashboard */}
           {currentUserRole !== 'artisan' && currentUserRole !== 'admin' && (
             <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-2xs text-center space-y-3">
-              <div className="w-12 h-12 rounded-full bg-orange-50 border border-orange-200 flex items-center justify-center mx-auto text-[#FF6A00]">
+              <div className="w-12 h-12 rounded-full bg-orange-50 border border-orange-200 flex items-center justify-center mx-auto text-accent">
                 <LayoutDashboard size={24} />
               </div>
               <h3 className="text-sm font-black text-slate-900">Dedicated Dashboard Area</h3>
@@ -10873,7 +10912,7 @@ export default function RootLayout() {
           </div>
           <button
             onClick={() => navigateTo({ type: 'post-ad-step1' })}
-            className="py-1.5 px-3 rounded-xl bg-[#FF6A00] hover:bg-orange-600 text-white font-extrabold text-xs shadow-xs active:scale-95 transition-all cursor-pointer flex items-center gap-1"
+            className="py-1.5 px-3 rounded-xl bg-accent hover:bg-orange-600 text-white font-extrabold text-xs shadow-xs active:scale-95 transition-all cursor-pointer flex items-center gap-1"
           >
             <Plus size={14} />
             <span>Post Ad</span>
@@ -10890,7 +10929,7 @@ export default function RootLayout() {
                   onClick={() => setProfileListingFilter(filter)}
                   className={`text-[11px] font-bold pb-0.5 border-b-2 cursor-pointer transition-colors ${
                     profileListingFilter === filter
-                      ? 'border-[#FF6A00] text-[#FF6A00]'
+                      ? 'border-accent text-accent'
                       : 'border-transparent text-slate-500 hover:text-slate-800'
                   }`}
                 >
@@ -10941,7 +10980,7 @@ export default function RootLayout() {
                       {item.hasPendingOffer && (
                         <span
                           className={`absolute top-1 left-1 text-[8.5px] font-black uppercase px-1.5 py-0.5 rounded shadow-xs text-white ${
-                            item.pendingOfferStatus === 'accepted' ? 'bg-emerald-600' : 'bg-[#FF6A00]'
+                            item.pendingOfferStatus === 'accepted' ? 'bg-emerald-600' : 'bg-accent'
                           }`}
                         >
                           {item.pendingOfferStatus === 'accepted' ? 'OFFER ACCEPTED' : 'OFFER PENDING'}
@@ -10984,7 +11023,7 @@ export default function RootLayout() {
                     </button>
                     <button
                       onClick={() => navigateTo({ type: 'listing', id: item.id })}
-                      className="text-xs font-bold text-[#FF6A00] hover:text-orange-600 cursor-pointer"
+                      className="text-xs font-bold text-accent hover:text-orange-600 cursor-pointer"
                     >
                       View Ad
                     </button>
@@ -11598,7 +11637,7 @@ export default function RootLayout() {
             onClick={() => navigateTo({ type: 'admin-settings', section: s.key })}
             className="w-full bg-white rounded-2xl p-3.5 border border-slate-200/80 shadow-2xs flex items-center gap-3 text-left cursor-pointer active:scale-[0.99] transition-transform"
           >
-            <span className="w-10 h-10 rounded-xl bg-orange-50 text-[#FF6A00] flex items-center justify-center shrink-0">{s.icon}</span>
+            <span className="w-10 h-10 rounded-xl bg-orange-50 text-accent flex items-center justify-center shrink-0">{s.icon}</span>
             <span className="flex-1 min-w-0">
               <span className="text-sm font-black text-slate-900 block">{s.title}</span>
               <span className="text-[11px] text-slate-500 block truncate">{s.note}</span>
@@ -11640,7 +11679,7 @@ export default function RootLayout() {
       <button
         type="button"
         onClick={() => navigateTo({ type: 'tabs', tab: 'home' })}
-        className="px-5 py-2.5 rounded-xl bg-[#FF6A00] text-white text-xs font-bold cursor-pointer"
+        className="px-5 py-2.5 rounded-xl bg-accent text-white text-xs font-bold cursor-pointer"
       >
         Back to Home
       </button>
@@ -11715,7 +11754,7 @@ export default function RootLayout() {
               </button>
               <div className="min-w-0">
                 <h1 className="text-base font-black text-slate-900 flex items-center gap-1.5">
-                  <span className="text-[#FF6A00] flex">{info ? info.icon : <Settings size={17} />}</span>
+                  <span className="text-accent flex">{info ? info.icon : <Settings size={17} />}</span>
                   <span className="truncate">{info ? info.title : 'Platform Settings'}</span>
                 </h1>
                 <p className="text-[11px] text-slate-500 font-medium truncate">
@@ -12406,7 +12445,7 @@ export default function RootLayout() {
 
         if (currentRoute.tab === 'messages') {
           return (
-            <div className="flex-1 flex flex-col pb-20 p-4 bg-[#F8FAFC] min-h-full">
+            <div className="flex-1 flex flex-col pb-20 p-4 bg-surface min-h-full">
               <div className="flex items-center justify-between mb-3">
                 <div>
                   <h1 className="text-lg font-black text-slate-900">Messages & Offers</h1>
@@ -12445,7 +12484,7 @@ export default function RootLayout() {
                         <button
                           type="button"
                           onClick={() => handleTabPress('home')}
-                          className="mt-2 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#FF6A00] hover:bg-orange-600 text-white text-xs font-bold shadow-xs active:scale-95 transition-all cursor-pointer"
+                          className="mt-2 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-accent hover:bg-orange-600 text-white text-xs font-bold shadow-xs active:scale-95 transition-all cursor-pointer"
                         >
                           <Search size={14} />
                           <span>Explore Marketplace</span>
@@ -12496,7 +12535,7 @@ export default function RootLayout() {
                         </span>
                         <div className="flex items-center gap-1.5 shrink-0">
                           {(conv.unreadCount || 0) > 0 && (
-                            <span className="bg-[#FF6A00] text-white text-[10.5px] font-black px-1.5 py-0.5 rounded-full">
+                            <span className="bg-accent text-white text-[10.5px] font-black px-1.5 py-0.5 rounded-full">
                               {conv.unreadCount} new
                             </span>
                           )}
@@ -12896,7 +12935,7 @@ export default function RootLayout() {
                                         className="p-1 text-orange-500 hover:scale-110 active:scale-90 transition-transform cursor-pointer"
                                         title="Saved"
                                       >
-                                        <Heart size={16} className="fill-[#EA580C] text-[#EA580C]" />
+                                        <Heart size={16} className="fill-orange-600 text-orange-600" />
                                       </button>
                                     </div>
                                     <h3 className="text-xs font-semibold text-slate-800 line-clamp-1 mt-0.5">
@@ -12928,7 +12967,7 @@ export default function RootLayout() {
                                   }}
                                   className="flex-1 bg-[#EEF2F6] hover:bg-[#E2E8F0] active:scale-98 text-slate-700 text-xs font-bold py-2 px-3 rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer"
                                 >
-                                  <Search size={13} className="text-[#C2410C]" />
+                                  <Search size={13} className="text-orange-700" />
                                   <span>Find Similar Deals</span>
                                 </button>
                                 <button
@@ -13046,7 +13085,7 @@ export default function RootLayout() {
               <div className="bg-white px-4 pt-3.5 pb-3 border-b border-slate-200/80 sticky top-0 z-20 flex items-center justify-between">
                 <div>
                   <h1 className="text-base font-black text-slate-900 flex items-center gap-1.5">
-                    <User size={18} className="text-[#FF6A00]" />
+                    <User size={18} className="text-accent" />
                     <span>Profile</span>
                   </h1>
                   <p className="text-[11px] text-slate-500 font-medium">
@@ -13117,7 +13156,7 @@ export default function RootLayout() {
                       <button
                         type="button"
                         onClick={() => navigateTo({ type: 'login' })}
-                        className="py-2 px-4 rounded-xl bg-[#FF6A00] hover:bg-orange-600 text-white font-extrabold text-xs shadow-xs active:scale-95 transition-all cursor-pointer flex items-center gap-1.5"
+                        className="py-2 px-4 rounded-xl bg-accent hover:bg-orange-600 text-white font-extrabold text-xs shadow-xs active:scale-95 transition-all cursor-pointer flex items-center gap-1.5"
                       >
                         <LogIn size={13} />
                         <span>Sign In as Specific User</span>
@@ -13164,7 +13203,7 @@ export default function RootLayout() {
                           <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tight">Upload</span>
                         </div>
                       )}
-                      <div className="absolute -bottom-1.5 -right-1.5 w-6.5 h-6.5 rounded-full bg-slate-900 text-white flex items-center justify-center border-2 border-white shadow-xs group-hover:bg-[#FF6A00] transition-colors">
+                      <div className="absolute -bottom-1.5 -right-1.5 w-6.5 h-6.5 rounded-full bg-slate-900 text-white flex items-center justify-center border-2 border-white shadow-xs group-hover:bg-accent transition-colors">
                         <Camera size={12} className="stroke-[2.5]" />
                       </div>
                     </div>
@@ -13335,7 +13374,7 @@ export default function RootLayout() {
                                 />
                                 <span
                                   className={`absolute top-1 left-1 text-[8px] font-black uppercase px-1.5 py-0.5 rounded shadow-xs text-white ${
-                                    ad.status === 'Sold' ? 'bg-slate-700' : ad.hasPendingOffer ? 'bg-[#FF6A00]' : 'bg-emerald-600'
+                                    ad.status === 'Sold' ? 'bg-slate-700' : ad.hasPendingOffer ? 'bg-accent' : 'bg-emerald-600'
                                   }`}
                                 >
                                   {ad.status === 'Sold' ? 'SOLD' : ad.hasPendingOffer ? 'OFFER PENDING' : 'ACTIVE'}
@@ -13360,7 +13399,7 @@ export default function RootLayout() {
                           <button
                             type="button"
                             onClick={() => navigateTo({ type: 'post-ad-step1' })}
-                            className="mt-1 inline-flex items-center gap-1 px-3.5 py-1.5 rounded-xl bg-[#FF6A00] hover:bg-orange-600 text-white font-bold text-xs shadow-xs active:scale-95 transition-all cursor-pointer"
+                            className="mt-1 inline-flex items-center gap-1 px-3.5 py-1.5 rounded-xl bg-accent hover:bg-orange-600 text-white font-bold text-xs shadow-xs active:scale-95 transition-all cursor-pointer"
                           >
                             <Plus size={13} />
                             <span>Post an Ad Now</span>
@@ -13380,7 +13419,7 @@ export default function RootLayout() {
                           className="w-full p-2.5 flex items-center justify-between text-xs font-semibold text-slate-800 hover:bg-slate-50 rounded-xl transition-colors cursor-pointer"
                         >
                           <div className="flex items-center gap-2.5">
-                            <Package size={16} className="text-[#0F172A]" />
+                            <Package size={16} className="text-ink" />
                             <div className="text-left">
                               <span className="font-bold text-slate-900 block text-xs">My Active Listings</span>
                               <span className="text-[10.5px] text-slate-500">{myOwnListings.length} ads live across Ghana</span>
@@ -13394,7 +13433,7 @@ export default function RootLayout() {
                           className="w-full p-2.5 flex items-center justify-between text-xs font-semibold text-slate-800 hover:bg-slate-50 rounded-xl transition-colors cursor-pointer"
                         >
                           <div className="flex items-center gap-2.5">
-                            <Calendar size={16} className="text-[#0F172A]" />
+                            <Calendar size={16} className="text-ink" />
                             <div className="text-left">
                               <span className="font-bold text-slate-900 block text-xs">My Bookings &amp; Visits</span>
                               <span className="text-[10.5px] text-slate-500">{myBookings.filter((b) => b.status === 'Confirmed' || b.status === 'In Progress').length} active scheduled visits</span>
@@ -13408,7 +13447,7 @@ export default function RootLayout() {
                           className="w-full p-2.5 flex items-center justify-between text-xs font-semibold text-slate-800 hover:bg-slate-50 rounded-xl transition-colors cursor-pointer"
                         >
                           <div className="flex items-center gap-2.5">
-                            <Heart size={16} className="text-[#0F172A]" />
+                            <Heart size={16} className="text-ink" />
                             <div className="text-left">
                               <span className="font-bold text-slate-900 block text-xs">Saved Listings &amp; Artisans</span>
                               <span className="text-[10.5px] text-slate-500">{savedIds.length + bookmarkedArtisanIds.length} bookmarked items</span>
@@ -13422,7 +13461,7 @@ export default function RootLayout() {
                           className="w-full p-2.5 flex items-center justify-between text-xs font-semibold text-slate-800 hover:bg-slate-50 rounded-xl transition-colors cursor-pointer"
                         >
                           <div className="flex items-center gap-2.5">
-                            <MessageSquare size={16} className="text-[#0F172A]" />
+                            <MessageSquare size={16} className="text-ink" />
                             <div className="text-left">
                               <span className="font-bold text-slate-900 block text-xs">Messages &amp; Offers</span>
                               <span className="text-[10.5px] text-slate-500">Chat with buyers and sellers</span>
@@ -13506,7 +13545,7 @@ export default function RootLayout() {
                     {/* Safe Trading Guidelines Card */}
                     <div className="bg-white rounded-2xl p-3.5 border border-slate-200/90 shadow-2xs space-y-2.5">
                       <div className="flex items-center gap-2 pb-1.5 border-b border-slate-100">
-                        <ShieldCheck size={16} className="text-[#C2410C] stroke-[2.5]" />
+                        <ShieldCheck size={16} className="text-orange-700 stroke-[2.5]" />
                         <h4 className="text-xs font-black text-slate-900">Safe Trading Guidelines</h4>
                       </div>
                       <div className="space-y-2 text-[11px] text-slate-600 leading-relaxed font-normal">
@@ -13648,7 +13687,7 @@ export default function RootLayout() {
                     {/* Safe Trading Guidelines Card */}
                     <div className="bg-white rounded-2xl p-3.5 border border-slate-200/90 shadow-2xs space-y-2.5">
                       <div className="flex items-center gap-2 pb-1.5 border-b border-slate-100">
-                        <ShieldCheck size={16} className="text-[#C2410C] stroke-[2.5]" />
+                        <ShieldCheck size={16} className="text-orange-700 stroke-[2.5]" />
                         <h4 className="text-xs font-black text-slate-900">Safe Trading Guidelines</h4>
                       </div>
                       <div className="space-y-2 text-[11px] text-slate-600 leading-relaxed font-normal">
@@ -14249,7 +14288,7 @@ export default function RootLayout() {
                   <div className="bg-white rounded-3xl max-w-sm w-full p-5 shadow-2xl space-y-3.5 border border-slate-200">
                     <div className="flex items-center justify-between pb-2 border-b border-slate-100">
                       <div className="flex items-center gap-2">
-                        <ShieldCheck size={18} className="text-[#C2410C]" />
+                        <ShieldCheck size={18} className="text-orange-700" />
                         <h2 className="text-sm font-black text-slate-900">Safe Trading Guidelines</h2>
                       </div>
                       <button
@@ -14497,7 +14536,7 @@ export default function RootLayout() {
               <button
                 type="button"
                 onClick={() => navigateTo({ type: 'tabs', tab: 'home' })}
-                className="px-5 py-2.5 rounded-xl bg-[#FF6A00] text-white text-xs font-bold cursor-pointer"
+                className="px-5 py-2.5 rounded-xl bg-accent text-white text-xs font-bold cursor-pointer"
               >
                 Browse other ads
               </button>
@@ -14572,7 +14611,7 @@ export default function RootLayout() {
         };
 
         return (
-          <div key={`listing-${item.id}`} className="flex-1 flex flex-col bg-[#F8FAFC] h-full min-h-full relative overflow-hidden">
+          <div key={`listing-${item.id}`} className="flex-1 flex flex-col bg-surface h-full min-h-full relative overflow-hidden">
             {/* Click on any empty space across listing screen to close call popover */}
             {callDropdownUser && (
               <div
@@ -14703,7 +14742,7 @@ export default function RootLayout() {
                           }}
                           className={`rounded-full transition-all duration-200 cursor-pointer ${
                             isActive
-                              ? 'w-2.5 h-2.5 bg-[#FF6A00] ring-1 ring-white/30 shadow-sm'
+                              ? 'w-2.5 h-2.5 bg-accent ring-1 ring-white/30 shadow-sm'
                               : 'w-2 h-2 bg-white/90 hover:bg-white shadow-xs'
                           }`}
                           title={`Photo ${dotIdx + 1}`}
@@ -14727,7 +14766,7 @@ export default function RootLayout() {
                         onClick={() => setActiveListingPhotoIndex(i)}
                         className={`w-14 h-14 rounded-xl overflow-hidden shrink-0 border-2 transition-all cursor-pointer ${
                           isActive
-                            ? 'border-[#FF6A00] ring-2 ring-[#FF6A00]/25 shadow-xs scale-105'
+                            ? 'border-accent ring-2 ring-accent/25 shadow-xs scale-105'
                             : 'border-slate-200 hover:border-slate-300 opacity-75 hover:opacity-100'
                         }`}
                         title={`Photo ${i + 1}`}
@@ -14752,7 +14791,7 @@ export default function RootLayout() {
               <div className="bg-white rounded-3xl p-4 border border-slate-100 shadow-xs space-y-2">
                 <div className="flex items-center justify-between gap-2 flex-wrap">
                   <div className="flex items-baseline gap-2 flex-wrap min-w-0">
-                    <span className={`font-black text-[#FF6A00] tracking-tight whitespace-nowrap inline-flex flex-row items-baseline shrink-0 ${
+                    <span className={`font-black text-accent tracking-tight whitespace-nowrap inline-flex flex-row items-baseline shrink-0 ${
                       (item.price || 0) >= 100000 ? 'text-xl sm:text-2xl' : 'text-2xl sm:text-3xl'
                     }`}>
                       <span className="mr-1">{item.currency || 'GH₵'}</span>
@@ -15064,7 +15103,7 @@ export default function RootLayout() {
               {/* 6. Safe Trading Guidelines Card - Static, Non-Clickable, No View Button */}
               <div className="bg-white rounded-3xl p-4 border border-slate-100 shadow-xs space-y-3">
                 <div className="flex items-center gap-2">
-                  <ShieldAlert size={18} className="text-[#C2410C]" />
+                  <ShieldAlert size={18} className="text-orange-700" />
                   <h3 className="text-sm font-bold text-slate-900">
                     Safe Trading Guidelines
                   </h3>
@@ -15131,7 +15170,7 @@ export default function RootLayout() {
                 <button
                   type="button"
                   onClick={() => navigateTo({ type: 'manage-my-ads' })}
-                  className="flex-1 bg-[#0F172A] hover:bg-[#1E293B] text-white text-xs font-bold py-3.5 rounded-2xl flex items-center justify-center gap-2 shadow-md active:scale-95 transition-all cursor-pointer"
+                  className="flex-1 bg-ink hover:bg-[#1E293B] text-white text-xs font-bold py-3.5 rounded-2xl flex items-center justify-center gap-2 shadow-md active:scale-95 transition-all cursor-pointer"
                 >
                   <Package size={16} />
                   <span>Manage My Ads</span>
@@ -15150,7 +15189,7 @@ export default function RootLayout() {
                       image: item.images[0],
                     })
                   }
-                  className="flex-1 bg-[#0F172A] hover:bg-[#1E293B] text-white text-xs font-bold py-3.5 rounded-2xl flex items-center justify-center gap-2 shadow-md active:scale-95 transition-all cursor-pointer"
+                  className="flex-1 bg-ink hover:bg-[#1E293B] text-white text-xs font-bold py-3.5 rounded-2xl flex items-center justify-center gap-2 shadow-md active:scale-95 transition-all cursor-pointer"
                 >
                   <MessageSquare size={16} />
                   <span>Chat & Offer</span>
@@ -15162,7 +15201,7 @@ export default function RootLayout() {
                     onClick={() =>
                       startCall(item.seller.name, item.seller.avatar, item.seller.phone, item.seller.id)
                     }
-                    className="call-seller-btn w-full bg-[#FF6A00] hover:bg-[#EA580C] text-white text-xs font-bold py-3.5 rounded-2xl flex items-center justify-center gap-2 shadow-md shadow-orange-500/25 active:scale-95 transition-all cursor-pointer"
+                    className="call-seller-btn w-full bg-accent hover:bg-orange-600 text-white text-xs font-bold py-3.5 rounded-2xl flex items-center justify-center gap-2 shadow-md shadow-orange-500/25 active:scale-95 transition-all cursor-pointer"
                   >
                     <Phone size={16} />
                     <span>Call Seller</span>
@@ -15207,7 +15246,7 @@ export default function RootLayout() {
           activeConv.listingTitle.toLowerCase().includes('mason');
 
         return (
-          <div className="flex-1 flex flex-col bg-[#F8FAFC] h-full min-h-full relative overflow-hidden">
+          <div className="flex-1 flex flex-col bg-surface h-full min-h-full relative overflow-hidden">
             {/* Chat Header */}
             <div className="bg-white px-3.5 py-2.5 border-b border-slate-200/80 flex items-center justify-between z-10 shadow-2xs">
               <div className="flex items-center gap-2.5">
@@ -15251,7 +15290,7 @@ export default function RootLayout() {
                 <button
                   type="button"
                   onClick={() => startCall(activeConv.otherUser.name, activeConv.otherUser.avatar, contactPhone, activeConv.otherUser.id)}
-                  className="w-8.5 h-8.5 rounded-full bg-[#FF6A00] hover:bg-orange-600 text-white flex items-center justify-center active:scale-95 transition-all cursor-pointer shadow-xs"
+                  className="w-8.5 h-8.5 rounded-full bg-accent hover:bg-orange-600 text-white flex items-center justify-center active:scale-95 transition-all cursor-pointer shadow-xs"
                   title="Call"
                 >
                   <Phone size={15} />
@@ -15296,7 +15335,7 @@ export default function RootLayout() {
             </div>
 
             {/* Chat Feed */}
-            <div className="flex-1 p-3.5 overflow-y-auto flex flex-col gap-3 bg-[#F8FAFC]">
+            <div className="flex-1 p-3.5 overflow-y-auto flex flex-col gap-3 bg-surface">
               {activeConv.messages.map((m) => {
                 const isOfferAccepted = m.offerStatus === 'accepted' || !!acceptedOffers[m.id];
                 const currentOfferVal = m.offerAmount || offer1Amount;
@@ -15321,7 +15360,7 @@ export default function RootLayout() {
                               />
                               <span
                                 className={`absolute top-0.5 left-0.5 text-[7px] font-black uppercase px-1 py-0.2 rounded shadow-xs text-white ${
-                                  isOfferAccepted ? 'bg-emerald-600' : 'bg-[#FF6A00]'
+                                  isOfferAccepted ? 'bg-emerald-600' : 'bg-accent'
                                 }`}
                               >
                                 {isOfferAccepted ? 'ACCEPTED' : 'OFFER PENDING'}
@@ -15622,7 +15661,7 @@ export default function RootLayout() {
                   </div>
 
                   {/* Item info */}
-                  <div className="bg-[#F8FAFC] p-3 rounded-2xl border border-slate-100 flex items-center justify-between text-xs">
+                  <div className="bg-surface p-3 rounded-2xl border border-slate-100 flex items-center justify-between text-xs">
                     <span className="font-bold text-slate-700 truncate max-w-[190px]">
                       {activeConv.listingTitle}
                     </span>
@@ -15739,7 +15778,7 @@ export default function RootLayout() {
                       );
                       showToast(`Counter offer of GH₵ ${counterVal.toLocaleString()} sent!`);
                     }}
-                    className="w-full py-3 bg-[#FF6A00] hover:bg-orange-600 active:scale-95 text-white font-extrabold text-xs rounded-xl shadow-xs transition-all cursor-pointer flex items-center justify-center"
+                    className="w-full py-3 bg-accent hover:bg-orange-600 active:scale-95 text-white font-extrabold text-xs rounded-xl shadow-xs transition-all cursor-pointer flex items-center justify-center"
                   >
                     <span>Send Counter Offer (GH₵ {counterOfferInputAmount.toLocaleString()})</span>
                   </button>
@@ -15788,7 +15827,7 @@ export default function RootLayout() {
                   <button
                     type="button"
                     onClick={() => handleTabPress('home')}
-                    className="mt-2 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#FF6A00] hover:bg-orange-600 text-white text-xs font-bold shadow-xs active:scale-95 transition-all cursor-pointer"
+                    className="mt-2 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-accent hover:bg-orange-600 text-white text-xs font-bold shadow-xs active:scale-95 transition-all cursor-pointer"
                   >
                     <Search size={14} />
                     <span>Explore Marketplace</span>
@@ -18632,7 +18671,7 @@ export default function RootLayout() {
                       <button
                         type="button"
                         onClick={() => navigateTo({ type: 'artisan-profile', id: b.artisanId })}
-                        className="text-xs font-bold text-[#FF6A00] hover:text-[#EA580C] hover:underline cursor-pointer shrink-0 transition-colors"
+                        className="text-xs font-bold text-accent hover:text-orange-600 hover:underline cursor-pointer shrink-0 transition-colors"
                       >
                         Profile
                       </button>
@@ -18649,7 +18688,7 @@ export default function RootLayout() {
                       </div>
 
                       <div className="flex items-center gap-2 text-slate-700 font-semibold text-[11px]">
-                        <Calendar size={13} className="text-[#FF6A00] shrink-0" />
+                        <Calendar size={13} className="text-accent shrink-0" />
                         <span className="truncate">{b.bookingDate} • {b.bookingWindow}</span>
                       </div>
 
@@ -18660,7 +18699,7 @@ export default function RootLayout() {
 
                       <div className="pt-2 border-t border-slate-200/60 flex items-center justify-between">
                         <span className="text-slate-500 text-[11px] font-medium">Inspection Fee (On-Site):</span>
-                        <span className="font-black text-[#FF6A00] text-sm">{b.inspectionFee}</span>
+                        <span className="font-black text-accent text-sm">{b.inspectionFee}</span>
                       </div>
                     </div>
 
@@ -18670,12 +18709,12 @@ export default function RootLayout() {
                         <button
                           type="button"
                           onClick={() => togglePlayArtisanBookingAudio({ id: b.id, artisanName: b.artisanName, voiceNoteDuration: b.voiceNoteDuration })}
-                          className="inline-flex items-center gap-1.5 text-[#FF6A00] text-[11px] font-bold active:scale-95 transition-all cursor-pointer hover:opacity-85"
+                          className="inline-flex items-center gap-1.5 text-accent text-[11px] font-bold active:scale-95 transition-all cursor-pointer hover:opacity-85"
                         >
-                          <Mic size={13} className="text-[#FF6A00]" />
+                          <Mic size={13} className="text-accent" />
                           <span>Voice Note ({b.voiceNoteDuration || 18}s)</span>
                           {isPlayingArtisanBookingAudio && activeAudioBookingId === b.id && (
-                            <span className="w-1.5 h-1.5 rounded-full bg-[#FF6A00] animate-ping" />
+                            <span className="w-1.5 h-1.5 rounded-full bg-accent animate-ping" />
                           )}
                         </button>
                       )}
@@ -18716,7 +18755,7 @@ export default function RootLayout() {
                             `Hello ${b.artisanName.split(' ')[0]}, I am reaching out regarding booking ${b.referenceCode} for ${b.service} scheduled on ${b.bookingDate} (${b.bookingWindow}).`
                           )
                         }
-                        className="flex-1 py-2 px-3 rounded-xl bg-[#FF6A00] hover:bg-[#EA580C] text-white font-bold text-xs cursor-pointer shadow-xs active:scale-98 transition-all flex items-center justify-center gap-1.5"
+                        className="flex-1 py-2 px-3 rounded-xl bg-accent hover:bg-orange-600 text-white font-bold text-xs cursor-pointer shadow-xs active:scale-98 transition-all flex items-center justify-center gap-1.5"
                       >
                         <MessageSquare size={13} />
                         <span>Chat</span>
@@ -18839,7 +18878,7 @@ export default function RootLayout() {
 
                       <div className="flex items-center justify-between py-1 border-b border-slate-200/60">
                         <span className="text-slate-500 font-medium">Diagnostic / Callout Fee:</span>
-                        <span className="font-extrabold text-[#FF6A00] text-sm">
+                        <span className="font-extrabold text-accent text-sm">
                           {selectedBookingForDetails.inspectionFee}
                         </span>
                       </div>
@@ -18891,7 +18930,7 @@ export default function RootLayout() {
                     <div className="space-y-2.5">
                       <div className="flex items-center justify-between">
                         <h5 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
-                          <Mic size={14} className="text-[#FF6A00]" />
+                          <Mic size={14} className="text-accent" />
                           <span>Client Audio Explanation</span>
                         </h5>
                       </div>
@@ -18901,7 +18940,7 @@ export default function RootLayout() {
                           <button
                             type="button"
                             onClick={() => togglePlayArtisanBookingAudio({ id: selectedBookingForDetails.id, artisanName: selectedBookingForDetails.artisanName, voiceNoteDuration: selectedBookingForDetails.voiceNoteDuration })}
-                            className="w-11 h-11 rounded-full bg-[#FF6A00] hover:bg-[#EA580C] text-white flex items-center justify-center shrink-0 shadow-md active:scale-95 transition-all cursor-pointer"
+                            className="w-11 h-11 rounded-full bg-accent hover:bg-orange-600 text-white flex items-center justify-center shrink-0 shadow-md active:scale-95 transition-all cursor-pointer"
                             title={isPlayingArtisanBookingAudio && activeAudioBookingId === selectedBookingForDetails.id ? 'Pause' : 'Play'}
                           >
                             {isPlayingArtisanBookingAudio && activeAudioBookingId === selectedBookingForDetails.id ? (
@@ -18930,7 +18969,7 @@ export default function RootLayout() {
                                   <span
                                     key={i}
                                     className={`w-[2.5px] rounded-full transition-colors ${
-                                      isPlayed ? 'bg-[#FF6A00]' : 'bg-orange-200'
+                                      isPlayed ? 'bg-accent' : 'bg-orange-200'
                                     }`}
                                     style={{ height: `${h}%` }}
                                   />
@@ -18948,7 +18987,7 @@ export default function RootLayout() {
                     <div className="space-y-2.5">
                       <div className="flex items-center justify-between">
                         <h5 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
-                          <Camera size={14} className="text-[#FF6A00]" />
+                          <Camera size={14} className="text-accent" />
                           <span>Images of the Work</span>
                         </h5>
                         <span className="text-[11px] text-slate-400 font-medium">
@@ -19032,7 +19071,7 @@ export default function RootLayout() {
                           type="button"
                           disabled={isSubmittingReview}
                           onClick={() => handleSubmitReview(selectedBookingForDetails.id)}
-                          className="w-full py-2.5 rounded-xl bg-[#FF6A00] hover:bg-orange-600 text-white font-bold text-xs cursor-pointer disabled:opacity-60"
+                          className="w-full py-2.5 rounded-xl bg-accent hover:bg-orange-600 text-white font-bold text-xs cursor-pointer disabled:opacity-60"
                         >
                           {isSubmittingReview ? 'Sending…' : 'Submit Review'}
                         </button>
@@ -19093,7 +19132,7 @@ export default function RootLayout() {
                         `Hello ${art.artisanName.split(' ')[0]}, I am reaching out regarding booking ${art.referenceCode} for ${art.service} scheduled on ${art.bookingDate} (${art.bookingWindow}).`
                       );
                     }}
-                    className="flex-1 py-2.5 px-3 rounded-xl bg-[#FF6A00] hover:bg-[#EA580C] text-white font-bold text-xs shadow-xs cursor-pointer active:scale-98 transition-all text-center flex items-center justify-center gap-1.5"
+                    className="flex-1 py-2.5 px-3 rounded-xl bg-accent hover:bg-orange-600 text-white font-bold text-xs shadow-xs cursor-pointer active:scale-98 transition-all text-center flex items-center justify-center gap-1.5"
                   >
                     <MessageSquare size={14} />
                     <span>Chat with {selectedBookingForDetails.artisanName.split(' ')[0]}</span>
@@ -19211,7 +19250,7 @@ export default function RootLayout() {
               {/* Card 1: Apply as a Seller */}
               <div className="bg-white rounded-3xl p-5 border border-slate-200/90 shadow-2xs space-y-3.5">
                 <div className="flex items-center gap-2">
-                  <Store size={22} className="text-[#0D6E4F] stroke-[2.2]" />
+                  <Store size={22} className="text-brand-deep stroke-[2.2]" />
                   <h3 className="text-base font-black text-slate-900">
                     Apply as a Seller
                   </h3>
@@ -19221,19 +19260,19 @@ export default function RootLayout() {
                 </p>
                 <div className="space-y-2.5 pt-1">
                   <div className="flex items-start gap-2.5 text-xs text-slate-700">
-                    <Check size={16} className="text-[#0D6E4F] stroke-[3] shrink-0 mt-0.5" />
+                    <Check size={16} className="text-brand-deep stroke-[3] shrink-0 mt-0.5" />
                     <span>Sell phones, electronics, vehicles, fashion &amp; furniture</span>
                   </div>
                   <div className="flex items-start gap-2.5 text-xs text-slate-700">
-                    <Check size={16} className="text-[#0D6E4F] stroke-[3] shrink-0 mt-0.5" />
+                    <Check size={16} className="text-brand-deep stroke-[3] shrink-0 mt-0.5" />
                     <span>Post ads in 60 seconds with photos &amp; audio notes</span>
                   </div>
                   <div className="flex items-start gap-2.5 text-xs text-slate-700">
-                    <Check size={16} className="text-[#0D6E4F] stroke-[3] shrink-0 mt-0.5" />
+                    <Check size={16} className="text-brand-deep stroke-[3] shrink-0 mt-0.5" />
                     <span>Direct buyer phone calls &amp; fast in-app chat</span>
                   </div>
                   <div className="flex items-start gap-2.5 text-xs text-slate-700">
-                    <Check size={16} className="text-[#0D6E4F] stroke-[3] shrink-0 mt-0.5" />
+                    <Check size={16} className="text-brand-deep stroke-[3] shrink-0 mt-0.5" />
                     <span>Keep 100% of cash &amp; Mobile Money upon handoff</span>
                   </div>
                 </div>
@@ -19268,19 +19307,19 @@ export default function RootLayout() {
                 </p>
                 <div className="space-y-2.5 pt-1">
                   <div className="flex items-start gap-2.5 text-xs text-slate-700">
-                    <Check size={16} className="text-[#0D6E4F] stroke-[3] shrink-0 mt-0.5" />
+                    <Check size={16} className="text-brand-deep stroke-[3] shrink-0 mt-0.5" />
                     <span>Carpentry, electrical, plumbing, AC repair, painting &amp; mechanics</span>
                   </div>
                   <div className="flex items-start gap-2.5 text-xs text-slate-700">
-                    <Check size={16} className="text-[#0D6E4F] stroke-[3] shrink-0 mt-0.5" />
+                    <Check size={16} className="text-brand-deep stroke-[3] shrink-0 mt-0.5" />
                     <span>Ghana Card verification badge for instant trust</span>
                   </div>
                   <div className="flex items-start gap-2.5 text-xs text-slate-700">
-                    <Check size={16} className="text-[#0D6E4F] stroke-[3] shrink-0 mt-0.5" />
+                    <Check size={16} className="text-brand-deep stroke-[3] shrink-0 mt-0.5" />
                     <span>Showcase past project portfolio &amp; voice intro in Twi/English</span>
                   </div>
                   <div className="flex items-start gap-2.5 text-xs text-slate-700">
-                    <Check size={16} className="text-[#0D6E4F] stroke-[3] shrink-0 mt-0.5" />
+                    <Check size={16} className="text-brand-deep stroke-[3] shrink-0 mt-0.5" />
                     <span>Direct neighborhood bookings with 0% platform cuts</span>
                   </div>
                 </div>
@@ -19415,7 +19454,7 @@ export default function RootLayout() {
             {sellerRegStep === 1 && (
               <div className="bg-white px-4 pt-2.5 pb-3 border-b border-slate-100 sticky top-0 z-10">
                 <div className="flex items-center justify-between text-xs mb-1.5 font-bold">
-                  <span className="text-[#FF6A00] tracking-wider uppercase font-black text-[11px]">
+                  <span className="text-accent tracking-wider uppercase font-black text-[11px]">
                     STEP 1 OF 3
                   </span>
                   <span className="text-slate-500 font-semibold text-[11px]">
@@ -19423,7 +19462,7 @@ export default function RootLayout() {
                   </span>
                 </div>
                 <div className="w-full h-1 bg-slate-200 rounded-full overflow-hidden flex">
-                  <div className="w-1/3 h-full bg-[#FF6A00] rounded-full" />
+                  <div className="w-1/3 h-full bg-accent rounded-full" />
                   <div className="flex-1 h-full bg-slate-200" />
                 </div>
               </div>
@@ -19444,7 +19483,7 @@ export default function RootLayout() {
                       <CheckCircle2 size={14} className="text-brand fill-emerald-100 shrink-0" />
                       <span>Step 1 Completed</span>
                     </div>
-                    <div className="w-full h-1 bg-[#0B6640] rounded-full mt-1.5" />
+                    <div className="w-full h-1 bg-brand-deep rounded-full mt-1.5" />
                     <span className="text-[11px] font-bold text-slate-800 mt-1 block truncate">
                       {sellerRegType === 'storefront' || sellerRegForm.sellerAccountType === 'shop'
                         ? 'Shop / Store Hub'
@@ -19456,10 +19495,10 @@ export default function RootLayout() {
 
                   {/* Right Column: Step 2 of 3 */}
                   <div>
-                    <div className="flex justify-end text-xs font-black text-[#FF6A00] tracking-wider uppercase">
+                    <div className="flex justify-end text-xs font-black text-accent tracking-wider uppercase">
                       STEP 2 OF 3
                     </div>
-                    <div className="w-full h-1 bg-[#FF6A00] rounded-full mt-1.5" />
+                    <div className="w-full h-1 bg-accent rounded-full mt-1.5" />
                     <span className="text-[11px] font-bold text-slate-800 mt-1 block text-right truncate">
                       {sellerRegType === 'storefront' || sellerRegForm.sellerAccountType === 'shop'
                         ? 'Storefront & Verification'
@@ -19488,7 +19527,7 @@ export default function RootLayout() {
                         <CheckCircle2 size={13} className="text-brand fill-emerald-100 shrink-0" />
                         <span>Step 1: Info</span>
                       </div>
-                      <div className="w-full h-1 bg-[#0B6640] rounded-full mt-1" />
+                      <div className="w-full h-1 bg-brand-deep rounded-full mt-1" />
                     </button>
                     <button
                       type="button"
@@ -19506,17 +19545,17 @@ export default function RootLayout() {
                             : 'Step 2: ID'}
                         </span>
                       </div>
-                      <div className="w-full h-1 bg-[#0B6640] rounded-full mt-1" />
+                      <div className="w-full h-1 bg-brand-deep rounded-full mt-1" />
                     </button>
                   </div>
 
                   {/* Right Column: Step 3 of 3 - Submitted Info & Safe Hubs */}
                   <div>
-                    <div className="flex justify-end text-xs font-black text-[#FF6A00] tracking-wider uppercase">
+                    <div className="flex justify-end text-xs font-black text-accent tracking-wider uppercase">
                       STEP 3 OF 3
                     </div>
-                    <div className="w-full h-1 bg-[#FF6A00] rounded-full mt-1" />
-                    <span className="text-[11px] font-bold text-[#C2410C] mt-1 block text-right truncate">
+                    <div className="w-full h-1 bg-accent rounded-full mt-1" />
+                    <span className="text-[11px] font-bold text-orange-700 mt-1 block text-right truncate">
                       {sellerRegType === 'artisan'
                         ? 'Verification Details'
                         : sellerRegType === 'storefront' || sellerRegForm.sellerAccountType === 'shop'
@@ -19536,7 +19575,7 @@ export default function RootLayout() {
                   {sellerRegType === 'artisan' ? (
                     <div className="bg-gradient-to-br from-[#FFF5EE] via-white to-[#F0FDF4] rounded-3xl p-4.5 border border-slate-100 shadow-sm space-y-3.5">
                       <div className="flex items-start gap-3">
-                        <div className="w-12 h-12 rounded-2xl bg-[#065F46] text-white flex items-center justify-center shrink-0 shadow-xs">
+                        <div className="w-12 h-12 rounded-2xl bg-brand-deep text-white flex items-center justify-center shrink-0 shadow-xs">
                           <BadgeCheck size={28} className="text-white stroke-[2.4]" />
                         </div>
                         <div className="flex-1 min-w-0">
@@ -19544,7 +19583,7 @@ export default function RootLayout() {
                             Become a Verified Artisan
                           </h3>
                           <p className="text-xs text-slate-600 mt-1 leading-relaxed">
-                            Unlock the <span className="text-[#065F46] font-extrabold">Verified Pro Badge</span>, gain immediate client trust, and receive direct callout jobs with 0% platform cuts!
+                            Unlock the <span className="text-brand-deep font-extrabold">Verified Pro Badge</span>, gain immediate client trust, and receive direct callout jobs with 0% platform cuts!
                           </p>
                         </div>
                       </div>
@@ -19552,13 +19591,13 @@ export default function RootLayout() {
                       {/* Badges in single horizontal row - Image 10 guarantee */}
                       <div className="flex flex-row items-center justify-between gap-1 pt-2.5 border-t border-slate-100/90 w-full flex-nowrap overflow-hidden">
                         <div className="flex items-center gap-1 text-[10.5px] xs:text-[11px] sm:text-[10.5px] font-extrabold text-slate-800 whitespace-nowrap shrink-0">
-                          <div className="w-3.5 h-3.5 rounded-full bg-[#065F46] flex items-center justify-center shrink-0">
+                          <div className="w-3.5 h-3.5 rounded-full bg-brand-deep flex items-center justify-center shrink-0">
                             <Gauge size={8} className="text-white stroke-[2.5]" />
                           </div>
                           <span>0% Commission</span>
                         </div>
                         <div className="flex items-center gap-1 text-[10.5px] xs:text-[11px] sm:text-[10.5px] font-extrabold text-slate-800 whitespace-nowrap shrink-0">
-                          <ShieldCheck size={12} className="text-[#FF6A00] fill-[#FF6A00] shrink-0" />
+                          <ShieldCheck size={12} className="text-accent fill-accent shrink-0" />
                           <span>Verified Pro Shield</span>
                         </div>
                         <div className="flex items-center gap-1 text-[10.5px] xs:text-[11px] sm:text-[10.5px] font-extrabold text-slate-800 whitespace-nowrap shrink-0">
@@ -19570,7 +19609,7 @@ export default function RootLayout() {
                   ) : (
                     <div className="bg-gradient-to-br from-[#FFF5EE] via-white to-[#F0FDF4] rounded-3xl p-4.5 border border-slate-100 shadow-sm space-y-3.5">
                       <div className="flex items-start gap-3">
-                        <div className="w-12 h-12 rounded-2xl bg-[#065F46] text-white flex items-center justify-center shrink-0 shadow-xs">
+                        <div className="w-12 h-12 rounded-2xl bg-brand-deep text-white flex items-center justify-center shrink-0 shadow-xs">
                           <BadgeCheck size={28} className="text-white stroke-[2.4]" />
                         </div>
                         <div className="flex-1 min-w-0">
@@ -19578,7 +19617,7 @@ export default function RootLayout() {
                             Become a Verified Seller
                           </h3>
                           <p className="text-xs text-slate-600 mt-1 leading-relaxed">
-                            Unlock the <span className="text-[#065F46] font-extrabold">Verified Badge</span>, gain immediate buyer trust, and boost listing reach across Ghana today!
+                            Unlock the <span className="text-brand-deep font-extrabold">Verified Badge</span>, gain immediate buyer trust, and boost listing reach across Ghana today!
                           </p>
                         </div>
                       </div>
@@ -19586,13 +19625,13 @@ export default function RootLayout() {
                       {/* Badges in single horizontal row */}
                       <div className="grid grid-cols-3 gap-1 pt-2.5 border-t border-slate-100/90 w-full items-center">
                         <div className="flex items-center justify-start gap-1 text-[11px] sm:text-[10.5px] font-extrabold text-slate-800 whitespace-nowrap min-w-0">
-                          <div className="w-3.5 h-3.5 rounded-full bg-[#065F46] flex items-center justify-center shrink-0">
+                          <div className="w-3.5 h-3.5 rounded-full bg-brand-deep flex items-center justify-center shrink-0">
                             <Gauge size={8} className="text-white stroke-[2.5]" />
                           </div>
                           <span className="truncate">2x Fast Sales</span>
                         </div>
                         <div className="flex items-center justify-center gap-1 text-[11px] sm:text-[10.5px] font-extrabold text-slate-800 whitespace-nowrap min-w-0">
-                          <ShieldCheck size={13} className="text-[#FF6A00] fill-[#FF6A00] shrink-0" />
+                          <ShieldCheck size={13} className="text-accent fill-accent shrink-0" />
                           <span className="truncate">Anti-Scam Shield</span>
                         </div>
                         <div className="flex items-center justify-end gap-1 text-[11px] sm:text-[10.5px] font-extrabold text-slate-800 whitespace-nowrap min-w-0">
@@ -19622,24 +19661,24 @@ export default function RootLayout() {
                           }}
                           className={`rounded-2xl p-4 flex flex-col items-center text-center cursor-pointer transition-all active:scale-98 ${
                             sellerRegForm.sellerAccountType === 'individual' && sellerRegType !== 'storefront'
-                              ? 'bg-[#FFF7ED] border-2 border-[#FF6A00] shadow-xs'
-                              : 'bg-[#F8FAFC] border border-slate-200/80 hover:bg-slate-100/70'
+                              ? 'bg-[#FFF7ED] border-2 border-accent shadow-xs'
+                              : 'bg-surface border border-slate-200/80 hover:bg-slate-100/70'
                           }`}
                         >
                           <div
                             className={`w-11 h-11 rounded-2xl flex items-center justify-center mb-2 transition-all ${
                               sellerRegForm.sellerAccountType === 'individual' && sellerRegType !== 'storefront'
-                                ? 'bg-[#FF6A00] text-white shadow-xs'
+                                ? 'bg-accent text-white shadow-xs'
                                 : 'bg-slate-100 text-slate-600'
                             }`}
                           >
                             <User size={22} className="stroke-[2.2]" />
                           </div>
-                          <span className="font-extrabold text-sm text-[#0F172A] leading-snug">Individual</span>
+                          <span className="font-extrabold text-sm text-ink leading-snug">Individual</span>
                           <span
                             className={`text-xs mt-0.5 font-medium ${
                               sellerRegForm.sellerAccountType === 'individual' && sellerRegType !== 'storefront'
-                                ? 'text-[#FF6A00] font-bold'
+                                ? 'text-accent font-bold'
                                 : 'text-slate-500'
                             }`}
                           >
@@ -19655,24 +19694,24 @@ export default function RootLayout() {
                           }}
                           className={`rounded-2xl p-4 flex flex-col items-center text-center cursor-pointer transition-all active:scale-98 ${
                             sellerRegType === 'storefront' || sellerRegForm.sellerAccountType === 'shop'
-                              ? 'bg-[#FFF7ED] border-2 border-[#FF6A00] shadow-xs'
-                              : 'bg-[#F8FAFC] border border-slate-200/80 hover:bg-slate-100/70'
+                              ? 'bg-[#FFF7ED] border-2 border-accent shadow-xs'
+                              : 'bg-surface border border-slate-200/80 hover:bg-slate-100/70'
                           }`}
                         >
                           <div
                             className={`w-11 h-11 rounded-2xl flex items-center justify-center mb-2 transition-all ${
                               sellerRegType === 'storefront' || sellerRegForm.sellerAccountType === 'shop'
-                                ? 'bg-[#FF6A00] text-white shadow-xs'
+                                ? 'bg-accent text-white shadow-xs'
                                 : 'bg-slate-100 text-slate-600'
                             }`}
                           >
                             <Store size={22} className="stroke-[2.2]" />
                           </div>
-                          <span className="font-extrabold text-sm text-[#0F172A] leading-snug">Shop / Store</span>
+                          <span className="font-extrabold text-sm text-ink leading-snug">Shop / Store</span>
                           <span
                             className={`text-xs mt-0.5 font-medium ${
                               sellerRegType === 'storefront' || sellerRegForm.sellerAccountType === 'shop'
-                                ? 'text-[#FF6A00] font-bold'
+                                ? 'text-accent font-bold'
                                 : 'text-slate-500'
                             }`}
                           >
@@ -19793,7 +19832,7 @@ export default function RootLayout() {
                             <div
                               className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 ml-2 shadow-2xs transition-colors ${
                                 isPhoneValid
-                                  ? 'bg-[#0B6640] text-white'
+                                  ? 'bg-brand-deep text-white'
                                   : 'bg-slate-200 text-slate-400'
                               }`}
                               title={isPhoneValid ? 'Valid Ghanaian Phone Number' : 'Enter valid 9-digit Ghana number'}
@@ -19831,7 +19870,7 @@ export default function RootLayout() {
                             }}
                             className={`py-2 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                               sellerRegForm.gender === gen
-                                ? 'bg-[#FF6A00] text-white shadow-xs'
+                                ? 'bg-accent text-white shadow-xs'
                                 : 'bg-[#F0F2FA] text-slate-700 hover:bg-slate-200'
                             }`}
                           >
@@ -19858,7 +19897,7 @@ export default function RootLayout() {
                           showToast('✓ Step 1 personal info saved');
                         }
                       }}
-                      className="w-full py-4 rounded-2xl bg-[#FF6A00] hover:bg-orange-600 text-white font-extrabold text-sm flex items-center justify-center gap-2 shadow-md active:scale-98 transition-all cursor-pointer"
+                      className="w-full py-4 rounded-2xl bg-accent hover:bg-orange-600 text-white font-extrabold text-sm flex items-center justify-center gap-2 shadow-md active:scale-98 transition-all cursor-pointer"
                     >
                       <span>Proceed to Step 2</span>
                       <ArrowRight size={17} className="stroke-[2.5]" />
@@ -19889,17 +19928,17 @@ export default function RootLayout() {
                               <img
                                 src={thumbnailUrl(userProfile.avatar, 240)}
                                 alt="Store Avatar"
-                                className="w-16 h-16 rounded-full object-cover border-2 border-[#FF6A00]/80 shadow-xs"
+                                className="w-16 h-16 rounded-full object-cover border-2 border-accent/80 shadow-xs"
                               />
                             ) : (
-                              <div className="w-16 h-16 rounded-full bg-slate-100 border-2 border-[#FF6A00]/80 flex items-center justify-center text-slate-400">
+                              <div className="w-16 h-16 rounded-full bg-slate-100 border-2 border-accent/80 flex items-center justify-center text-slate-400">
                                 <Store size={26} className="text-slate-400 stroke-[1.8]" />
                               </div>
                             )}
                             <button
                               type="button"
                               onClick={() => storeLogoInputRef.current?.click()}
-                              className="absolute -bottom-1 -right-1 w-6.5 h-6.5 rounded-full bg-[#FF6A00] text-white flex items-center justify-center shadow-md border-2 border-white cursor-pointer active:scale-90 transition-transform"
+                              className="absolute -bottom-1 -right-1 w-6.5 h-6.5 rounded-full bg-accent text-white flex items-center justify-center shadow-md border-2 border-white cursor-pointer active:scale-90 transition-transform"
                               title="Edit Store Logo"
                             >
                               <Pencil size={11} className="stroke-[2.5]" />
@@ -20016,7 +20055,7 @@ export default function RootLayout() {
                                   onClick={() => storePhysicalInputRef.current?.click()}
                                   className="flex flex-col items-center justify-center gap-1.5 text-slate-600 hover:text-slate-900 cursor-pointer w-full h-full"
                                 >
-                                  <div className="w-8 h-8 rounded-full bg-white shadow-xs flex items-center justify-center text-[#FF6A00]">
+                                  <div className="w-8 h-8 rounded-full bg-white shadow-xs flex items-center justify-center text-accent">
                                     <Camera size={16} />
                                   </div>
                                   <span className="text-[11px] font-bold">Add Exterior</span>
@@ -20053,7 +20092,7 @@ export default function RootLayout() {
                                   onClick={() => storeCounterInputRef.current?.click()}
                                   className="flex flex-col items-center justify-center gap-1.5 text-slate-600 hover:text-slate-900 cursor-pointer w-full h-full"
                                 >
-                                  <div className="w-8 h-8 rounded-full bg-white shadow-xs flex items-center justify-center text-[#FF6A00]">
+                                  <div className="w-8 h-8 rounded-full bg-white shadow-xs flex items-center justify-center text-accent">
                                     <Plus size={16} />
                                   </div>
                                   <span className="text-[11px] font-bold">Add Counter</span>
@@ -20108,7 +20147,7 @@ export default function RootLayout() {
                           <div className={`border rounded-2xl p-3 px-3.5 flex items-center gap-3 transition-all shadow-2xs ${
                             sellerErrors.shopAddress
                               ? 'border-red-400 bg-red-50/20 ring-2 ring-red-100'
-                              : 'bg-slate-50 border-slate-200/80 focus-within:bg-white focus-within:border-[#065F46] focus-within:ring-2 focus-within:ring-emerald-100'
+                              : 'bg-slate-50 border-slate-200/80 focus-within:bg-white focus-within:border-brand-deep focus-within:ring-2 focus-within:ring-emerald-100'
                           }`}>
                             <Store size={18} className={`${sellerErrors.shopAddress ? 'text-red-500' : 'text-slate-600'} shrink-0 stroke-[2]`} />
                             <input
@@ -20135,7 +20174,7 @@ export default function RootLayout() {
                           <label className="text-xs font-semibold text-slate-700 block mb-1.5">
                             Region <span className="text-red-500 font-bold">*</span>
                           </label>
-                          <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-3 px-3.5 flex items-center justify-between focus-within:bg-white focus-within:border-[#065F46] focus-within:ring-2 focus-within:ring-emerald-100 transition-all shadow-2xs">
+                          <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-3 px-3.5 flex items-center justify-between focus-within:bg-white focus-within:border-brand-deep focus-within:ring-2 focus-within:ring-emerald-100 transition-all shadow-2xs">
                             <div className="flex items-center gap-2.5 flex-1 min-w-0">
                               <Building2 size={18} className="text-slate-600 shrink-0" />
                               <select
@@ -20169,7 +20208,7 @@ export default function RootLayout() {
                           <div className={`border rounded-2xl p-3 px-3.5 flex items-center gap-3 transition-all shadow-2xs ${
                             sellerErrors.cityNeighborhood
                               ? 'border-red-400 bg-red-50/20 ring-2 ring-red-100'
-                              : 'bg-slate-50 border-slate-200/80 focus-within:bg-white focus-within:border-[#065F46] focus-within:ring-2 focus-within:ring-emerald-100'
+                              : 'bg-slate-50 border-slate-200/80 focus-within:bg-white focus-within:border-brand-deep focus-within:ring-2 focus-within:ring-emerald-100'
                           }`}>
                             <MapPin size={18} className={`${sellerErrors.cityNeighborhood ? 'text-red-500' : 'text-slate-600'} shrink-0 stroke-[2]`} />
                             <input
@@ -20203,7 +20242,7 @@ export default function RootLayout() {
                           <div className={`border rounded-2xl p-3 px-3.5 flex items-center gap-3 transition-all shadow-2xs ${
                             sellerErrors.shopWorkingHours
                               ? 'border-red-400 bg-red-50/20 ring-2 ring-red-100'
-                              : 'bg-slate-50 border-slate-200/80 focus-within:bg-white focus-within:border-[#065F46] focus-within:ring-2 focus-within:ring-emerald-100'
+                              : 'bg-slate-50 border-slate-200/80 focus-within:bg-white focus-within:border-brand-deep focus-within:ring-2 focus-within:ring-emerald-100'
                           }`}>
                             <Clock size={18} className={`${sellerErrors.shopWorkingHours ? 'text-red-500' : 'text-slate-600'} shrink-0 stroke-[2]`} />
                             <input
@@ -20265,7 +20304,7 @@ export default function RootLayout() {
                                 }}
                                 className={`px-3.5 py-2 rounded-2xl text-xs font-bold flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer ${
                                   isSelected
-                                    ? 'bg-[#FF6A00] text-white shadow-xs'
+                                    ? 'bg-accent text-white shadow-xs'
                                     : 'bg-[#F0F2FA] text-slate-800 hover:bg-slate-200'
                                 }`}
                               >
@@ -20320,7 +20359,7 @@ export default function RootLayout() {
                               <button
                                 type="button"
                                 onClick={() => setIsIdVerificationSkipped(false)}
-                                className="mt-2 text-xs font-bold text-[#FF6A00] hover:underline cursor-pointer"
+                                className="mt-2 text-xs font-bold text-accent hover:underline cursor-pointer"
                               >
                                 + Provide Ghana Card now
                               </button>
@@ -20568,7 +20607,7 @@ export default function RootLayout() {
                               <button
                                 type="button"
                                 onClick={() => setIsCertVerificationSkipped(false)}
-                                className="mt-2 text-xs font-bold text-[#FF6A00] hover:underline cursor-pointer"
+                                className="mt-2 text-xs font-bold text-accent hover:underline cursor-pointer"
                               >
                                 + Provide Business Certificate now
                               </button>
@@ -20655,7 +20694,7 @@ export default function RootLayout() {
                             return (
                               <label
                                 key={item.id}
-                                className="flex items-start gap-3 p-3 rounded-2xl bg-[#F8FAFC] hover:bg-slate-100/70 transition-colors cursor-pointer"
+                                className="flex items-start gap-3 p-3 rounded-2xl bg-surface hover:bg-slate-100/70 transition-colors cursor-pointer"
                               >
                                 <input
                                   type="checkbox"
@@ -20665,7 +20704,7 @@ export default function RootLayout() {
                                       isChecked ? prev.filter((g) => g !== item.id) : [...prev, item.id]
                                     );
                                   }}
-                                  className="w-4.5 h-4.5 rounded text-[#0B6640] accent-[#0B6640] cursor-pointer mt-0.5 shrink-0"
+                                  className="w-4.5 h-4.5 rounded text-brand-deep accent-brand-deep cursor-pointer mt-0.5 shrink-0"
                                 />
                                 <div>
                                   <span className="text-xs font-bold text-slate-900 block">{item.title}</span>
@@ -20680,7 +20719,7 @@ export default function RootLayout() {
                       {/* Card: Commercial Merchant Agreement & Consent */}
                       <div className="bg-white rounded-3xl p-4.5 shadow-2xs space-y-3.5">
                         <div className="flex items-start gap-2.5">
-                          <ShieldCheck size={22} className="text-[#0B6640] stroke-[2.5] shrink-0 mt-0.5" />
+                          <ShieldCheck size={22} className="text-brand-deep stroke-[2.5] shrink-0 mt-0.5" />
                           <div>
                             <h3 className="text-sm font-black text-slate-900">
                               Commercial Storefront Agreement
@@ -20693,21 +20732,21 @@ export default function RootLayout() {
 
                         <div className="bg-slate-50/90 rounded-2xl p-3.5 space-y-2.5 text-xs text-slate-600 leading-relaxed">
                           <div className="flex items-start gap-2">
-                            <CheckCircle2 size={16} className="text-[#0B6640] shrink-0 stroke-[2.5] mt-0.5" />
+                            <CheckCircle2 size={16} className="text-brand-deep shrink-0 stroke-[2.5] mt-0.5" />
                             <div>
                               <strong className="text-slate-800">100% Free Peer Direct Payments:</strong> Zero commissions. Receive direct Mobile Money and cash payments from buyers upon handoff.
                             </div>
                           </div>
 
                           <div className="flex items-start gap-2">
-                            <CheckCircle2 size={16} className="text-[#0B6640] shrink-0 stroke-[2.5] mt-0.5" />
+                            <CheckCircle2 size={16} className="text-brand-deep shrink-0 stroke-[2.5] mt-0.5" />
                             <div>
                               <strong className="text-slate-800">Authentic Physical Presence:</strong> You certify that the uploaded storefront and display photos accurately represent your active commercial business in Ghana.
                             </div>
                           </div>
 
                           <div className="flex items-start gap-2">
-                            <CheckCircle2 size={16} className="text-[#0B6640] shrink-0 stroke-[2.5] mt-0.5" />
+                            <CheckCircle2 size={16} className="text-brand-deep shrink-0 stroke-[2.5] mt-0.5" />
                             <div>
                               <strong className="text-slate-800">Encrypted Verification:</strong> Your Ghana Card and shop details are securely encrypted and verified to maintain buyer trust.
                             </div>
@@ -20716,7 +20755,7 @@ export default function RootLayout() {
 
                         {/* Checkbox: agreedToSellerCode */}
                         <label className={`flex items-start gap-3 cursor-pointer pt-1 p-3 rounded-2xl transition-colors border ${
-                          sellerErrors.agreedToSellerCode ? 'bg-red-50/30 border-red-300' : 'bg-[#F8FAFC] border-transparent hover:bg-slate-100/70'
+                          sellerErrors.agreedToSellerCode ? 'bg-red-50/30 border-red-300' : 'bg-surface border-transparent hover:bg-slate-100/70'
                         }`}>
                           <input
                             type="checkbox"
@@ -20725,7 +20764,7 @@ export default function RootLayout() {
                               setAgreedToSellerCode(e.target.checked);
                               clearSellerError('agreedToSellerCode');
                             }}
-                            className="w-4.5 h-4.5 rounded text-[#0B6640] accent-[#0B6640] cursor-pointer mt-0.5 shrink-0"
+                            className="w-4.5 h-4.5 rounded text-brand-deep accent-brand-deep cursor-pointer mt-0.5 shrink-0"
                           />
                           <span className="text-xs text-slate-800 font-semibold leading-relaxed">
                             I agree to the Commercial Merchant Code of Conduct and confirm all storefront details and photos represent my legitimate business. <span className="text-red-500 font-bold">* Required</span>
@@ -20973,7 +21012,7 @@ export default function RootLayout() {
                                   key={town}
                                   className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-slate-800 text-[11px] font-bold border border-slate-300 bg-white shadow-2xs"
                                 >
-                                  <MapPin size={11} className="text-[#FF6A00] shrink-0" />
+                                  <MapPin size={11} className="text-accent shrink-0" />
                                   <span>{town}</span>
                                   <button
                                     type="button"
@@ -21028,7 +21067,7 @@ export default function RootLayout() {
                                 key={t}
                                 type="button"
                                 onClick={() => setArtisanCoverageAreas((prev) => [...prev, t])}
-                                className="text-[10.5px] font-bold text-slate-700 hover:text-[#FF6A00] hover:border-orange-400 bg-white border border-slate-200 px-2.5 py-0.5 rounded-full cursor-pointer transition-colors shadow-2xs"
+                                className="text-[10.5px] font-bold text-slate-700 hover:text-accent hover:border-orange-400 bg-white border border-slate-200 px-2.5 py-0.5 rounded-full cursor-pointer transition-colors shadow-2xs"
                               >
                                 + {t}
                               </button>
@@ -21073,7 +21112,7 @@ export default function RootLayout() {
                               <button
                                 type="button"
                                 onClick={() => setIsPoliceClearanceSkipped(false)}
-                                className="mt-2 text-xs font-bold text-[#FF6A00] hover:underline cursor-pointer"
+                                className="mt-2 text-xs font-bold text-accent hover:underline cursor-pointer"
                               >
                                 + Provide CID Clearance now
                               </button>
@@ -21356,7 +21395,7 @@ export default function RootLayout() {
                           <button
                             type="button"
                             onClick={() => setShowAddServiceForm(!showAddServiceForm)}
-                            className="flex items-center gap-1 px-3 py-1.5 rounded-full text-white text-[11px] font-bold bg-[#FF6A00] hover:bg-orange-600 transition-all cursor-pointer shadow-xs active:scale-95 shrink-0"
+                            className="flex items-center gap-1 px-3 py-1.5 rounded-full text-white text-[11px] font-bold bg-accent hover:bg-orange-600 transition-all cursor-pointer shadow-xs active:scale-95 shrink-0"
                           >
                             <Plus size={13} />
                             <span>Add Service</span>
@@ -21393,7 +21432,7 @@ export default function RootLayout() {
                                 </div>
                               </div>
                               <div className="flex items-center gap-2 shrink-0">
-                                <span className={`text-xs font-black ${srv.price === 'Free' ? 'text-brand' : 'text-[#FF6A00]'}`}>
+                                <span className={`text-xs font-black ${srv.price === 'Free' ? 'text-brand' : 'text-accent'}`}>
                                   {srv.price}
                                 </span>
                                 <button
@@ -21516,7 +21555,7 @@ export default function RootLayout() {
                           <button
                             type="button"
                             onClick={() => setShowAddPortfolioForm(true)}
-                            className="flex items-center gap-1 px-3 py-1.5 rounded-full text-white text-[11px] font-bold bg-[#FF6A00] hover:bg-orange-600 transition-all cursor-pointer shadow-xs active:scale-95 shrink-0"
+                            className="flex items-center gap-1 px-3 py-1.5 rounded-full text-white text-[11px] font-bold bg-accent hover:bg-orange-600 transition-all cursor-pointer shadow-xs active:scale-95 shrink-0"
                           >
                             <Plus size={13} />
                             <span>Add Project</span>
@@ -21753,7 +21792,7 @@ export default function RootLayout() {
                               <button
                                 type="button"
                                 onClick={() => setIsIdVerificationSkipped(false)}
-                                className="mt-2 text-xs font-bold text-[#FF6A00] hover:underline cursor-pointer"
+                                className="mt-2 text-xs font-bold text-accent hover:underline cursor-pointer"
                               >
                                 + Provide Ghana Card now
                               </button>
@@ -21852,7 +21891,7 @@ export default function RootLayout() {
                               <button
                                 type="button"
                                 onClick={() => setIsCertVerificationSkipped(false)}
-                                className="mt-2 text-xs font-bold text-[#FF6A00] hover:underline cursor-pointer"
+                                className="mt-2 text-xs font-bold text-accent hover:underline cursor-pointer"
                               >
                                 + Provide Trade Certificate now
                               </button>
@@ -21921,7 +21960,7 @@ export default function RootLayout() {
                       {/* Consent & Information Usage */}
                       <div className="bg-white rounded-3xl p-4.5 shadow-2xs space-y-3.5">
                         <div className="flex items-start gap-2.5">
-                          <ShieldCheck size={22} className="text-[#0B6640] stroke-[2.5] shrink-0 mt-0.5" />
+                          <ShieldCheck size={22} className="text-brand-deep stroke-[2.5] shrink-0 mt-0.5" />
                           <div>
                             <h3 className="text-sm font-black text-slate-900">
                               Artisan Service Agreement
@@ -21933,7 +21972,7 @@ export default function RootLayout() {
                         </div>
 
                         <label className={`flex items-start gap-3 cursor-pointer pt-1 p-3 rounded-2xl transition-colors border ${
-                          sellerErrors.allowWhatsApp ? 'bg-red-50/30 border-red-300' : 'bg-[#F8FAFC] border-transparent hover:bg-slate-100/70'
+                          sellerErrors.allowWhatsApp ? 'bg-red-50/30 border-red-300' : 'bg-surface border-transparent hover:bg-slate-100/70'
                         }`}>
                           <input
                             type="checkbox"
@@ -21942,7 +21981,7 @@ export default function RootLayout() {
                               setSellerRegForm((prev) => ({ ...prev, allowWhatsApp: e.target.checked }));
                               clearSellerError('allowWhatsApp');
                             }}
-                            className="w-4.5 h-4.5 rounded text-[#0B6640] accent-[#0B6640] cursor-pointer mt-0.5 shrink-0"
+                            className="w-4.5 h-4.5 rounded text-brand-deep accent-brand-deep cursor-pointer mt-0.5 shrink-0"
                           />
                           <span className="text-xs text-slate-800 font-semibold leading-relaxed">
                             I confirm all trade details are accurate and agree to receive job requests directly from clients with zero cuts taken by Haraka. <span className="text-red-500 font-bold">* Required</span>
@@ -22032,7 +22071,7 @@ export default function RootLayout() {
                                 }}
                                 className={`px-3.5 py-2 rounded-2xl text-xs font-bold flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer ${
                                   isSelected
-                                    ? 'bg-[#FF6A00] text-white shadow-xs'
+                                    ? 'bg-accent text-white shadow-xs'
                                     : 'bg-[#F0F2FA] text-slate-800 hover:bg-slate-200'
                                 }`}
                               >
@@ -22089,7 +22128,7 @@ export default function RootLayout() {
                           <label className="text-xs font-semibold text-slate-700 block mb-1.5">
                             Region <span className="text-red-500 font-bold">*</span>
                           </label>
-                          <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-3 px-3.5 flex items-center justify-between focus-within:bg-white focus-within:border-[#065F46] focus-within:ring-2 focus-within:ring-emerald-100 transition-all shadow-2xs">
+                          <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-3 px-3.5 flex items-center justify-between focus-within:bg-white focus-within:border-brand-deep focus-within:ring-2 focus-within:ring-emerald-100 transition-all shadow-2xs">
                             <div className="flex items-center gap-2.5 flex-1 min-w-0">
                               <Building2 size={18} className="text-slate-600 shrink-0" />
                               <select
@@ -22122,7 +22161,7 @@ export default function RootLayout() {
                           <div className={`border rounded-2xl p-3 px-3.5 flex items-center gap-3 transition-all shadow-2xs ${
                             sellerErrors.cityNeighborhood
                               ? 'border-red-400 bg-red-50/20 ring-2 ring-red-100'
-                              : 'bg-slate-50 border-slate-200/80 focus-within:bg-white focus-within:border-[#065F46] focus-within:ring-2 focus-within:ring-emerald-100'
+                              : 'bg-slate-50 border-slate-200/80 focus-within:bg-white focus-within:border-brand-deep focus-within:ring-2 focus-within:ring-emerald-100'
                           }`}>
                             <MapPin size={18} className={`${sellerErrors.cityNeighborhood ? 'text-red-500' : 'text-slate-600'} shrink-0 stroke-[2]`} />
                             <input
@@ -22162,7 +22201,7 @@ export default function RootLayout() {
                               setSellerRegForm((prev) => ({ ...prev, isHomeBased: !prev.isHomeBased }))
                             }
                             className={`w-12 h-6 rounded-full p-0.5 transition-colors cursor-pointer shrink-0 ${
-                              sellerRegForm.isHomeBased ? 'bg-[#FF6A00]' : 'bg-[#D8DCF5]'
+                              sellerRegForm.isHomeBased ? 'bg-accent' : 'bg-[#D8DCF5]'
                             }`}
                           >
                             <div
@@ -22211,7 +22250,7 @@ export default function RootLayout() {
                               <button
                                 type="button"
                                 onClick={() => setIsIdVerificationSkipped(false)}
-                                className="mt-2 text-xs font-bold text-[#FF6A00] hover:underline cursor-pointer"
+                                className="mt-2 text-xs font-bold text-accent hover:underline cursor-pointer"
                               >
                                 + Provide Ghana Card now
                               </button>
@@ -22459,7 +22498,7 @@ export default function RootLayout() {
                               <button
                                 type="button"
                                 onClick={() => setIsCertVerificationSkipped(false)}
-                                className="mt-2 text-xs font-bold text-[#FF6A00] hover:underline cursor-pointer"
+                                className="mt-2 text-xs font-bold text-accent hover:underline cursor-pointer"
                               >
                                 + Provide Certificate now
                               </button>
@@ -22528,7 +22567,7 @@ export default function RootLayout() {
                       {/* Consent & Information Usage */}
                       <div className="bg-white rounded-3xl p-4.5 shadow-2xs space-y-3.5">
                         <div className="flex items-start gap-2.5">
-                          <ShieldCheck size={22} className="text-[#0B6640] stroke-[2.5] shrink-0 mt-0.5" />
+                          <ShieldCheck size={22} className="text-brand-deep stroke-[2.5] shrink-0 mt-0.5" />
                           <div>
                             <h3 className="text-sm font-black text-slate-900">
                               Consent & Information Usage
@@ -22541,21 +22580,21 @@ export default function RootLayout() {
 
                         <div className="bg-slate-50/90 rounded-2xl p-3.5 space-y-2.5 text-xs text-slate-600 leading-relaxed">
                           <div className="flex items-start gap-2">
-                            <CheckCircle2 size={16} className="text-[#0B6640] shrink-0 stroke-[2.5] mt-0.5" />
+                            <CheckCircle2 size={16} className="text-brand-deep shrink-0 stroke-[2.5] mt-0.5" />
                             <div>
                               <strong className="text-slate-800">Merchant Verification:</strong> Ghana Card information and uploaded ID photos are reviewed strictly to confirm your identity, grant Verified Seller status, and protect buyers from fraudulent listings. Your ID photos and PIN are securely encrypted and never made public.
                             </div>
                           </div>
 
                           <div className="flex items-start gap-2">
-                            <CheckCircle2 size={16} className="text-[#0B6640] shrink-0 stroke-[2.5] mt-0.5" />
+                            <CheckCircle2 size={16} className="text-brand-deep shrink-0 stroke-[2.5] mt-0.5" />
                             <div>
                               <strong className="text-slate-800">Public Storefront Presentation:</strong> Your Business Display Name, category selections, and primary town/neighborhood are displayed on your listings so nearby Ghanaian buyers can find and trust your goods.
                             </div>
                           </div>
 
                           <div className="flex items-start gap-2">
-                            <CheckCircle2 size={16} className="text-[#0B6640] shrink-0 stroke-[2.5] mt-0.5" />
+                            <CheckCircle2 size={16} className="text-brand-deep shrink-0 stroke-[2.5] mt-0.5" />
                             <div>
                               <strong className="text-slate-800">Direct Buyer Inquiries:</strong> Your phone number allows buyers to call or message you directly to confirm availability, negotiate pricing, and coordinate in-person pickup.
                             </div>
@@ -22564,7 +22603,7 @@ export default function RootLayout() {
 
                         {/* Consent checkbox */}
                         <label className={`flex items-start gap-3 cursor-pointer pt-1 p-3 rounded-2xl transition-colors border ${
-                          sellerErrors.allowWhatsApp ? 'bg-red-50/30 border-red-300' : 'bg-[#F8FAFC] border-transparent hover:bg-slate-100/70'
+                          sellerErrors.allowWhatsApp ? 'bg-red-50/30 border-red-300' : 'bg-surface border-transparent hover:bg-slate-100/70'
                         }`}>
                           <input
                             type="checkbox"
@@ -22573,7 +22612,7 @@ export default function RootLayout() {
                               setSellerRegForm((prev) => ({ ...prev, allowWhatsApp: e.target.checked }));
                               clearSellerError('allowWhatsApp');
                             }}
-                            className="w-4.5 h-4.5 rounded text-[#0B6640] accent-[#0B6640] cursor-pointer mt-0.5 shrink-0"
+                            className="w-4.5 h-4.5 rounded text-brand-deep accent-brand-deep cursor-pointer mt-0.5 shrink-0"
                           />
                           <span className="text-xs text-slate-800 font-semibold leading-relaxed">
                             I consent to Haraka using my information for merchant verification, public storefront display, and direct buyer communication as outlined above. <span className="text-red-500 font-bold">* Required</span>
@@ -22627,7 +22666,7 @@ export default function RootLayout() {
                                 <span className="text-[8px] font-extrabold text-red-500 mt-0.5">Photo *</span>
                               </div>
                             )}
-                            <div className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-[#FF6A00] text-white flex items-center justify-center shadow-xs">
+                            <div className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-accent text-white flex items-center justify-center shadow-xs">
                               <Camera size={11} strokeWidth={2.6} />
                             </div>
                           </div>
@@ -22755,7 +22794,7 @@ export default function RootLayout() {
                           <button
                             type="button"
                             onClick={() => setSellerRegStep(2)}
-                            className="text-[11px] font-bold text-[#FF6A00] hover:underline cursor-pointer"
+                            className="text-[11px] font-bold text-accent hover:underline cursor-pointer"
                           >
                             Edit
                           </button>
@@ -22796,7 +22835,7 @@ export default function RootLayout() {
                           <button
                             type="button"
                             onClick={() => setSellerRegStep(2)}
-                            className="text-[11px] font-bold text-[#FF6A00] hover:underline cursor-pointer"
+                            className="text-[11px] font-bold text-accent hover:underline cursor-pointer"
                           >
                             Edit
                           </button>
@@ -22839,7 +22878,7 @@ export default function RootLayout() {
                           <button
                             type="button"
                             onClick={() => setSellerRegStep(2)}
-                            className="text-[11px] font-bold text-[#FF6A00] hover:underline cursor-pointer"
+                            className="text-[11px] font-bold text-accent hover:underline cursor-pointer"
                           >
                             Edit
                           </button>
@@ -22865,7 +22904,7 @@ export default function RootLayout() {
                           {/* Diagnostic Inspection Fee */}
                           <div className="flex items-center justify-between py-1 border-b border-slate-100">
                             <span className="text-slate-500 font-medium">Diagnostic Inspection Fee:</span>
-                            <span className={`font-black text-right ${Number(sellerRegForm.inspectionFee ?? 0) === 0 && (sellerRegForm.inspectionFee !== '' && sellerRegForm.inspectionFee !== undefined) ? 'text-brand' : 'text-[#FF6A00]'}`}>
+                            <span className={`font-black text-right ${Number(sellerRegForm.inspectionFee ?? 0) === 0 && (sellerRegForm.inspectionFee !== '' && sellerRegForm.inspectionFee !== undefined) ? 'text-brand' : 'text-accent'}`}>
                               {Number(sellerRegForm.inspectionFee ?? 0) === 0 && (sellerRegForm.inspectionFee !== '' && sellerRegForm.inspectionFee !== undefined)
                                 ? 'FREE on Arrival'
                                 : sellerRegForm.inspectionFee ? `GH₵ ${sellerRegForm.inspectionFee}.00` : 'Not set'}
@@ -22970,7 +23009,7 @@ export default function RootLayout() {
                       {/* Card 5: Artisan Terms & Callout Agreement */}
                       <div className="bg-white rounded-3xl p-5 border border-slate-200/80 shadow-2xs space-y-3">
                         <label className={`flex items-start gap-3 cursor-pointer pt-1 p-3 rounded-2xl transition-colors border ${
-                          sellerErrors.confirmSafeTradePayout ? 'bg-red-50/30 border-red-300' : 'bg-[#F8FAFC] border-transparent hover:bg-slate-100/70'
+                          sellerErrors.confirmSafeTradePayout ? 'bg-red-50/30 border-red-300' : 'bg-surface border-transparent hover:bg-slate-100/70'
                         }`}>
                           <input
                             type="checkbox"
@@ -22979,7 +23018,7 @@ export default function RootLayout() {
                               setConfirmSafeTradePayout(e.target.checked);
                               clearSellerError('confirmSafeTradePayout');
                             }}
-                            className="w-4.5 h-4.5 rounded text-[#065F46] accent-[#065F46] cursor-pointer mt-0.5 shrink-0"
+                            className="w-4.5 h-4.5 rounded text-brand-deep accent-brand-deep cursor-pointer mt-0.5 shrink-0"
                           />
                           <span className="text-xs text-slate-800 font-semibold leading-relaxed">
                             I confirm that my trade skills, certifications, and portfolio work are genuine, and I agree to the Haraka Artisan Code with 0% platform commission on callout payments from clients. <span className="text-red-500 font-bold">* Required</span>
@@ -22999,7 +23038,7 @@ export default function RootLayout() {
                       <div className="rounded-3xl p-5 border border-slate-200/80 space-y-2.5">
                         <div className="flex items-start gap-3">
                           <div className="w-12 h-12 rounded-2xl text-brand flex items-center justify-center shrink-0">
-                            <ShieldCheck size={28} className="text-[#065F46] stroke-[2.4]" />
+                            <ShieldCheck size={28} className="text-brand-deep stroke-[2.4]" />
                           </div>
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 flex-wrap">
@@ -23050,7 +23089,7 @@ export default function RootLayout() {
                         <button
                           type="button"
                           onClick={() => setSellerRegStep(1)}
-                          className="text-[11px] font-bold text-[#FF6A00] hover:underline cursor-pointer"
+                          className="text-[11px] font-bold text-accent hover:underline cursor-pointer"
                         >
                           Edit
                         </button>
@@ -23114,7 +23153,7 @@ export default function RootLayout() {
                         <button
                           type="button"
                           onClick={() => setSellerRegStep(2)}
-                          className="text-[11px] font-bold text-[#FF6A00] hover:underline cursor-pointer"
+                          className="text-[11px] font-bold text-accent hover:underline cursor-pointer"
                         >
                           Edit
                         </button>
@@ -23192,7 +23231,7 @@ export default function RootLayout() {
                         <button
                           type="button"
                           onClick={() => setSellerRegStep(2)}
-                          className="text-[11px] font-bold text-[#FF6A00] hover:underline cursor-pointer"
+                          className="text-[11px] font-bold text-accent hover:underline cursor-pointer"
                         >
                           Edit
                         </button>
@@ -23314,15 +23353,15 @@ export default function RootLayout() {
                           <img
                             src={thumbnailUrl(sellerAvatarPhoto, 240)}
                             alt="Seller"
-                            className="w-14 h-14 rounded-full object-cover border-2 border-white shadow-xs group-hover:opacity-90 group-hover:ring-2 group-hover:ring-[#FF6A00] transition-all"
+                            className="w-14 h-14 rounded-full object-cover border-2 border-white shadow-xs group-hover:opacity-90 group-hover:ring-2 group-hover:ring-accent transition-all"
                           />
                         ) : (
-                          <div className={`w-14 h-14 rounded-full bg-slate-100 border-2 ${sellerErrors.sellerAvatarPhoto ? 'border-red-500 bg-red-50 ring-2 ring-red-400/40' : 'border-dashed border-slate-300'} flex flex-col items-center justify-center text-slate-400 group-hover:border-[#FF6A00] group-hover:text-[#FF6A00] transition-colors`}>
+                          <div className={`w-14 h-14 rounded-full bg-slate-100 border-2 ${sellerErrors.sellerAvatarPhoto ? 'border-red-500 bg-red-50 ring-2 ring-red-400/40' : 'border-dashed border-slate-300'} flex flex-col items-center justify-center text-slate-400 group-hover:border-accent group-hover:text-accent transition-colors`}>
                             <User size={20} className={sellerErrors.sellerAvatarPhoto ? 'text-red-500' : 'text-slate-400'} />
                             <span className="text-[8px] font-extrabold text-red-500 mt-0.5 uppercase tracking-tight">Photo *</span>
                           </div>
                         )}
-                        <div className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-[#FF6A00] text-white flex items-center justify-center shadow-xs group-hover:scale-110 transition-transform">
+                        <div className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-accent text-white flex items-center justify-center shadow-xs group-hover:scale-110 transition-transform">
                           <Camera size={11} strokeWidth={2.6} />
                         </div>
                       </div>
@@ -23330,7 +23369,7 @@ export default function RootLayout() {
                         <h4 className="text-base font-black text-slate-900 truncate">
                           {sellerRegForm.fullName || sellerRegForm.displayName || '—'}
                         </h4>
-                        <div className="text-[#C2410C] text-[11.5px] font-bold mt-1">
+                        <div className="text-orange-700 text-[11.5px] font-bold mt-1">
                           <span>Fast Responder ({sellerResponseTime})</span>
                         </div>
                       </div>
@@ -23356,7 +23395,7 @@ export default function RootLayout() {
                             onClick={() => setSellerResponseTime(time)}
                             className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                               sellerResponseTime === time
-                                ? 'bg-[#FF6A00] text-white shadow-xs'
+                                ? 'bg-accent text-white shadow-xs'
                                 : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
                             }`}
                           >
@@ -23402,7 +23441,7 @@ export default function RootLayout() {
                     {/* Neighborhood Privacy Guard */}
                     <div className="rounded-2xl p-3.5 flex items-center justify-between gap-3">
                       <div className="flex items-center gap-3 min-w-0 flex-1">
-                        <div className="w-9 h-9 rounded-xl text-[#C2410C] flex items-center justify-center shrink-0">
+                        <div className="w-9 h-9 rounded-xl text-orange-700 flex items-center justify-center shrink-0">
                           <Lock size={17} className="stroke-[2.2]" />
                         </div>
                         <div className="min-w-0 flex-1">
@@ -23411,7 +23450,7 @@ export default function RootLayout() {
                           </h5>
                           <p className="text-[11px] text-slate-600 mt-0.5 leading-snug">
                             Hides exact residential GPS. Publicly displays only:{' '}
-                            <strong className="text-[#C2410C] font-extrabold">
+                            <strong className="text-orange-700 font-extrabold">
                               "{sellerRegForm.cityNeighborhood || '—'}"
                             </strong>
                           </p>
@@ -23421,7 +23460,7 @@ export default function RootLayout() {
                         type="button"
                         onClick={() => setNeighborhoodPrivacyGuard(!neighborhoodPrivacyGuard)}
                         className={`w-11 h-6 rounded-full p-0.5 transition-colors cursor-pointer shrink-0 ${
-                          neighborhoodPrivacyGuard ? 'bg-[#065F46]' : 'bg-slate-300'
+                          neighborhoodPrivacyGuard ? 'bg-brand-deep' : 'bg-slate-300'
                         }`}
                       >
                         <div
@@ -23463,7 +23502,7 @@ export default function RootLayout() {
                             }
                           }}
                           placeholder="Add custom landmark (e.g. Shell Petrol Station, Mall Gate)..."
-                          className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs font-semibold text-slate-900 outline-none focus:border-[#FF6A00] focus:bg-white transition-all"
+                          className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs font-semibold text-slate-900 outline-none focus:border-accent focus:bg-white transition-all"
                         />
                         <button
                           type="button"
@@ -23476,7 +23515,7 @@ export default function RootLayout() {
                               setCustomLandmarkInput('');
                             }
                           }}
-                          className="px-4 py-2.5 rounded-xl bg-[#065F46] hover:bg-emerald-800 text-white text-xs font-bold transition-all active:scale-95 cursor-pointer shrink-0"
+                          className="px-4 py-2.5 rounded-xl bg-brand-deep hover:bg-emerald-800 text-white text-xs font-bold transition-all active:scale-95 cursor-pointer shrink-0"
                         >
                           + Add
                         </button>
@@ -23528,7 +23567,7 @@ export default function RootLayout() {
                         type="button"
                         onClick={() => setAllowCourierDispatch(!allowCourierDispatch)}
                         className={`w-11 h-6 rounded-full p-0.5 transition-colors cursor-pointer shrink-0 ${
-                          allowCourierDispatch ? 'bg-[#065F46]' : 'bg-slate-300'
+                          allowCourierDispatch ? 'bg-brand-deep' : 'bg-slate-300'
                         }`}
                       >
                         <div
@@ -23562,7 +23601,7 @@ export default function RootLayout() {
                           setConfirmSafeTradePayout(e.target.checked);
                           clearSellerError('confirmSafeTradePayout');
                         }}
-                        className="w-4 h-4 rounded text-[#065F46] accent-[#065F46] cursor-pointer mt-0.5 shrink-0"
+                        className="w-4 h-4 rounded text-brand-deep accent-brand-deep cursor-pointer mt-0.5 shrink-0"
                       />
                       <span className="text-xs text-slate-800 font-semibold leading-relaxed">
                         I confirm that all listed items are personally owned, accurately represented, and that I will conduct item exchanges in safe, public daylight spots. <span className="text-red-500 font-bold">* Required</span>
@@ -23594,7 +23633,7 @@ export default function RootLayout() {
                       showToast(isShop ? '🎉 Shop details saved!' : '✓ Review profile & safe meetup hubs');
                     }
                   }}
-                  className="w-full py-3.5 px-4 rounded-2xl font-extrabold text-sm flex items-center justify-center transition-all bg-[#FF6A00] hover:bg-orange-600 text-white shadow-md active:scale-98 cursor-pointer"
+                  className="w-full py-3.5 px-4 rounded-2xl font-extrabold text-sm flex items-center justify-center transition-all bg-accent hover:bg-orange-600 text-white shadow-md active:scale-98 cursor-pointer"
                 >
                   <span>save &amp; proceed to step 3</span>
                 </button>
@@ -23720,7 +23759,7 @@ export default function RootLayout() {
                     showToast('Application submitted! An admin will review it shortly.');
                     navigateTo({ type: 'pending-application', applicantId: newAppId });
                   }}
-                  className="flex-1 py-3.5 px-4 rounded-2xl font-black text-sm sm:text-base flex items-center justify-center transition-all bg-[#FF6A00] hover:bg-orange-600 text-white shadow-md active:scale-98 cursor-pointer"
+                  className="flex-1 py-3.5 px-4 rounded-2xl font-black text-sm sm:text-base flex items-center justify-center transition-all bg-accent hover:bg-orange-600 text-white shadow-md active:scale-98 cursor-pointer"
                 >
                   <span>{isSubmittingApplication ? 'Submitting…' : 'Submit application'}</span>
                 </button>
@@ -23784,7 +23823,7 @@ export default function RootLayout() {
                   {/* 72h Live Countdown Timer with Deep Green HR, Deep Blue MIN, Red S - STRICTLY NO background color & reduced size */}
                   <div className="py-2.5 text-center">
                     <div className="text-base sm:text-lg font-black tracking-tight whitespace-nowrap tabular-nums flex items-center justify-center gap-1.5">
-                      <span className="text-[#065F46] font-extrabold">{Math.floor(appCountdownSeconds / 3600)} HR</span>
+                      <span className="text-brand-deep font-extrabold">{Math.floor(appCountdownSeconds / 3600)} HR</span>
                       <span className="text-slate-300 font-bold">:</span>
                       <span className="text-[#1E3A8A] font-extrabold">{Math.floor((appCountdownSeconds % 3600) / 60).toString().padStart(2, '0')} MIN</span>
                       <span className="text-slate-300 font-bold">:</span>
@@ -23845,7 +23884,7 @@ export default function RootLayout() {
                       navigateTo({ type: 'register-seller' });
                       showToast('Please review your details and reapply.');
                     }}
-                    className="w-full py-3.5 px-4 rounded-2xl font-black text-sm bg-[#FF6A00] hover:bg-orange-600 text-white shadow-md active:scale-98 transition-all cursor-pointer flex items-center justify-center gap-2 mt-2"
+                    className="w-full py-3.5 px-4 rounded-2xl font-black text-sm bg-accent hover:bg-orange-600 text-white shadow-md active:scale-98 transition-all cursor-pointer flex items-center justify-center gap-2 mt-2"
                   >
                     <span>Update Details &amp; Reapply Now</span>
                     <ArrowRight size={17} className="stroke-[2.5]" />
@@ -23878,7 +23917,7 @@ export default function RootLayout() {
                       setCurrentUserRole(grantedRole);
                       navigateTo(grantedRole === 'artisan' ? { type: 'tabs', tab: 'dashboard' } : { type: 'post-ad-step1' });
                     }}
-                    className="w-full py-3.5 px-4 rounded-2xl font-black text-sm bg-[#FF6A00] hover:bg-orange-600 text-white shadow-md active:scale-98 transition-all cursor-pointer flex items-center justify-center gap-2 mt-2"
+                    className="w-full py-3.5 px-4 rounded-2xl font-black text-sm bg-accent hover:bg-orange-600 text-white shadow-md active:scale-98 transition-all cursor-pointer flex items-center justify-center gap-2 mt-2"
                   >
                     <span>Proceed to Post Ad</span>
                     <ArrowRight size={18} className="stroke-[2.5]" />
@@ -23896,7 +23935,7 @@ export default function RootLayout() {
                       setCurrentUserRole(grantedRole);
                       navigateTo(grantedRole === 'artisan' ? { type: 'tabs', tab: 'dashboard' } : { type: 'post-ad-step1' });
                     }}
-                    className="w-full py-3.5 px-4 rounded-2xl font-black text-sm bg-[#FF6A00] hover:bg-orange-600 text-white shadow-md active:scale-98 transition-all cursor-pointer flex items-center justify-center gap-2"
+                    className="w-full py-3.5 px-4 rounded-2xl font-black text-sm bg-accent hover:bg-orange-600 text-white shadow-md active:scale-98 transition-all cursor-pointer flex items-center justify-center gap-2"
                   >
                     <span>Post Free Ad</span>
                     <ArrowRight size={17} className="stroke-[2.5]" />
@@ -23995,7 +24034,7 @@ export default function RootLayout() {
                   <label className="text-xs font-bold text-slate-800">
                     Upload Photos ({adDraft.images?.length || 0}/8) <span className="text-red-500 font-bold">*</span>
                   </label>
-                  <span className="text-[10.5px] text-[#FF6A00] font-bold">
+                  <span className="text-[10.5px] text-accent font-bold">
                     Tap any photo to set Cover
                   </span>
                 </div>
@@ -24029,19 +24068,19 @@ export default function RootLayout() {
                       }}
                       className={`relative w-20 h-20 rounded-xl overflow-hidden shrink-0 border cursor-pointer transition-all group ${
                         i === 0
-                          ? 'ring-2 ring-[#FF6A00] border-[#FF6A00] shadow-xs'
+                          ? 'ring-2 ring-accent border-accent shadow-xs'
                           : 'border-slate-200 hover:border-orange-300'
                       }`}
                       title={i === 0 ? 'Current Cover Photo' : 'Click to select as Cover Photo'}
                     >
                       {Boolean(img) && <img src={img} alt="" className="w-full h-full object-cover" />}
                       {i === 0 ? (
-                        <div className="absolute top-1 left-1 bg-[#FF6A00] text-white text-[8.5px] font-black px-1.5 py-0.5 rounded-md shadow-xs flex items-center gap-0.5">
+                        <div className="absolute top-1 left-1 bg-accent text-white text-[8.5px] font-black px-1.5 py-0.5 rounded-md shadow-xs flex items-center gap-0.5">
                           <Check size={9} className="stroke-[3.5]" />
                           <span>Cover</span>
                         </div>
                       ) : (
-                        <div className="absolute inset-x-0 bottom-0 bg-black/60 text-white text-[8.5px] font-bold py-1 text-center group-hover:bg-[#FF6A00] transition-colors">
+                        <div className="absolute inset-x-0 bottom-0 bg-black/60 text-white text-[8.5px] font-bold py-1 text-center group-hover:bg-accent transition-colors">
                           Set Cover
                         </div>
                       )}
@@ -24599,7 +24638,7 @@ export default function RootLayout() {
                             }
                             className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all cursor-pointer active:scale-95 ${
                               isSelected
-                                ? 'bg-[#FF6A00] text-white border-[#FF6A00] shadow-xs'
+                                ? 'bg-accent text-white border-accent shadow-xs'
                                 : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
                             }`}
                           >
@@ -24721,7 +24760,7 @@ export default function RootLayout() {
                     </div>
                   )}
                   {adDraft.images?.[0] && (
-                    <div className="absolute top-2.5 left-2.5 bg-[#FF6A00] text-white text-[11px] font-black px-2 py-0.5 rounded-md shadow-xs flex items-center gap-1">
+                    <div className="absolute top-2.5 left-2.5 bg-accent text-white text-[11px] font-black px-2 py-0.5 rounded-md shadow-xs flex items-center gap-1">
                       <Check size={10} className="stroke-[3.5]" />
                       <span>Chosen Cover Photo</span>
                     </div>
@@ -24738,12 +24777,12 @@ export default function RootLayout() {
                       <div
                         key={pIdx}
                         className={`relative w-12 h-12 rounded-lg overflow-hidden shrink-0 border ${
-                          pIdx === 0 ? 'ring-2 ring-[#FF6A00] border-[#FF6A00]' : 'border-slate-200'
+                          pIdx === 0 ? 'ring-2 ring-accent border-accent' : 'border-slate-200'
                         }`}
                       >
                         {Boolean(photo) && <img src={photo} alt="" className="w-full h-full object-cover" />}
                         {pIdx === 0 && (
-                          <div className="absolute inset-x-0 bottom-0 bg-[#FF6A00] text-white text-[7.5px] font-black text-center py-0.5">
+                          <div className="absolute inset-x-0 bottom-0 bg-accent text-white text-[7.5px] font-black text-center py-0.5">
                             Cover
                           </div>
                         )}
@@ -24756,7 +24795,7 @@ export default function RootLayout() {
               {/* Title & Pricing Card */}
               <div className="p-3.5 bg-white rounded-2xl border border-slate-200 shadow-2xs space-y-2">
                 <div className="flex items-baseline flex-wrap gap-2">
-                  <span className="text-xl font-black text-[#FF6A00]">
+                  <span className="text-xl font-black text-accent">
                     {adDraft.price ? `GH₵ ${adDraft.price.toLocaleString()}` : 'Price not set'}
                   </span>
                   {Boolean(adDraft.originalPrice && adDraft.price && adDraft.originalPrice > adDraft.price) && (
@@ -24988,7 +25027,7 @@ export default function RootLayout() {
               >
                 <div
                   className={`w-5 h-5 rounded-md flex items-center justify-center shrink-0 mt-0.5 transition-colors ${
-                    agreedToGuidelines ? 'bg-[#046A38] text-white' : 'border-2 border-slate-300 bg-white'
+                    agreedToGuidelines ? 'bg-brand-deep text-white' : 'border-2 border-slate-300 bg-white'
                   }`}
                 >
                   {agreedToGuidelines && <Check size={14} className="stroke-[3.5]" />}
@@ -25154,7 +25193,7 @@ export default function RootLayout() {
 
       case 'safety-guide':
         return (
-          <div className="flex flex-col min-h-full bg-[#F8FAFC] pb-16">
+          <div className="flex flex-col min-h-full bg-surface pb-16">
             {/* Top Navigation Header */}
             <div className="sticky top-0 z-30 bg-white/95 backdrop-blur-md px-4 py-3 border-b border-slate-200/80 flex items-center justify-between shadow-2xs">
               <div className="flex items-center gap-2.5">
@@ -25195,7 +25234,7 @@ export default function RootLayout() {
 
             <div className="p-4 space-y-4 max-w-lg mx-auto w-full">
               {/* Hero Banner */}
-              <div className="bg-gradient-to-br from-[#0F172A] via-[#1E293B] to-[#334155] rounded-3xl p-5 text-white shadow-md relative overflow-hidden">
+              <div className="bg-gradient-to-br from-ink via-[#1E293B] to-[#334155] rounded-3xl p-5 text-white shadow-md relative overflow-hidden">
                 <div className="relative z-10 space-y-2">
                   <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[10.5px] font-bold">
                     <ShieldCheck size={13} />
@@ -25279,7 +25318,7 @@ export default function RootLayout() {
                 <button
                   type="button"
                   onClick={() => navigateTo({ type: 'category', slug: 'phones' })}
-                  className="w-full py-3 px-4 rounded-xl bg-[#FF6A00] hover:bg-orange-600 text-white font-extrabold text-xs shadow-sm active:scale-98 transition-all flex items-center justify-center gap-2 cursor-pointer"
+                  className="w-full py-3 px-4 rounded-xl bg-accent hover:bg-orange-600 text-white font-extrabold text-xs shadow-sm active:scale-98 transition-all flex items-center justify-center gap-2 cursor-pointer"
                 >
                   <Search size={15} />
                   <span>Browse Verified Marketplace Ads</span>
@@ -25451,7 +25490,7 @@ export default function RootLayout() {
                   className="w-full py-3.5 px-3 flex items-center justify-between text-left hover:bg-slate-50 active:bg-slate-100 transition-colors bg-transparent rounded-xl cursor-pointer"
                 >
                   <div className="flex items-center gap-3">
-                    <MapPin size={16} className={isSelected ? 'text-[#FF6A00]' : 'text-slate-400'} />
+                    <MapPin size={16} className={isSelected ? 'text-accent' : 'text-slate-400'} />
                     <div>
                       <span className={`text-xs ${isSelected ? 'font-bold text-slate-900' : 'font-normal text-slate-700'}`}>
                         {reg.name} Region
@@ -25464,7 +25503,7 @@ export default function RootLayout() {
                     </div>
                   </div>
                   {isSelected && (
-                    <Check size={16} className="text-[#FF6A00] shrink-0 stroke-[2.5]" />
+                    <Check size={16} className="text-accent shrink-0 stroke-[2.5]" />
                   )}
                 </button>
               );
@@ -25497,7 +25536,7 @@ export default function RootLayout() {
             }}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all active:scale-95 shadow-xs cursor-pointer ${
               currentRoute.type === 'register-partner'
-                ? 'bg-[#065F46] text-white shadow-sm ring-2 ring-emerald-400/40'
+                ? 'bg-brand-deep text-white shadow-sm ring-2 ring-emerald-400/40'
                 : 'bg-emerald-500/10 text-brand hover:bg-emerald-500/20 border border-emerald-500/30'
             }`}
           >
@@ -25512,7 +25551,7 @@ export default function RootLayout() {
             }}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all active:scale-95 shadow-xs cursor-pointer ${
               currentRoute.type === 'register-seller'
-                ? 'bg-[#FF6A00] text-white shadow-sm ring-2 ring-orange-400/40'
+                ? 'bg-accent text-white shadow-sm ring-2 ring-orange-400/40'
                 : 'bg-orange-500/10 text-orange-600 hover:bg-orange-500/20 border border-orange-500/30'
             }`}
           >
@@ -25527,7 +25566,7 @@ export default function RootLayout() {
             }}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all active:scale-95 shadow-xs cursor-pointer ${
               currentRoute.type === 'login'
-                ? 'bg-[#FF6A00] text-white shadow-sm ring-2 ring-orange-400/40'
+                ? 'bg-accent text-white shadow-sm ring-2 ring-orange-400/40'
                 : isLoggedIn
                 ? 'bg-slate-100 text-slate-800 hover:bg-slate-200 border border-slate-300/80'
                 : 'bg-orange-500/10 text-orange-600 hover:bg-orange-500/20 border border-orange-500/30'
@@ -25611,7 +25650,7 @@ export default function RootLayout() {
             }}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all active:scale-95 shadow-xs cursor-pointer ${
               currentRoute.type === 'onboarding'
-                ? 'bg-[#006c45] text-white shadow-sm ring-2 ring-emerald-500/40'
+                ? 'bg-brand-deep text-white shadow-sm ring-2 ring-emerald-500/40'
                 : 'bg-emerald-500/10 text-brand hover:bg-emerald-500/20 border border-emerald-500/30'
             }`}
             title="Preview Onboarding 1"
@@ -25768,7 +25807,7 @@ export default function RootLayout() {
                     onClick={() => handleTabPress('home')}
                     className={`flex flex-col items-center gap-1 p-1 transition-colors ${
                       activeTab === 'home' && currentRoute.type === 'tabs'
-                        ? 'text-[#C2410C]'
+                        ? 'text-orange-700'
                         : 'text-slate-600 hover:text-slate-900'
                     }`}
                   >
@@ -25781,14 +25820,14 @@ export default function RootLayout() {
                     onClick={() => handleTabPress('messages')}
                     className={`flex flex-col items-center gap-1 p-1 relative transition-colors ${
                       activeTab === 'messages' && currentRoute.type === 'tabs'
-                        ? 'text-[#C2410C]'
+                        ? 'text-orange-700'
                         : 'text-slate-600 hover:text-slate-900'
                     }`}
                   >
                     <div className="relative">
                       <MessageSquare size={22} strokeWidth={activeTab === 'messages' && currentRoute.type === 'tabs' ? 2.5 : 2} />
                       {totalUnreadMessages > 0 && (
-                        <span className="absolute -top-1.5 -right-2.5 bg-[#FF6A00] text-white text-[11px] font-extrabold w-4 h-4 rounded-full flex items-center justify-center ring-2 ring-white">
+                        <span className="absolute -top-1.5 -right-2.5 bg-accent text-white text-[11px] font-extrabold w-4 h-4 rounded-full flex items-center justify-center ring-2 ring-white">
                           {totalUnreadMessages}
                         </span>
                       )}
@@ -25808,7 +25847,7 @@ export default function RootLayout() {
                       }}
                       title={currentUserRole === 'artisan' || currentUserRole === 'admin' ? 'Dashboard' : 'Post Ad'}
                       aria-label={currentUserRole === 'artisan' || currentUserRole === 'admin' ? 'Dashboard' : 'Post Ad'}
-                      className={`w-14 h-14 rounded-full bg-[#FF6A00] hover:bg-[#EA580C] text-white flex items-center justify-center border-4 border-white shadow-xl shadow-orange-500/40 active:scale-95 transition-all duration-150 cursor-pointer ${
+                      className={`w-14 h-14 rounded-full bg-accent hover:bg-orange-600 text-white flex items-center justify-center border-4 border-white shadow-xl shadow-orange-500/40 active:scale-95 transition-all duration-150 cursor-pointer ${
                         (currentUserRole === 'artisan' || currentUserRole === 'admin') && activeTab === 'dashboard' && currentRoute.type === 'tabs'
                           ? 'ring-2 ring-orange-500 ring-offset-2'
                           : ''
@@ -25827,7 +25866,7 @@ export default function RootLayout() {
                     onClick={() => handleTabPress('saved')}
                     className={`flex flex-col items-center gap-1 p-1 transition-colors ${
                       activeTab === 'saved' && currentRoute.type === 'tabs'
-                        ? 'text-[#C2410C]'
+                        ? 'text-orange-700'
                         : 'text-slate-600 hover:text-slate-900'
                     }`}
                   >
@@ -25840,7 +25879,7 @@ export default function RootLayout() {
                     onClick={() => handleTabPress('profile')}
                     className={`flex flex-col items-center gap-1 p-1 transition-colors ${
                       activeTab === 'profile' && currentRoute.type === 'tabs'
-                        ? 'text-[#C2410C]'
+                        ? 'text-orange-700'
                         : 'text-slate-600 hover:text-slate-900'
                     }`}
                   >
@@ -25932,7 +25971,7 @@ export default function RootLayout() {
                       onClick={() => handleTabPress('home')}
                       className={`flex flex-col items-center gap-1 p-1 transition-colors ${
                         activeTab === 'home' && currentRoute.type === 'tabs'
-                          ? 'text-[#C2410C]'
+                          ? 'text-orange-700'
                           : 'text-slate-600 hover:text-slate-900'
                       }`}
                     >
@@ -25945,14 +25984,14 @@ export default function RootLayout() {
                       onClick={() => handleTabPress('messages')}
                       className={`flex flex-col items-center gap-1 p-1 relative transition-colors ${
                         activeTab === 'messages' && currentRoute.type === 'tabs'
-                          ? 'text-[#C2410C]'
+                          ? 'text-orange-700'
                           : 'text-slate-600 hover:text-slate-900'
                       }`}
                     >
                       <div className="relative">
                         <MessageSquare size={22} strokeWidth={activeTab === 'messages' && currentRoute.type === 'tabs' ? 2.5 : 2} />
                         {totalUnreadMessages > 0 && (
-                          <span className="absolute -top-1.5 -right-2.5 bg-[#FF6A00] text-white text-[11px] font-extrabold w-4 h-4 rounded-full flex items-center justify-center ring-2 ring-white">
+                          <span className="absolute -top-1.5 -right-2.5 bg-accent text-white text-[11px] font-extrabold w-4 h-4 rounded-full flex items-center justify-center ring-2 ring-white">
                             {totalUnreadMessages}
                           </span>
                         )}
@@ -25972,7 +26011,7 @@ export default function RootLayout() {
                         }}
                         title={currentUserRole === 'artisan' || currentUserRole === 'admin' ? 'Dashboard' : 'Post Ad'}
                         aria-label={currentUserRole === 'artisan' || currentUserRole === 'admin' ? 'Dashboard' : 'Post Ad'}
-                        className={`w-14 h-14 rounded-full bg-[#FF6A00] hover:bg-[#EA580C] text-white flex items-center justify-center border-4 border-white shadow-xl shadow-orange-500/40 active:scale-95 transition-all duration-150 cursor-pointer ${
+                        className={`w-14 h-14 rounded-full bg-accent hover:bg-orange-600 text-white flex items-center justify-center border-4 border-white shadow-xl shadow-orange-500/40 active:scale-95 transition-all duration-150 cursor-pointer ${
                           (currentUserRole === 'artisan' || currentUserRole === 'admin') && activeTab === 'dashboard' && currentRoute.type === 'tabs'
                             ? 'ring-2 ring-orange-500 ring-offset-2'
                             : ''
@@ -25991,7 +26030,7 @@ export default function RootLayout() {
                       onClick={() => handleTabPress('saved')}
                       className={`flex flex-col items-center gap-1 p-1 transition-colors ${
                         activeTab === 'saved' && currentRoute.type === 'tabs'
-                          ? 'text-[#C2410C]'
+                          ? 'text-orange-700'
                           : 'text-slate-600 hover:text-slate-900'
                       }`}
                     >
@@ -26004,7 +26043,7 @@ export default function RootLayout() {
                       onClick={() => handleTabPress('profile')}
                       className={`flex flex-col items-center gap-1 p-1 transition-colors ${
                         activeTab === 'profile' && currentRoute.type === 'tabs'
-                          ? 'text-[#C2410C]'
+                          ? 'text-orange-700'
                           : 'text-slate-600 hover:text-slate-900'
                       }`}
                     >
