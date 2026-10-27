@@ -331,6 +331,25 @@ service cloud.firestore {
       allow get, list, update, delete: if isAdmin();
     }
 
+    // Public seller pages: the seller publishes their own; the Verified tag must match the admin's decision
+    match /sellers/{sellerId} {
+      allow get, list: if true;
+      allow create, update: if isOwner(sellerId)
+        && get(/databases/$(database)/documents/users/$(sellerId)).data.role == 'seller'
+        && !exists(/databases/$(database)/documents/disabledUsers/$(sellerId))
+        && request.resource.data.keys().hasOnly(['id', 'name', 'storeName', 'avatar', 'bio', 'location', 'operatingHours',
+          'safeMeetupSpots', 'responseTime', 'whatsapp', 'verified', 'memberSinceISO', 'updatedAtISO'])
+        && request.resource.data.id == sellerId
+        && request.resource.data.verified == get(/databases/$(database)/documents/users/$(sellerId)).data.get('verified', false)
+        && request.resource.data.bio is string && request.resource.data.bio.size() <= 500
+        && request.resource.data.avatar is string && request.resource.data.avatar.size() < 200000
+        && request.resource.data.safeMeetupSpots is list && request.resource.data.safeMeetupSpots.size() <= 15;
+      // Admins keep the Verified tag in step when they verify or un-verify a seller
+      allow update: if isAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['verified']);
+      allow delete: if isOwner(sellerId) || isAdmin();
+    }
+
     // Public artisan profiles, created by an admin when an artisan application is approved
     match /artisans/{artisanId} {
       allow get, list: if true;

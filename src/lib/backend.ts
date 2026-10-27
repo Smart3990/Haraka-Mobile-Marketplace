@@ -775,6 +775,12 @@ export async function decideApplication(app: StoredApplication, decision: Applic
     else batch.delete(profileRef);
   }
   await batch.commit();
+  // A seller's public page (if they made one) shows the same Verified tag
+  if (app.role === 'seller') {
+    const page = doc(db, 'sellers', app.uid);
+    if (decision === 'reject') await deleteDoc(page).catch(() => {});
+    else await updateDoc(page, { verified: decision === 'verify' }).catch(() => {});
+  }
   // The Verified tag travels with each ad, so update the ads they already posted too
   await syncSellerAdsVerified(app.uid, decision === 'verify').catch((error) => reportClientError('verify-ads', error));
 }
@@ -961,7 +967,7 @@ export async function deleteUserAccount(user: UserProfileDoc): Promise<void> {
   const ads = await getDocs(query(collection(db, 'listings'), where('sellerId', '==', user.id)));
   await Promise.all(ads.docs.map((d) => deleteDoc(d.ref)));
   await Promise.all(
-    ['applications', 'artisans', 'pushTokens', 'appeals', 'disabledUsers'].map((col) => deleteDoc(doc(db, col, user.id)).catch(() => {}))
+    ['applications', 'artisans', 'sellers', 'pushTokens', 'appeals', 'disabledUsers'].map((col) => deleteDoc(doc(db, col, user.id)).catch(() => {}))
   );
   await deleteDoc(doc(db, 'users', user.id));
 }
@@ -1084,6 +1090,50 @@ export function updateMyArtisanProfile(
     await updateDoc(doc(db, 'artisans', uid), stripUndefined(update));
   };
   return write();
+}
+
+/** A seller's public page (/sellers/{uid}): what buyers see when they open a seller from an ad */
+export interface SellerPublicDoc {
+  id: string;
+  name: string;
+  storeName: string;
+  avatar: string;
+  bio: string;
+  location: string;
+  operatingHours: string;
+  safeMeetupSpots: string[];
+  responseTime: string;
+  whatsapp: string;
+  verified: boolean;
+  memberSinceISO: string;
+  updatedAtISO: string;
+}
+
+export function watchSellerPublic(uid: string, callback: (seller: SellerPublicDoc | null) => void): () => void {
+  return onSnapshot(
+    doc(db, 'sellers', uid),
+    (snap) => callback(snap.exists() ? (snap.data() as SellerPublicDoc) : null),
+    () => callback(null)
+  );
+}
+
+/** The signed-in seller publishes their public page (the Verified tag mirrors the admin's decision). */
+export async function publishMySellerPage(
+  page: Omit<SellerPublicDoc, 'id' | 'verified' | 'updatedAtISO' | 'memberSinceISO'>,
+  verified: boolean,
+  memberSinceISO: string
+): Promise<void> {
+  const uid = auth.currentUser?.uid;
+  if (!uid) throw new Error('Please log in again.');
+  const avatar = (await storeMedia(page.avatar, 'avatars', 120_000)) || '';
+  await setDoc(doc(db, 'sellers', uid), {
+    ...page,
+    avatar,
+    id: uid,
+    verified,
+    memberSinceISO,
+    updatedAtISO: new Date().toISOString(),
+  });
 }
 
 /** The details an artisan fills in from "Finish your profile" (shown on their public page) */
