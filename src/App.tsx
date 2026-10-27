@@ -1378,7 +1378,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
       voiceLang: (p?.languagesSpoken || []).join(' & '),
       languages: p?.languagesSpoken?.length ? `Speaks: ${p.languagesSpoken.join(', ')}` : '',
       guaranteeLocation: (p?.serviceCoverageAreas || []).join(', ') || p?.location || '',
-      services: (p?.servicesAndPricing || []).map((svc) => ({ ...svc, icon: <Wrench size={18} /> })),
+      services: (p?.servicesAndPricing || []).map((svc) => ({ ...svc, icon: <Cog size={18} /> })),
       portfolio: p?.verifiedWorkPortfolio || [],
       reviews: own.map((r) => ({
         initials: r.customerName
@@ -5014,7 +5014,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
         )}
         {section(
           'Services & prices',
-          <Wrench size={15} />,
+          <Cog size={15} />,
           <div className="divide-y divide-slate-100">
             {d.services.map((svc, i) => (
               <div key={i} className="py-1.5 flex items-start justify-between gap-3">
