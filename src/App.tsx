@@ -128,7 +128,6 @@ import {
   BrickWall,
   PaintRoller,
   Beef,
-  Handshake,
 } from 'lucide-react';
 import {
   CATEGORIES,
@@ -11937,43 +11936,16 @@ export default function RootLayout() {
                     </button>
                   </div>
 
-                  {/* Two rows of category photos that swipe sideways together; Books, Pets and
-                      admin-added categories are under View All */}
+                  {/* Two rows of five, in the design order; the rest are under View All */}
                   {(() => {
-                    const pick = (key: string) =>
-                      CATEGORIES.find((c) => c.slug === key || c.name.toLowerCase() === key);
-                    const servicesTile = (
-                      <button
-                        key="home-services"
-                        type="button"
-                        onClick={() => navigateTo({ type: 'artisans' })}
-                        className="flex flex-col items-center gap-1.5 min-w-0 active:scale-95 transition-transform cursor-pointer select-none"
-                      >
-                        <div className="w-[62px] h-[52px] rounded-[8px] overflow-hidden bg-[#E8EDF2] flex items-center justify-center shadow-2xs">
-                          <Handshake size={22} strokeWidth={2} className="text-slate-800" />
-                        </div>
-                        <span className="text-[10.5px] font-semibold text-slate-800 text-center leading-tight line-clamp-2 w-full">
-                          Services
-                        </span>
-                      </button>
-                    );
-                    const row = (keys: string[]) =>
-                      keys.map((key) => {
-                        const cat = pick(key);
-                        if (cat) return <div key={cat.id} className="w-[62px] shrink-0">{renderCategoryTile(cat, 'w-[62px] h-[52px]')}</div>;
-                        return key === 'services' ? <div key="services" className="w-[62px] shrink-0">{servicesTile}</div> : null;
-                      });
+                    const HOME_ORDER = ['vehicles', 'property', 'phones', 'electronics', 'furniture', 'fashion', 'appliances', 'livestock', 'leisure', 'tools', 'kids', 'beauty', 'agriculture', 'services'];
+                    const tiles = HOME_ORDER.flatMap((key) => {
+                      const cat = CATEGORIES.find((c) => c.slug === key || c.name.toLowerCase() === key);
+                      return cat ? [cat] : [];
+                    }).slice(0, 10);
                     return (
-                      <div
-                        className="flex flex-col gap-3 px-4 overflow-x-auto no-scrollbar pb-1"
-                        style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
-                      >
-                        <div className="flex gap-2 w-max">
-                          {row(['vehicles', 'property', 'phones', 'electronics', 'furniture', 'fashion', 'appliances'])}
-                        </div>
-                        <div className="flex gap-2 w-max">
-                          {row(['livestock', 'leisure', 'tools', 'kids', 'beauty', 'agriculture', 'services'])}
-                        </div>
+                      <div className="grid grid-cols-5 gap-x-2 gap-y-3 px-4 pb-1">
+                        {tiles.map((cat) => renderCategoryTile(cat, 'w-full h-[52px]'))}
                       </div>
                     );
                   })()}
