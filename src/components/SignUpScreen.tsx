@@ -176,7 +176,7 @@ export default function SignUpScreen({
                 </svg>
               </div>
               <input
-                className="w-full h-12 bg-[#F1F4F9] border-0 rounded-xl pl-11 pr-4 text-[15px] text-slate-800 placeholder-slate-400 font-normal focus:ring-2 focus:ring-[#1FA971] focus:bg-white transition outline-none"
+                className="w-full h-12 bg-[#F1F4F9] border-0 rounded-xl pl-11 pr-4 text-[15px] text-slate-800 placeholder-slate-400 font-normal focus:ring-2 focus:ring-brand focus:bg-white transition outline-none"
                 placeholder="e.g. Kwame Mensah"
                 type="text"
                 value={fullName}
@@ -198,7 +198,7 @@ export default function SignUpScreen({
                 </svg>
               </div>
               <input
-                className="w-full h-12 bg-[#F1F4F9] border-0 rounded-xl pl-11 pr-4 text-[15px] text-slate-800 placeholder-slate-400 font-normal focus:ring-2 focus:ring-[#1FA971] focus:bg-white transition outline-none"
+                className="w-full h-12 bg-[#F1F4F9] border-0 rounded-xl pl-11 pr-4 text-[15px] text-slate-800 placeholder-slate-400 font-normal focus:ring-2 focus:ring-brand focus:bg-white transition outline-none"
                 placeholder="kwame.mensah@gmail.com"
                 type="email"
                 value={email}
@@ -220,7 +220,7 @@ export default function SignUpScreen({
                 </svg>
               </div>
               <input
-                className={`w-full h-12 bg-[#F1F4F9] border-0 rounded-xl pl-11 pr-11 text-[15px] text-slate-800 placeholder-slate-400 font-normal focus:ring-2 focus:ring-[#1FA971] focus:bg-white transition outline-none ${
+                className={`w-full h-12 bg-[#F1F4F9] border-0 rounded-xl pl-11 pr-11 text-[15px] text-slate-800 placeholder-slate-400 font-normal focus:ring-2 focus:ring-brand focus:bg-white transition outline-none ${
                   !showPassword && password ? 'tracking-widest' : ''
                 }`}
                 placeholder="••••••••••••"
@@ -249,7 +249,7 @@ export default function SignUpScreen({
             </div>
             {/* Helper Rule */}
             <div className="flex items-center gap-1.5 pt-0.5">
-              <svg className="w-4 h-4 text-[#1FA971] shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-4 h-4 text-brand shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path d="M9 12.75 11.25 15 15 9.75M21 12c0 1.268-.63 2.39-1.593 3.068a3.745 3.745 0 0 1-1.043 3.296 3.745 3.745 0 0 1-3.296 1.043A3.745 3.745 0 0 1 12 21c-1.268 0-2.39-.63-3.068-1.593a3.746 3.746 0 0 1-3.296-1.043 3.745 3.745 0 0 1-1.043-3.296A3.745 3.745 0 0 1 3 12c0-1.268.63-2.39 1.593-3.068a3.745 3.745 0 0 1 1.043-3.296 3.746 3.746 0 0 1 3.296-1.043A3.746 3.746 0 0 1 12 3c1.268 0 2.39.63 3.068 1.593a3.746 3.746 0 0 1 3.296 1.043 3.746 3.746 0 0 1 1.043 3.296A3.745 3.745 0 0 1 21 12Z" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
               </svg>
               <span className="text-[12px] text-slate-600 font-medium">At least 8 characters with numbers & symbols</span>

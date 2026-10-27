@@ -51,7 +51,7 @@ export default function WelcomeScreen({
           type="button"
           onClick={onSignUp}
           id="btn-signup"
-          className="w-full h-12 rounded-full bg-[#1FA971] hover:bg-[#189462] active:scale-[0.99] text-white font-bold text-base transition-all shadow-xs flex items-center justify-center cursor-pointer"
+          className="w-full h-12 rounded-full bg-brand hover:bg-brand-dark active:scale-[0.99] text-white font-bold text-base transition-all shadow-xs flex items-center justify-center cursor-pointer"
         >
           Sign Up
         </button>

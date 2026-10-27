@@ -653,6 +653,78 @@ export async function decideApplication(app: StoredApplication, decision: Applic
   await syncSellerAdsVerified(app.uid, decision === 'verify').catch((error) => reportClientError('verify-ads', error));
 }
 
+export interface AdminPartnerInput {
+  role: 'seller' | 'artisan';
+  sellerAccountType: 'individual' | 'shop';
+  name: string;
+  phone: string;
+  region: string;
+  cityNeighborhood: string;
+  /** Seller: the categories they sell in. Artisan: unused */
+  categories: string[];
+  /** Artisan only */
+  tradeSkill: string;
+  experienceYears: string;
+  inspectionFee: number;
+}
+
+/**
+ * System admin only: makes an existing account a seller or artisan. Their application is filed
+ * on their behalf and then approved through the same path as any other application, so the role,
+ * the public artisan profile and their ads all update together. The Verified badge still needs
+ * their Ghana Card documents (they can send them from their account afterwards).
+ */
+export async function makeUserPartner(user: UserProfileDoc, input: AdminPartnerInput): Promise<void> {
+  const admin = auth.currentUser;
+  if (!admin?.email || admin.email.toLowerCase() !== SYSTEM_ADMIN_EMAIL) {
+    throw new Error('Only the system admin can make someone a seller or artisan.');
+  }
+  const existing = await getDoc(doc(db, 'applications', user.id));
+  if (existing.exists() && existing.data().status === 'pending') {
+    throw new Error('This person already has an application waiting. Review it in the Admin Control Dashboard.');
+  }
+  const isArtisan = input.role === 'artisan';
+  const isShop = !isArtisan && input.sellerAccountType === 'shop';
+  const location = [input.cityNeighborhood.trim(), input.region].filter(Boolean).join(', ');
+  const record = stripUndefined({
+    id: user.id,
+    uid: user.id,
+    name: input.name.trim(),
+    legalName: user.name || input.name.trim(),
+    email: user.email || '',
+    avatar: user.avatar || '',
+    role: input.role,
+    sellerAccountType: isShop ? 'shop' : 'individual',
+    tradeCategory: isArtisan ? input.tradeSkill : input.categories.join(', '),
+    tradeSkill: isArtisan ? input.tradeSkill : undefined,
+    experienceYears: isArtisan ? input.experienceYears : undefined,
+    inspectionFee: isArtisan ? Math.max(0, input.inspectionFee || 0) : undefined,
+    ghanaCardId: '',
+    idVerificationSkipped: true,
+    phone: input.phone,
+    allowWhatsApp: false,
+    region: input.region,
+    cityNeighborhood: input.cityNeighborhood.trim(),
+    location,
+    shopAddress: isShop ? location : undefined,
+    businessOrCert: 'Added by the system admin',
+    isCertSkipped: true,
+    confirmSafeTradePayout: true,
+    policeClearanceStatus: isArtisan ? 'skipped' : undefined,
+    serviceCoverageAreas: isArtisan ? [input.cityNeighborhood.trim() || input.region] : undefined,
+    languagesSpoken: isArtisan ? [] : undefined,
+    servicesAndPricing: isArtisan ? [] : undefined,
+    verifiedWorkPortfolio: isArtisan ? [] : undefined,
+    addedBySystemAdmin: true,
+    status: 'pending',
+    verifiedBadge: false,
+    rejectionReason: '',
+    submittedAtISO: new Date().toISOString(),
+  }) as StoredApplication;
+  await setDoc(doc(db, 'applications', user.id), record);
+  await decideApplication(record, 'approve');
+}
+
 /** Admins: sets (or clears) the Verified tag on every ad a seller has posted. */
 async function syncSellerAdsVerified(sellerId: string, verified: boolean): Promise<void> {
   const ads = await getDocs(query(collection(db, 'listings'), where('sellerId', '==', sellerId)));
@@ -938,6 +1010,17 @@ export async function saveBrandingImage(field: 'logoUrl' | 'welcomeImageUrl', im
   await setDoc(
     doc(db, 'settings', 'branding'),
     { [field]: url, updatedAtISO: new Date().toISOString(), updatedBy: email },
+    { merge: true }
+  );
+}
+
+/** System admin (or an admin given branding access): sets the app's primary colour (#RRGGBB) for everyone. */
+export async function saveBrandingColor(color: string): Promise<void> {
+  const email = requirePermission('branding', 'You do not have permission to change the app branding.');
+  if (!/^#[0-9a-f]{6}$/i.test(color)) throw new Error('Choose a colour like #25D366.');
+  await setDoc(
+    doc(db, 'settings', 'branding'),
+    { primaryColor: color.toUpperCase(), updatedAtISO: new Date().toISOString(), updatedBy: email },
     { merge: true }
   );
 }

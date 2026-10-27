@@ -1,5 +1,12 @@
 @import "tailwindcss";
 
+/* Haraka's primary green. The system admin can change it from Platform Settings: the app then
+   sets --color-brand on <html>, and the darker pressed shade follows it. */
+@theme {
+  --color-brand: #25D366;
+  --color-brand-dark: color-mix(in srgb, var(--color-brand) 80%, black);
+}
+
 /* Universally eliminate all browser scrollbars for clean native mobile look */
 *, *::before, *::after {
   scrollbar-width: none !important;

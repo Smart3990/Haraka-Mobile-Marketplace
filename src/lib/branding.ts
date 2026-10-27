@@ -1,6 +1,6 @@
 /**
- * App branding the system admin can change from the dashboard: the logo in the app bar and the
- * picture on the Welcome page. Stored in /settings/branding (anyone can read it; only the system
+ * App branding the system admin can change from the dashboard: the logo in the app bar, the
+ * picture on the Welcome page and the primary green. Stored in /settings/branding (anyone can read it; only the system
  * admin can change it). Empty values mean "use the built-in image".
  */
 import { useSyncExternalStore } from 'react';
@@ -10,9 +10,21 @@ import { db } from './firebase';
 export interface Branding {
   logoUrl: string;
   welcomeImageUrl: string;
+  /** Primary colour as #RRGGBB; empty means the built-in green */
+  primaryColor: string;
 }
 
-const EMPTY: Branding = { logoUrl: '', welcomeImageUrl: '' };
+export const DEFAULT_PRIMARY_COLOR = '#25D366';
+
+/** Points the app's brand colour (Tailwind's --color-brand) at the admin's choice. */
+function applyPrimaryColor(color: string) {
+  if (typeof document === 'undefined') return;
+  const root = document.documentElement.style;
+  if (/^#[0-9a-f]{6}$/i.test(color)) root.setProperty('--color-brand', color);
+  else root.removeProperty('--color-brand');
+}
+
+const EMPTY: Branding = { logoUrl: '', welcomeImageUrl: '', primaryColor: '' };
 const CACHE_KEY = 'haraka.branding';
 
 // Last known branding, so the right logo shows instantly on the next launch (even offline)
@@ -23,6 +35,7 @@ let current: Branding = (() => {
     return EMPTY;
   }
 })();
+applyPrimaryColor(current.primaryColor);
 const listeners = new Set<() => void>();
 let stopWatching: (() => void) | null = null;
 
@@ -35,9 +48,16 @@ function startWatching() {
       const next: Branding = {
         logoUrl: typeof data.logoUrl === 'string' ? data.logoUrl : '',
         welcomeImageUrl: typeof data.welcomeImageUrl === 'string' ? data.welcomeImageUrl : '',
+        primaryColor: typeof data.primaryColor === 'string' ? data.primaryColor : '',
       };
-      if (next.logoUrl === current.logoUrl && next.welcomeImageUrl === current.welcomeImageUrl) return;
+      if (
+        next.logoUrl === current.logoUrl &&
+        next.welcomeImageUrl === current.welcomeImageUrl &&
+        next.primaryColor === current.primaryColor
+      )
+        return;
       current = next;
+      applyPrimaryColor(next.primaryColor);
       try {
         localStorage.setItem(CACHE_KEY, JSON.stringify(next));
       } catch {

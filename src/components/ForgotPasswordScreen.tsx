@@ -109,7 +109,7 @@ export default function ForgotPasswordScreen({
   };
 
   return (
-    <div className="w-full min-h-full flex-1 bg-white flex flex-col font-sans antialiased selection:bg-[#1FA971] selection:text-white select-none text-gray-900">
+    <div className="w-full min-h-full flex-1 bg-white flex flex-col font-sans antialiased selection:bg-brand selection:text-white select-none text-gray-900">
       <div className="w-full max-w-md mx-auto flex-1 flex flex-col justify-between px-6 pt-4 pb-12">
         <div className="w-full">
           {/* BEGIN: TopBar with Centered Brand Logo (Back button removed per request) */}
@@ -159,7 +159,7 @@ export default function ForgotPasswordScreen({
                   <label className="block text-sm font-semibold text-gray-900" htmlFor="recovery-email">
                     Email Address
                   </label>
-                  <div className="bg-[#F0F2FD] border border-transparent focus-within:border-[#1FA971] focus-within:bg-white focus-within:ring-3 focus-within:ring-[#1FA971]/12 rounded-2xl flex items-center px-4 py-3.5 w-full transition-all">
+                  <div className="bg-[#F0F2FD] border border-transparent focus-within:border-brand focus-within:bg-white focus-within:ring-3 focus-within:ring-brand/12 rounded-2xl flex items-center px-4 py-3.5 w-full transition-all">
                     <svg
                       className="w-5 h-5 text-gray-400 mr-3 shrink-0"
                       fill="none"
@@ -190,7 +190,7 @@ export default function ForgotPasswordScreen({
 
                 {/* Submit Button */}
                 <button
-                  className="w-full bg-[#1FA971] hover:bg-[#188659] active:scale-[0.99] text-white font-bold py-4 px-6 rounded-2xl flex items-center justify-center gap-2 shadow-md shadow-[#1FA971]/20 transition-all duration-150 mt-4 cursor-pointer disabled:opacity-75"
+                  className="w-full bg-brand hover:bg-brand-dark active:scale-[0.99] text-white font-bold py-4 px-6 rounded-2xl flex items-center justify-center gap-2 shadow-md shadow-brand/20 transition-all duration-150 mt-4 cursor-pointer disabled:opacity-75"
                   type="submit"
                   disabled={loading}
                 >
@@ -226,14 +226,14 @@ export default function ForgotPasswordScreen({
               </section>
 
               {infoMessage && (
-                <p className="text-xs font-semibold text-[#1FA971] text-center mb-2">
+                <p className="text-xs font-semibold text-brand text-center mb-2">
                   {infoMessage}
                 </p>
               )}
 
               {/* Action Button: Opens the reset password link directly in browser */}
               <button
-                className="w-full bg-[#1FA971] hover:bg-[#188659] active:scale-[0.99] text-white font-bold py-4 px-6 rounded-2xl flex items-center justify-center gap-2 shadow-md shadow-[#1FA971]/20 transition-all duration-150 mt-2 cursor-pointer"
+                className="w-full bg-brand hover:bg-brand-dark active:scale-[0.99] text-white font-bold py-4 px-6 rounded-2xl flex items-center justify-center gap-2 shadow-md shadow-brand/20 transition-all duration-150 mt-2 cursor-pointer"
                 type="button"
                 onClick={onNavigateLogin}
               >
@@ -245,7 +245,7 @@ export default function ForgotPasswordScreen({
                   type="button"
                   disabled={loading}
                   onClick={handleResendLink}
-                  className="text-xs font-semibold text-gray-600 hover:text-[#1FA971] transition-colors cursor-pointer underline-offset-2 hover:underline"
+                  className="text-xs font-semibold text-gray-600 hover:text-brand transition-colors cursor-pointer underline-offset-2 hover:underline"
                 >
                   {loading ? 'Sending fresh link...' : "Didn't receive the email? Resend link"}
                 </button>
@@ -289,7 +289,7 @@ export default function ForgotPasswordScreen({
                   <label className="block text-sm font-semibold text-gray-900" htmlFor="new-password">
                     New Password
                   </label>
-                  <div className="bg-[#F0F2FD] border border-transparent focus-within:border-[#1FA971] focus-within:bg-white focus-within:ring-3 focus-within:ring-[#1FA971]/12 rounded-2xl flex items-center px-4 py-3.5 w-full transition-all">
+                  <div className="bg-[#F0F2FD] border border-transparent focus-within:border-brand focus-within:bg-white focus-within:ring-3 focus-within:ring-brand/12 rounded-2xl flex items-center px-4 py-3.5 w-full transition-all">
                     <Lock className="w-5 h-5 text-gray-400 mr-3 shrink-0" strokeWidth={2} />
                     <input
                       className="bg-transparent border-0 p-0 text-gray-900 placeholder-gray-400 text-base focus:ring-0 w-full outline-none font-normal"
@@ -316,7 +316,7 @@ export default function ForgotPasswordScreen({
                   <label className="block text-sm font-semibold text-gray-900" htmlFor="confirm-password">
                     Confirm New Password
                   </label>
-                  <div className="bg-[#F0F2FD] border border-transparent focus-within:border-[#1FA971] focus-within:bg-white focus-within:ring-3 focus-within:ring-[#1FA971]/12 rounded-2xl flex items-center px-4 py-3.5 w-full transition-all">
+                  <div className="bg-[#F0F2FD] border border-transparent focus-within:border-brand focus-within:bg-white focus-within:ring-3 focus-within:ring-brand/12 rounded-2xl flex items-center px-4 py-3.5 w-full transition-all">
                     <Lock className="w-5 h-5 text-gray-400 mr-3 shrink-0" strokeWidth={2} />
                     <input
                       className="bg-transparent border-0 p-0 text-gray-900 placeholder-gray-400 text-base focus:ring-0 w-full outline-none font-normal"
@@ -338,7 +338,7 @@ export default function ForgotPasswordScreen({
                 </div>
 
                 <button
-                  className="w-full bg-[#1FA971] hover:bg-[#188659] active:scale-[0.99] text-white font-bold py-4 px-6 rounded-2xl flex items-center justify-center gap-2 shadow-md shadow-[#1FA971]/20 transition-all duration-150 mt-4 cursor-pointer disabled:opacity-75"
+                  className="w-full bg-brand hover:bg-brand-dark active:scale-[0.99] text-white font-bold py-4 px-6 rounded-2xl flex items-center justify-center gap-2 shadow-md shadow-brand/20 transition-all duration-150 mt-4 cursor-pointer disabled:opacity-75"
                   type="submit"
                   disabled={loading}
                 >
@@ -364,7 +364,7 @@ export default function ForgotPasswordScreen({
           {step === 'completed' && (
             <div className="space-y-4 pt-2">
               <section className="mb-4 text-center">
-                <div className="w-14 h-14 mx-auto rounded-full bg-[#1FA971]/10 flex items-center justify-center text-[#1FA971] mb-3">
+                <div className="w-14 h-14 mx-auto rounded-full bg-brand/10 flex items-center justify-center text-brand mb-3">
                   <CheckCircle2 className="w-8 h-8" strokeWidth={2.5} />
                 </div>
                 <h1 className="text-2xl font-extrabold text-gray-900 tracking-tight">
@@ -376,7 +376,7 @@ export default function ForgotPasswordScreen({
               </section>
 
               <button
-                className="w-full bg-[#1FA971] hover:bg-[#188659] active:scale-[0.99] text-white font-bold py-4 px-6 rounded-2xl flex items-center justify-center gap-2 shadow-md shadow-[#1FA971]/20 transition-all duration-150 mt-4 cursor-pointer"
+                className="w-full bg-brand hover:bg-brand-dark active:scale-[0.99] text-white font-bold py-4 px-6 rounded-2xl flex items-center justify-center gap-2 shadow-md shadow-brand/20 transition-all duration-150 mt-4 cursor-pointer"
                 type="button"
                 onClick={onNavigateLogin}
               >

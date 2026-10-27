@@ -138,7 +138,7 @@ export default function SignInScreen({
   };
 
   return (
-    <div className="w-full min-h-full flex-1 bg-white flex flex-col font-sans antialiased selection:bg-[#1FA971] selection:text-white select-none text-gray-900">
+    <div className="w-full min-h-full flex-1 bg-white flex flex-col font-sans antialiased selection:bg-brand selection:text-white select-none text-gray-900">
       <div className="w-full max-w-md mx-auto flex-1 flex flex-col justify-between px-6 pt-4 pb-12">
         <div className="w-full">
           {/* BEGIN: TopBar */}
@@ -170,7 +170,7 @@ export default function SignInScreen({
             </p>
           )}
           {infoMessage && (
-            <p className="mb-4 text-xs font-semibold text-[#1FA971]">
+            <p className="mb-4 text-xs font-semibold text-brand">
               {infoMessage}
             </p>
           )}
@@ -182,7 +182,7 @@ export default function SignInScreen({
             <label className="block text-sm font-semibold text-gray-900" htmlFor="email">
               Email Address
             </label>
-            <div className="bg-[#F0F2FD] border border-transparent focus-within:border-[#1FA971] focus-within:bg-white focus-within:ring-3 focus-within:ring-[#1FA971]/12 rounded-2xl flex items-center px-4 py-3.5 w-full transition-all">
+            <div className="bg-[#F0F2FD] border border-transparent focus-within:border-brand focus-within:bg-white focus-within:ring-3 focus-within:ring-brand/12 rounded-2xl flex items-center px-4 py-3.5 w-full transition-all">
               <svg
                 className="w-5 h-5 text-gray-400 mr-3 shrink-0"
                 fill="none"
@@ -212,7 +212,7 @@ export default function SignInScreen({
             <label className="block text-sm font-semibold text-gray-900" htmlFor="password">
               Password
             </label>
-            <div className="bg-[#F0F2FD] border border-transparent focus-within:border-[#1FA971] focus-within:bg-white focus-within:ring-3 focus-within:ring-[#1FA971]/12 rounded-2xl flex items-center px-4 py-3.5 w-full transition-all">
+            <div className="bg-[#F0F2FD] border border-transparent focus-within:border-brand focus-within:bg-white focus-within:ring-3 focus-within:ring-brand/12 rounded-2xl flex items-center px-4 py-3.5 w-full transition-all">
               <svg
                 className="w-5 h-5 text-gray-500 mr-3 shrink-0"
                 fill="none"
@@ -265,7 +265,7 @@ export default function SignInScreen({
               <input
                 checked={rememberMe}
                 onChange={(e) => setRememberMe(e.target.checked)}
-                className="w-5 h-5 rounded text-[#1FA971] border-gray-300 focus:ring-[#1FA971] focus:ring-offset-0 transition accent-[#1FA971] cursor-pointer"
+                className="w-5 h-5 rounded text-brand border-gray-300 focus:ring-brand focus:ring-offset-0 transition accent-brand cursor-pointer"
                 type="checkbox"
               />
               <span className="text-sm font-medium text-gray-700">Remember me</span>
@@ -283,7 +283,7 @@ export default function SignInScreen({
 
           {/* Submit Button */}
           <button
-            className="w-full bg-[#1FA971] hover:bg-[#188659] active:scale-[0.99] text-white font-bold py-4 px-6 rounded-2xl flex items-center justify-center gap-2 shadow-md shadow-[#1FA971]/20 transition-all duration-150 mt-4 cursor-pointer disabled:opacity-60"
+            className="w-full bg-brand hover:bg-brand-dark active:scale-[0.99] text-white font-bold py-4 px-6 rounded-2xl flex items-center justify-center gap-2 shadow-md shadow-brand/20 transition-all duration-150 mt-4 cursor-pointer disabled:opacity-60"
             type="submit"
             disabled={isSubmitting}
           >

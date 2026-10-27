@@ -31,7 +31,7 @@ export interface BannerDoc {
 
 /** Background choices offered in the banner editor (the gradients are the ones the app's own banners use). */
 export const BANNER_SOLID_COLORS = [
-  '#FF5722', '#EA580C', '#1FA971', '#047857', '#2563EB', '#1D4ED8',
+  '#FF5722', '#EA580C', '#25D366', '#047857', '#2563EB', '#1D4ED8',
   '#7C3AED', '#DB2777', '#DC2626', '#0F766E', '#0F172A', '#334155',
 ];
 export const BANNER_GRADIENTS = [

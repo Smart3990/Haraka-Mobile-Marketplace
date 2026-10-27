@@ -107,9 +107,10 @@ service cloud.firestore {
     match /settings/branding {
       allow get: if true;
       allow create, update: if hasPermission('branding')
-        && request.resource.data.keys().hasOnly(['logoUrl', 'welcomeImageUrl', 'updatedAtISO', 'updatedBy'])
+        && request.resource.data.keys().hasOnly(['logoUrl', 'welcomeImageUrl', 'primaryColor', 'updatedAtISO', 'updatedBy'])
         && request.resource.data.get('logoUrl', '') is string && request.resource.data.get('logoUrl', '').size() < 600000
-        && request.resource.data.get('welcomeImageUrl', '') is string && request.resource.data.get('welcomeImageUrl', '').size() < 600000;
+        && request.resource.data.get('welcomeImageUrl', '') is string && request.resource.data.get('welcomeImageUrl', '').size() < 600000
+        && request.resource.data.get('primaryColor', '#000000').matches('^#[0-9A-Fa-f]{6}$');
     }
 
     // Admins whose phones are told about new applications and verification requests.
@@ -174,7 +175,14 @@ service cloud.firestore {
     match /applications/{userId} {
       allow get: if isOwner(userId) || isAdmin();
       allow list: if isAdmin();
-      allow create, update: if isAdmin() || (
+      // Only the system admin files an application on someone's behalf (Platform Settings > All Users)
+      allow create: if (isSystemAdmin() && request.resource.data.uid == userId) || (
+        isOwner(userId) && isVerifiedUser()
+        && request.resource.data.uid == userId
+        && request.resource.data.status == 'pending'
+        && request.resource.data.verifiedBadge == false
+      );
+      allow update: if isAdmin() || (
         isOwner(userId) && isVerifiedUser()
         && request.resource.data.uid == userId
         && request.resource.data.status == 'pending'
