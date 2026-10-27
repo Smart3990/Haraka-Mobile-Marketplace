@@ -4590,6 +4590,51 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
   /** The signed-in partner's own application (holds their CID police clearance) */
   const myPartnerApplication = () => adminApplicants.find((a) => a.id === firebaseUid);
 
+  /** Ghana Card / police / verified tags, showing only the ones that apply */
+  const renderPartnerTags = (app: Record<string, any> | undefined, verified: boolean, isArtisan: boolean) => {
+    const idPending = !verified && app?.verificationRequestStatus === 'pending';
+    const police = isArtisan ? app?.policeClearanceStatus : '';
+    const policeSent = Boolean(app?.policeClearanceCertNumber || app?.policeClearancePhoto);
+    const tags: React.ReactNode[] = [];
+    if (verified)
+      tags.push(
+        <span key="id" className="text-brand flex items-center gap-1">
+          <ShieldCheck size={12} className="text-brand" />
+          Ghana Card Verified
+        </span>
+      );
+    else if (idPending)
+      tags.push(
+        <span key="id" className="text-amber-700 flex items-center gap-1">
+          <ShieldCheck size={12} className="text-amber-600" />
+          Ghana Card Pending
+        </span>
+      );
+    if (police === 'cleared')
+      tags.push(
+        <span key="police" className="text-amber-700 flex items-center gap-1">
+          <ShieldCheck size={12} className="text-amber-600" />
+          Police Cleared
+        </span>
+      );
+    else if (police === 'pending' && policeSent)
+      tags.push(
+        <span key="police" className="text-amber-700 flex items-center gap-1">
+          <ShieldCheck size={12} className="text-amber-600" />
+          Police Check Pending
+        </span>
+      );
+    if (verified && (!app || app.status === 'approved'))
+      tags.push(
+        <span key="ok" className="text-sky-700 flex items-center gap-1">
+          <CheckCircle size={12} className="text-sky-600" />
+          Verified &amp; Approved
+        </span>
+      );
+    if (tags.length === 0) return null;
+    return <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 mt-1.5 text-[10.5px] font-bold">{tags}</div>;
+  };
+
   const draftFromSaved = (): PartnerDraft => {
     const a = myArtisanDoc;
     return {
@@ -9838,22 +9883,7 @@ export default function RootLayout() {
 
               {/* Badges / Subtitle */}
               {applicant.role === 'artisan' ? (
-                <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 mt-1.5 text-[10.5px] font-bold">
-                  <span className="text-brand flex items-center gap-1">
-                    <ShieldCheck size={12} className="text-brand" />
-                    {!applicant.idVerificationSkipped ? 'Ghana Card Verified' : 'Ghana Card Pending'}
-                  </span>
-                  <span className="text-amber-700 flex items-center gap-1">
-                    <ShieldCheck size={12} className="text-amber-600" />
-                    {applicant.policeClearanceStatus === 'cleared' || applicant.policeClearanceCertNumber
-                      ? 'Police Cleared'
-                      : 'Police Check Pending'}
-                  </span>
-                  <span className="text-sky-700 flex items-center gap-1">
-                    <CheckCircle size={12} className="text-sky-600" />
-                    Verified &amp; Approved
-                  </span>
-                </div>
+                renderPartnerTags(applicant as any, Boolean(applicant.verifiedBadge), true)
               ) : (
                 <div className="flex items-center gap-2 mt-1 text-[10.5px] text-slate-500 flex-wrap">
                   <span className="font-semibold text-slate-700">
@@ -14811,10 +14841,27 @@ export default function RootLayout() {
                             {cleanProfileName}
                           </h2>
                         </div>
+                        {partnerRole === 'artisan' && !adminAccess.isAdmin && (
+                          <span className={`text-[11px] font-bold shrink-0 ${partnerLocked ? 'text-amber-600' : 'text-brand'}`}>
+                            {partnerLocked ? 'Finish profile' : 'Approved'}
+                          </span>
+                        )}
                       </div>
 
+                      {/* Artisan: trade, then headline and inspection, then only the tags that apply */}
+                      {partnerRole === 'artisan' && !adminAccess.isAdmin && (
+                        <>
+                          <p className="text-xs font-bold text-orange-600 mt-0.5 truncate">{myArtisanDoc?.tradeSkill || userProfile.tradeSkill || 'Artisan'}</p>
+                          <p className="text-[11px] font-semibold text-slate-700 mt-0.5 truncate">
+                            {myArtisanDoc?.headline ? `${myArtisanDoc.headline} • ` : ''}
+                            {(myArtisanDoc?.inspectionFee || 0) > 0 ? `GH₵ ${myArtisanDoc!.inspectionFee} inspection` : 'Free inspection'}
+                          </p>
+                          {renderPartnerTags(myPartnerApplication() as any, Boolean(userProfile.isVerified), true)}
+                        </>
+                      )}
+
                       {/* Verified Tag: show ONLY for sellers/artisans/admins who are verified & approved. Applicants who skipped verification can sell but do NOT get verified tag */}
-                      {currentUserRole !== 'buyer' && userProfile.isVerified === true && (userProfile.isApproved ?? true) && (
+                      {partnerRole !== 'artisan' && currentUserRole !== 'buyer' && userProfile.isVerified === true && (userProfile.isApproved ?? true) && (
                         <div className="flex items-center gap-1 text-brand font-bold text-xs mt-0.5">
                           <ShieldCheck size={14} className="stroke-[2.5] shrink-0 text-brand" />
                           <span>Verified</span>
@@ -14829,15 +14876,6 @@ export default function RootLayout() {
                         </p>
                       )}
 
-                      {currentUserRole === 'artisan' && (
-                        <p className="text-[11px] font-bold text-slate-900 truncate mt-0.5 flex items-center gap-1">
-                          <Cog size={13} className="text-black shrink-0" />
-                          <span className="truncate">
-                            {myArtisanDoc?.headline || myArtisanDoc?.tradeSkill || userProfile.tradeSkill || 'Artisan'} •{' '}
-                            {(myArtisanDoc?.inspectionFee || 0) > 0 ? `GH₵ ${myArtisanDoc!.inspectionFee} inspection` : 'Free inspection'}
-                          </span>
-                        </p>
-                      )}
 
                       {currentUserRole === 'admin' && (
                         <p className="text-[11px] font-bold text-indigo-700 truncate mt-0.5 flex items-center gap-1">
