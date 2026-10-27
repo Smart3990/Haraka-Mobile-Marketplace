@@ -24151,7 +24151,7 @@ export default function RootLayout() {
                             <span className="text-red-500 font-black text-sm">*</span>
                           </span>
                           {!sellerAvatarPhoto && (
-                            <span className="text-[11px] font-bold px-2 py-0.5 rounded-full border text-red-500 bg-red-50 border-red-200">
+                            <span className="text-[11px] font-bold text-red-500">
                               Required *
                             </span>
                           )}
@@ -24843,7 +24843,7 @@ export default function RootLayout() {
                         </p>
                       </div>
                       {!sellerAvatarPhoto && (
-                        <span className="text-[11px] font-bold px-2 py-0.5 rounded-full border text-red-500 bg-red-50 border-red-200">
+                        <span className="text-[11px] font-bold text-red-500">
                           Required *
                         </span>
                       )}
