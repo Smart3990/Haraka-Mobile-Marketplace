@@ -38,5 +38,5 @@ jobs:
             echo "::error::Add the FIREBASE_TOKEN repository secret (see the top of this file)."
             exit 1
           fi
-          npx --yes firebase-tools@14 deploy --only hosting,firestore:rules \
+          npx --yes firebase-tools@15.34.1 deploy --only hosting,firestore:rules \
             --project ga4-viewer-kiyumart-platform --non-interactive
