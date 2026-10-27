@@ -40,3 +40,18 @@ jobs:
           fi
           npx --yes firebase-tools@15.34.1 deploy --only hosting,firestore:rules \
             --project ga4-viewer-kiyumart-platform --non-interactive
+
+      # The new rules must really be live: anyone may look up a disabled account, so a missing one is
+      # "not found" (404). Old rules refuse it (403), which means the rules were not released.
+      - name: Check the database rules are live
+        run: |
+          KEY=$(node -p "require('./firebase-applet-config.json').apiKey")
+          DB=$(node -p "require('./firebase-applet-config.json').firestoreDatabaseId")
+          sleep 20
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://firestore.googleapis.com/v1/projects/ga4-viewer-kiyumart-platform/databases/$DB/documents/disabledUsers/deploy-check?key=$KEY")
+          echo "Rules check returned $CODE"
+          if [ "$CODE" != "404" ]; then
+            echo "::error::The Firestore rules are not live (expected 404, got $CODE)."
+            exit 1
+          fi
