@@ -13,6 +13,7 @@ import {
   ArrowRight,
   ArrowLeft,
   Camera,
+  Image as ImageIcon,
   X,
   ChevronRight,
   ChevronLeft,
@@ -4799,26 +4800,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     const done = items.filter((i) => i.done).length;
     const complete = done === items.length;
     const what = partnerRole === 'artisan' ? 'artisan' : 'seller';
-    if (complete) {
-      return (
-        <button
-          type="button"
-          onClick={openPartnerSetup}
-          className="w-full bg-white rounded-2xl p-3.5 border border-slate-200/80 shadow-2xs flex items-center gap-3 text-left cursor-pointer active:scale-99"
-        >
-          <div className="w-10 h-10 rounded-xl bg-orange-50 text-accent flex items-center justify-center shrink-0">
-            <Edit3 size={18} />
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-black text-slate-900">Edit {what} profile</p>
-            <p className="text-[11px] text-slate-500">
-              {partnerRole === 'artisan' ? 'Services, prices, projects and voice intro' : 'About, hours, meetup spots and contact'}
-            </p>
-          </div>
-          <ChevronRight size={16} className="text-slate-400 shrink-0" />
-        </button>
-      );
-    }
+    if (complete) return null;
     const missing = items.filter((i) => !i.done).map((i) => i.label);
     return (
       <div className="rounded-2xl p-3.5 border border-orange-200 bg-orange-50/70 shadow-2xs space-y-2.5">
@@ -4848,6 +4830,179 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
           Complete my profile ({done}/{items.length})
         </button>
       </div>
+    );
+  };
+
+  const [profileVoicePlaying, setProfileVoicePlaying] = useState(false);
+  const profileVoiceStopRef = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    if (currentRoute.type === 'tabs') return;
+    profileVoiceStopRef.current?.();
+    profileVoiceStopRef.current = null;
+    setProfileVoicePlaying(false);
+  }, [currentRoute.type]);
+  const toggleProfileVoice = (url: string) => {
+    if (profileVoicePlaying) {
+      profileVoiceStopRef.current?.();
+      profileVoiceStopRef.current = null;
+      setProfileVoicePlaying(false);
+      return;
+    }
+    setProfileVoicePlaying(true);
+    const done = () => {
+      profileVoiceStopRef.current = null;
+      setProfileVoicePlaying(false);
+    };
+    profileVoiceStopRef.current = playVoice(url, { onEnd: done, onError: done });
+  };
+
+  /** The seller's or artisan's own details on their Profile, as buyers see them, one section per card */
+  const renderPartnerDetails = () => {
+    if (!partnerRole || adminAccess.isAdmin) return null;
+    const d = draftFromSaved();
+    const section = (title: string, icon: React.ReactNode, body: React.ReactNode, empty: boolean) => (
+      <div className="bg-white rounded-2xl p-3.5 border border-slate-200/80 shadow-2xs">
+        <div className="flex items-center justify-between gap-2 mb-2">
+          <p className="text-[13px] font-black text-slate-900 flex items-center gap-1.5">
+            <span className="text-accent flex">{icon}</span>
+            {title}
+          </p>
+          <button type="button" onClick={openPartnerSetup} className="text-[11px] font-bold text-accent flex items-center gap-1 cursor-pointer shrink-0">
+            <Edit3 size={12} />
+            {empty ? 'Add' : 'Edit'}
+          </button>
+        </div>
+        {empty ? <p className="text-[11px] text-slate-400">Not added yet.</p> : body}
+      </div>
+    );
+    const row = (label: string, value: string) =>
+      value ? (
+        <div className="flex items-start justify-between gap-3 text-xs py-1">
+          <span className="text-slate-500 shrink-0">{label}</span>
+          <span className="font-semibold text-slate-800 text-right">{value}</span>
+        </div>
+      ) : null;
+    const chips = (items: string[]) => (
+      <div className="flex flex-wrap gap-1.5">
+        {items.map((item) => (
+          <span key={item} className="px-2.5 py-1 rounded-full bg-slate-100 text-[11px] font-semibold text-slate-700">
+            {item}
+          </span>
+        ))}
+      </div>
+    );
+    const whatsapp = d.whatsapp ? `+233 ${cleanGhanaPhoneNumber(d.whatsapp)}` : '';
+
+    if (partnerRole === 'seller') {
+      return (
+        <>
+          {section(
+            'About your business',
+            <Store size={15} />,
+            <div>
+              {d.storeName && <p className="text-xs font-bold text-slate-900">{d.storeName}</p>}
+              {d.bio && <p className="text-xs text-slate-600 leading-relaxed mt-1">{d.bio}</p>}
+            </div>,
+            !d.storeName && !d.bio
+          )}
+          {section(
+            'Contact & hours',
+            <Clock size={15} />,
+            <div className="divide-y divide-slate-100">
+              {row('WhatsApp', whatsapp)}
+              {row('Town / area', d.location)}
+              {row('Opening hours', d.operatingHours)}
+              {row('Usually replies', d.responseTime)}
+            </div>,
+            !whatsapp && !d.location && !d.operatingHours && !d.responseTime
+          )}
+          {section('Safe meetup spots', <MapPin size={15} />, chips(d.meetupSpots), d.meetupSpots.length === 0)}
+        </>
+      );
+    }
+
+    return (
+      <>
+        {section(
+          'About your work',
+          <Briefcase size={15} />,
+          <div>
+            {d.headline && <p className="text-xs font-bold text-slate-900">{d.headline}</p>}
+            {d.bio && <p className="text-xs text-slate-600 leading-relaxed mt-1">{d.bio}</p>}
+            <div className="divide-y divide-slate-100 mt-2">
+              {row('Trade', myArtisanDoc?.tradeSkill || '')}
+              {row('Experience', d.experienceYears ? `${d.experienceYears} year${d.experienceYears === '1' ? '' : 's'}` : '')}
+              {row('Inspection fee', d.inspectionFee > 0 ? `GH₵ ${d.inspectionFee}` : 'Free')}
+              {row('Usually replies', d.responseTime)}
+              {row('WhatsApp', whatsapp)}
+            </div>
+          </div>,
+          !d.headline && !d.bio
+        )}
+        {section(
+          'Voice introduction',
+          <Mic size={15} />,
+          <button
+            type="button"
+            onClick={() => toggleProfileVoice(d.voiceIntroUrl)}
+            className="py-2 px-3.5 rounded-xl bg-slate-900 text-white text-xs font-bold cursor-pointer inline-flex items-center gap-1.5"
+          >
+            {profileVoicePlaying ? <Pause size={13} /> : <Play size={13} />}
+            <span>{profileVoicePlaying ? 'Stop' : 'Listen to your intro'}</span>
+          </button>,
+          !d.voiceIntroUrl
+        )}
+        {section(
+          'Services & prices',
+          <Wrench size={15} />,
+          <div className="divide-y divide-slate-100">
+            {d.services.map((svc, i) => (
+              <div key={i} className="py-1.5 flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-xs font-bold text-slate-900">{svc.title}</p>
+                  {svc.desc && <p className="text-[11px] text-slate-500 leading-snug">{svc.desc}</p>}
+                </div>
+                <span className="text-xs font-black text-brand shrink-0">{svc.price}</span>
+              </div>
+            ))}
+          </div>,
+          d.services.length === 0
+        )}
+        {section(
+          'Past projects',
+          <ImageIcon size={15} />,
+          <div className="grid grid-cols-3 gap-2">
+            {d.portfolio.map((p, i) => (
+              <div key={i} className="min-w-0">
+                <div className="aspect-square rounded-xl overflow-hidden bg-slate-100">
+                  {p.img && <img src={thumbnailUrl(p.img, 240)} alt="" className="w-full h-full object-cover" />}
+                </div>
+                <p className="text-[10.5px] font-semibold text-slate-700 mt-1 truncate">{p.title}</p>
+              </div>
+            ))}
+          </div>,
+          d.portfolio.length === 0
+        )}
+        {section(
+          'Areas & languages',
+          <MapPin size={15} />,
+          <div className="space-y-2">
+            {d.coverage.length > 0 && (
+              <div>
+                <p className="text-[11px] font-bold text-slate-500 mb-1">Areas you cover</p>
+                {chips(d.coverage)}
+              </div>
+            )}
+            {d.languages.length > 0 && (
+              <div>
+                <p className="text-[11px] font-bold text-slate-500 mb-1">Languages</p>
+                {chips(d.languages)}
+              </div>
+            )}
+          </div>,
+          d.coverage.length === 0 && d.languages.length === 0
+        )}
+      </>
     );
   };
 
@@ -14505,7 +14660,10 @@ export default function RootLayout() {
                       {currentUserRole === 'artisan' && (
                         <p className="text-[11px] font-bold text-slate-900 truncate mt-0.5 flex items-center gap-1">
                           <Cog size={13} className="text-black shrink-0" />
-                          <span className="truncate">{userProfile.tradeSkill} • GH₵ {userProfile.inspectionFee} diagnostic fee</span>
+                          <span className="truncate">
+                            {myArtisanDoc?.headline || myArtisanDoc?.tradeSkill || userProfile.tradeSkill || 'Artisan'} •{' '}
+                            {(myArtisanDoc?.inspectionFee || 0) > 0 ? `GH₵ ${myArtisanDoc!.inspectionFee} inspection` : 'Free inspection'}
+                          </span>
                         </p>
                       )}
 
@@ -14576,7 +14734,7 @@ export default function RootLayout() {
                   </div>
 
                   {/* Bio display for any user profile */}
-                  {userProfile.bio ? (
+                  {userProfile.bio && !partnerRole ? (
                     <p className="pt-2 text-xs text-slate-600 leading-relaxed font-normal">
                       {userProfile.bio}
                     </p>
@@ -14609,6 +14767,7 @@ export default function RootLayout() {
                 </div>
 
                 {renderPartnerSetupCard()}
+                {renderPartnerDetails()}
                 {renderGetVerifiedCard()}
 
                 {/* SELLER ONLY: Full Marketplace Offers & Listings, Activity & Trades */}
