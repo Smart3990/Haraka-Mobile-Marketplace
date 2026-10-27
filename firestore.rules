@@ -49,6 +49,11 @@ service cloud.firestore {
       return isSystemAdmin() || (isAdmin() && permission in get(adminDocPath()).data.get('permissions', []));
     }
 
+    // Entered their password in the last 30 minutes (Platform Settings asks for it; the app allows 15)
+    function recentlyConfirmed() {
+      return request.auth.token.auth_time > request.time.toMillis() / 1000 - 1800;
+    }
+
     function isValidId(id) {
       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
@@ -96,7 +101,7 @@ service cloud.firestore {
         // Only the system admin hands out platform permissions
         && (isSystemAdmin() || request.resource.data.get('permissions', []) == (resource == null ? [] : resource.data.get('permissions', [])));
       // The system admin chooses what each admin may do
-      allow update: if isSystemAdmin()
+      allow update: if isSystemAdmin() && recentlyConfirmed()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['permissions', 'canAddAdmins'])
         && request.resource.data.get('permissions', []) is list && request.resource.data.get('permissions', []).size() <= 10
         && request.resource.data.canAddAdmins is bool;
@@ -110,7 +115,7 @@ service cloud.firestore {
     }
     match /settings/branding {
       allow get: if true;
-      allow create, update: if hasPermission('branding')
+      allow create, update: if hasPermission('branding') && recentlyConfirmed()
         && request.resource.data.keys().hasOnly(['logoUrl', 'welcomeImageUrl', 'primaryColor', 'deepColor', 'accentColor',
           'inkColor', 'backgroundColor', 'updatedAtISO', 'updatedBy'])
         && request.resource.data.get('logoUrl', '') is string && request.resource.data.get('logoUrl', '').size() < 600000
@@ -138,20 +143,20 @@ service cloud.firestore {
     // Marketplace categories changed or added by the system admin (or an admin given access); everyone reads them
     match /categories/{slug} {
       allow get, list: if true;
-      allow create, update: if hasPermission('categories') && isValidId(slug)
+      allow create, update: if hasPermission('categories') && recentlyConfirmed() && isValidId(slug)
         && request.resource.data.slug == slug
         && request.resource.data.keys().hasOnly(['slug', 'name', 'image', 'subcategories', 'custom', 'order', 'hidden', 'updatedAtISO'])
         && request.resource.data.get('hidden', false) is bool
         && request.resource.data.get('image', '') is string && request.resource.data.get('image', '').size() < 200000
         && request.resource.data.get('name', 'x') is string && request.resource.data.get('name', 'x').size() <= 40
         && request.resource.data.get('subcategories', []) is list && request.resource.data.get('subcategories', []).size() <= 20;
-      allow delete: if hasPermission('categories');
+      allow delete: if hasPermission('categories') && recentlyConfirmed();
     }
 
     // Home banners added (or built-in ones hidden) in Platform Settings; everyone reads them
     match /banners/{bannerId} {
       allow get, list: if true;
-      allow create, update: if hasPermission('banners') && isValidId(bannerId)
+      allow create, update: if hasPermission('banners') && recentlyConfirmed() && isValidId(bannerId)
         && request.resource.data.id == bannerId
         && request.resource.data.keys().hasOnly(['id', 'builtIn', 'hidden', 'title', 'desc', 'btnText', 'target', 'bg', 'image', 'audience', 'order', 'updatedAtISO'])
         && request.resource.data.get('hidden', false) is bool
@@ -163,7 +168,7 @@ service cloud.firestore {
         && request.resource.data.get('image', '') is string && request.resource.data.get('image', '').size() < 300000
         && request.resource.data.get('audience', 'everyone') in ['everyone', 'buyer', 'seller', 'artisan', 'applicant', 'admin']
         && request.resource.data.get('order', 0) is number;
-      allow delete: if hasPermission('banners');
+      allow delete: if hasPermission('banners') && recentlyConfirmed();
     }
 
     // Why something failed on a user's phone (error text and device type), read only by admins
@@ -182,7 +187,7 @@ service cloud.firestore {
       allow get: if isOwner(userId) || isAdmin();
       allow list: if isAdmin();
       // Only the system admin files an application on someone's behalf (Platform Settings > All Users)
-      allow create: if (isSystemAdmin() && request.resource.data.uid == userId) || (
+      allow create: if (isSystemAdmin() && recentlyConfirmed() && request.resource.data.uid == userId) || (
         isOwner(userId) && isVerifiedUser()
         && request.resource.data.uid == userId
         && request.resource.data.status == 'pending'

@@ -159,6 +159,8 @@ import {
   reportClientError,
   saveBrandingImage,
   saveBrandingColors,
+  confirmAdminPassword,
+  ADMIN_UNLOCK_MINUTES,
   makeUserPartner,
   type AdminPartnerInput,
   setCategoryImage,
@@ -3834,12 +3836,138 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     }
   };
 
+  // ---- Platform Settings lock: the admin re-enters their password, then it stays open for a while ----
+  const [adminUnlockedUntil, setAdminUnlockedUntil] = useState(0);
+  const [adminUnlockPassword, setAdminUnlockPassword] = useState('');
+  const [adminUnlockError, setAdminUnlockError] = useState('');
+  const [adminUnlockBusy, setAdminUnlockBusy] = useState(false);
+  /** Something an admin started outside Platform Settings that needs the password first */
+  const [adminUnlockThen, setAdminUnlockThen] = useState<(() => void) | null>(null);
+  const adminUnlocked = adminUnlockedUntil > Date.now();
+
+  // Locks again when the time is up, and whenever someone else signs in
+  useEffect(() => {
+    if (!adminUnlockedUntil) return;
+    const timer = setTimeout(() => setAdminUnlockedUntil(0), Math.max(0, adminUnlockedUntil - Date.now()));
+    return () => clearTimeout(timer);
+  }, [adminUnlockedUntil]);
+  useEffect(() => setAdminUnlockedUntil(0), [firebaseUid]);
+
+  const unlockAdminSettings = async () => {
+    if (adminUnlockBusy) return;
+    if (!adminUnlockPassword) {
+      setAdminUnlockError('Enter your password.');
+      return;
+    }
+    setAdminUnlockBusy(true);
+    setAdminUnlockError('');
+    try {
+      await confirmAdminPassword(adminUnlockPassword);
+      setAdminUnlockedUntil(Date.now() + ADMIN_UNLOCK_MINUTES * 60_000);
+      setAdminUnlockPassword('');
+      const then = adminUnlockThen;
+      setAdminUnlockThen(null);
+      then?.();
+    } catch (err) {
+      setAdminUnlockError(err instanceof Error ? err.message : 'Could not check your password. Try again.');
+    } finally {
+      setAdminUnlockBusy(false);
+    }
+  };
+
+  /** Runs an admin action now if Platform Settings is unlocked, otherwise after the password */
+  const withAdminUnlock = (action: () => void) => {
+    if (adminUnlocked) action();
+    else {
+      setAdminUnlockError('');
+      setAdminUnlockThen(() => action);
+    }
+  };
+
+  const renderAdminUnlockForm = (onCancel?: () => void) => (
+    <form
+      className="space-y-3"
+      onSubmit={(e) => {
+        e.preventDefault();
+        unlockAdminSettings();
+      }}
+    >
+      <div className="flex items-center gap-3">
+        <div className="w-11 h-11 rounded-2xl bg-orange-50 text-accent flex items-center justify-center shrink-0">
+          <Lock size={20} />
+        </div>
+        <div className="min-w-0">
+          <p className="text-sm font-black text-slate-900">Confirm it's you</p>
+          <p className="text-[11px] text-slate-500 leading-snug">
+            Enter your login password to change platform settings. It stays open for {ADMIN_UNLOCK_MINUTES} minutes.
+          </p>
+        </div>
+      </div>
+      <input
+        type="password"
+        autoComplete="current-password"
+        autoFocus
+        value={adminUnlockPassword}
+        onChange={(e) => {
+          setAdminUnlockPassword(e.target.value);
+          setAdminUnlockError('');
+        }}
+        placeholder="Password"
+        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none focus:border-orange-500"
+      />
+      {adminUnlockError && <p className="text-[11px] font-bold text-red-600">{adminUnlockError}</p>}
+      <div className="flex gap-2">
+        <button
+          type="submit"
+          disabled={adminUnlockBusy}
+          className="flex-1 py-2.5 rounded-xl bg-slate-900 text-white text-xs font-bold cursor-pointer disabled:opacity-50"
+        >
+          {adminUnlockBusy ? 'Checking…' : 'Unlock'}
+        </button>
+        {onCancel && (
+          <button
+            type="button"
+            disabled={adminUnlockBusy}
+            onClick={onCancel}
+            className="py-2.5 px-4 rounded-xl border border-slate-200 text-slate-600 text-xs font-bold cursor-pointer disabled:opacity-50"
+          >
+            Cancel
+          </button>
+        )}
+      </div>
+    </form>
+  );
+
+  /** Password sheet for admin actions started outside Platform Settings (e.g. press and hold a category) */
+  const renderAdminUnlockSheet = () => {
+    if (!adminUnlockThen) return null;
+    const close = () => {
+      if (adminUnlockBusy) return;
+      setAdminUnlockThen(null);
+      setAdminUnlockPassword('');
+      setAdminUnlockError('');
+    };
+    return (
+      <div className="fixed inset-0 z-[87] bg-slate-900/40 flex items-end justify-center" onClick={close}>
+        <div
+          className="w-full max-w-md bg-white rounded-t-3xl px-4 pt-3 pb-[calc(env(safe-area-inset-bottom,0px)+16px)] space-y-3 shadow-2xl"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="w-10 h-1.5 rounded-full bg-slate-200 mx-auto" />
+          {renderAdminUnlockForm(close)}
+        </div>
+      </div>
+    );
+  };
+
   // ---- Deleting a category (system admin: press and hold a category) ----
   const [deleteCategoryTarget, setDeleteCategoryTarget] = useState<{ slug: string; name: string; custom: boolean; moveTo: string } | null>(null);
 
   const askDeleteCategory = (cat: AppCategory) => {
     if (!can('categories')) return;
-    setDeleteCategoryTarget({ slug: cat.slug, name: CATEGORY_SHORT_NAMES[cat.slug] || cat.name, custom: Boolean(cat.custom), moveTo: '' });
+    withAdminUnlock(() =>
+      setDeleteCategoryTarget({ slug: cat.slug, name: CATEGORY_SHORT_NAMES[cat.slug] || cat.name, custom: Boolean(cat.custom), moveTo: '' })
+    );
   };
 
   const confirmDeleteCategory = async () => {
@@ -11740,6 +11868,26 @@ export default function RootLayout() {
         const info = section ? settingsSections().find((s) => s.key === section) : undefined;
         if (section && !info?.show) {
           return renderUnavailable('Not available', 'You do not have access to this part of Platform Settings.');
+        }
+        if (!adminUnlocked) {
+          return (
+            <div className="flex-1 flex flex-col bg-dashboard-dots overflow-y-auto no-scrollbar">
+              <div className="bg-white px-4 pt-3.5 pb-3 border-b border-slate-200/80 sticky top-0 z-20 flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={goBack}
+                  aria-label="Back"
+                  className="w-9 h-9 rounded-xl border border-slate-200 bg-white flex items-center justify-center text-slate-700 shadow-2xs active:scale-95 cursor-pointer shrink-0"
+                >
+                  <ArrowLeft size={17} />
+                </button>
+                <h1 className="text-base font-black text-slate-900 truncate">{info ? info.title : 'Platform Settings'}</h1>
+              </div>
+              <div className="p-3.5">
+                <div className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-2xs">{renderAdminUnlockForm()}</div>
+              </div>
+            </div>
+          );
         }
         return (
           <div key={section || 'menu'} className="flex-1 flex flex-col pb-10 bg-dashboard-dots overflow-y-auto no-scrollbar">
@@ -25794,6 +25942,7 @@ export default function RootLayout() {
                 {renderReportPersonModal()}
                 {renderGetVerifiedSheet()}
                 {renderDeleteCategorySheet()}
+                {renderAdminUnlockSheet()}
                 {renderBannerEditorSheet()}
                 {renderAdminEditAdSheet()}
                 {renderPolicyViewer()}
@@ -25959,6 +26108,7 @@ export default function RootLayout() {
                 {renderReportPersonModal()}
                 {renderGetVerifiedSheet()}
                 {renderDeleteCategorySheet()}
+                {renderAdminUnlockSheet()}
                 {renderBannerEditorSheet()}
                 {renderAdminEditAdSheet()}
                 </div>

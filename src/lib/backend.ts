@@ -337,6 +337,29 @@ export function signOutUser(): Promise<void> {
   return firebaseSignOut(auth);
 }
 
+/** How long Platform Settings stays open after the admin re-enters their password (the database allows 30). */
+export const ADMIN_UNLOCK_MINUTES = 15;
+
+/**
+ * Admin re-enters their login password before using Platform Settings. This refreshes the
+ * sign-in time the database rules check, so settings changes need a recent password.
+ */
+export async function confirmAdminPassword(password: string): Promise<void> {
+  const user = auth.currentUser;
+  if (!user || !user.email) throw new Error('Please log in again.');
+  try {
+    await reauthenticateWithCredential(user, EmailAuthProvider.credential(user.email, password));
+  } catch (error) {
+    const code = (error as { code?: string })?.code || '';
+    throw new Error(
+      code.includes('wrong-password') || code.includes('invalid-credential') || code.includes('invalid-login')
+        ? 'Incorrect password. Please try again.'
+        : friendlyAuthError(error)
+    );
+  }
+  await user.getIdToken(true);
+}
+
 /**
  * Permanently deletes the signed-in user's account: their ads, partner application (with ID
  * documents), public artisan profile, notification token and profile, then the login itself.
