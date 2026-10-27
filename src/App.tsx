@@ -260,6 +260,7 @@ import { HarakaLogo } from './components/HarakaLogo';
 import { HARAKA_LOGO, HARAKA_MARK, WELCOME_HERO, WELCOME_HERO_TRANS } from './lib/images';
 import { useBranding, THEME_COLORS, type ThemeColorKey } from './lib/branding';
 import { saveDraft, loadDraft, clearDraft, stripMedia } from './lib/drafts';
+import { locateMe, matchGhanaRegion } from './lib/location';
 import { CATEGORY_IMAGES } from './lib/categoryImages';
 import {
   BANNER_GRADIENTS,
@@ -1555,14 +1556,10 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
               const town = addr.suburb || addr.neighbourhood || addr.town || addr.city || addr.county || '';
               const state = addr.state || addr.region || '';
               
-              const matchedRegion = GHANA_16_REGIONS.find(
-                (r) =>
-                  r.id !== 'all' &&
-                  ((state && (state.toLowerCase().includes(r.name.toLowerCase()) || r.name.toLowerCase().includes(state.toLowerCase()))) ||
-                   (town && r.capital && town.toLowerCase().includes(r.capital.toLowerCase())))
-              );
-
-              const resolvedReg = matchedRegion ? matchedRegion.name : (state || 'Greater Accra');
+              const resolvedReg =
+                matchGhanaRegion(state) ||
+                GHANA_16_REGIONS.find((r) => r.id !== 'all' && town && r.capital && town.toLowerCase().includes(r.capital.toLowerCase()))?.name ||
+                'Greater Accra';
               const resolvedCity = town ? `${town}` : resolvedReg;
 
               setDetectedUserCity(resolvedCity);
@@ -7242,7 +7239,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     'Photography & Videography',
     'Art, Crafts & Beadwork',
     'Catering & Event Cooking',
-    'Tailoring & Fashion Design',
+    'Fashion Designer & Tailoring',
   ];
 
   const SERVICE_BLACK_ICONS: Array<{ id: string; label: string; icon: React.ReactNode }> = [
@@ -7401,154 +7398,18 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
 
   // Auto-detect current physical location using device location & reverse geocoding
   const detectUserLocation = async () => {
+    if (isDetectingLocation) return;
     setIsDetectingLocation(true);
-
-    const applyLocation = (city: string, reg: string, isFromDeviceGps = false) => {
-      let finalReg = reg || 'Greater Accra';
-      let finalCity = city || 'East Legon, Accra';
-      const matched = GHANA_16_REGIONS.find(
-        (r) =>
-          r.id !== 'all' &&
-          (finalReg.toLowerCase().includes(r.name.toLowerCase()) ||
-            r.name.toLowerCase().includes(finalReg.toLowerCase()))
-      );
-      if (matched) finalReg = matched.name;
-
-      setSellerRegForm((prev) => ({
-        ...prev,
-        region: finalReg,
-        cityNeighborhood: finalCity,
-        location: `${finalCity}, ${finalReg}`,
-      }));
+    try {
+      const found = await locateMe();
+      const town = [found.street, found.town].filter(Boolean).join(', ');
+      setSellerRegForm((prev) => ({ ...prev, region: found.region, cityNeighborhood: town, location: `${town}, ${found.region}` }));
       clearSellerError('region');
       clearSellerError('cityNeighborhood');
-      setIsDetectingLocation(false);
       setLocationDetectSuccess(true);
-      showToast(
-        isFromDeviceGps
-          ? `📍 GPS location detected: ${finalCity} (${finalReg})`
-          : `📍 Location set: ${finalCity} (${finalReg})`
-      );
-    };
-
-    try {
-      // Helper function to query browser geolocation
-      const getDevicePosition = (enableHighAccuracy: boolean, timeoutMs: number) => {
-        return new Promise<GeolocationPosition>((resolve, reject) => {
-          if (typeof navigator === 'undefined' || !('geolocation' in navigator)) {
-            return reject(new Error('Geolocation not available'));
-          }
-          navigator.geolocation.getCurrentPosition(resolve, reject, {
-            enableHighAccuracy,
-            timeout: timeoutMs,
-            maximumAge: 10000,
-          });
-        });
-      };
-
-      let coords: { latitude: number; longitude: number } | null = null;
-
-      // Stage 1: Try device GPS with high accuracy (8000ms timeout)
-      try {
-        const pos = await getDevicePosition(true, 8000);
-        coords = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
-      } catch {
-        // Stage 2: Quick fallback to coarse cellular/wifi GPS (5000ms timeout)
-        try {
-          const pos = await getDevicePosition(false, 5000);
-          coords = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
-        } catch {
-          // Device GPS unavailable or denied
-        }
-      }
-
-      // If device GPS coordinates were retrieved:
-      if (coords) {
-        const { latitude, longitude } = coords;
-
-        // Try OpenStreetMap Nominatim reverse geocode
-        try {
-          const res = await fetch(
-            `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${latitude}&lon=${longitude}&zoom=18&addressdetails=1`
-          );
-          if (res.ok) {
-            const data = await res.json();
-            const addr = data.address || {};
-            const suburb =
-              addr.suburb ||
-              addr.neighbourhood ||
-              addr.quarter ||
-              addr.residential ||
-              addr.commercial ||
-              '';
-            const city =
-              addr.city ||
-              addr.town ||
-              addr.municipality ||
-              addr.village ||
-              addr.county ||
-              '';
-            const state = addr.state || addr.region || '';
-
-            let resolvedCity =
-              suburb && city && suburb !== city ? `${suburb}, ${city}` : suburb || city || 'Accra';
-            let resolvedReg = state || 'Greater Accra';
-
-            applyLocation(resolvedCity, resolvedReg, true);
-            return;
-          }
-        } catch {}
-
-        // Fallback to Photon reverse geocode
-        try {
-          const res = await fetch(
-            `https://photon.komoot.io/reverse?lat=${latitude}&lon=${longitude}`
-          );
-          if (res.ok) {
-            const data = await res.json();
-            const props = data.features?.[0]?.properties || {};
-            const loc = props.district || props.locality || props.city || props.name || '';
-            const state = props.state || '';
-            if (loc || state) {
-              applyLocation(loc || 'Accra', state || 'Greater Accra', true);
-              return;
-            }
-          }
-        } catch {}
-
-        // Check if coords match Ghana boundary (lat: 4.5 to 11.5, lon: -3.5 to 1.5)
-        if (latitude >= 4.5 && latitude <= 11.5 && longitude >= -3.5 && longitude <= 1.5) {
-          applyLocation('Accra Central', 'Greater Accra', true);
-          return;
-        }
-      }
-
-      // Stage 3: Network IP lookup ONLY IF country is Ghana
-      try {
-        const ipRes = await fetch('https://ipwho.is/');
-        if (ipRes.ok) {
-          const ipData = await ipRes.json();
-          if (ipData.success && (ipData.country_code === 'GH' || ipData.country === 'Ghana')) {
-            applyLocation(ipData.city || 'Accra', ipData.region || 'Greater Accra', false);
-            return;
-          }
-        }
-      } catch {}
-
-      try {
-        const geoRes = await fetch('https://get.geojs.io/v1/ip/geo.json');
-        if (geoRes.ok) {
-          const geoData = await geoRes.json();
-          if (geoData.country_code === 'GH' || geoData.country === 'Ghana') {
-            applyLocation(geoData.city || 'Accra', geoData.region || 'Greater Accra', false);
-            return;
-          }
-        }
-      } catch {}
-
-      showToast("⚠️ Couldn't detect your location. Please choose your region.");
-    } catch {
-      showToast("⚠️ Couldn't detect your location. Please choose your region.");
+      showToast(`📍 ${found.fromGps ? 'Location found' : 'Approximate location'}: ${town} (${found.region})`);
+    } catch (err) {
+      showToast(`⚠️ ${err instanceof Error ? err.message : "Couldn't find your location. Please choose your region."}`);
     } finally {
       setIsDetectingLocation(false);
     }
@@ -19725,18 +19586,27 @@ export default function RootLayout() {
                   <div>
                     <div className="flex items-center justify-between mb-2 px-1">
                       <h3 className="text-xs font-black text-slate-900 tracking-tight">
-                        Service Location (Accra)
+                        Service Location
                       </h3>
                       <button
                         type="button"
-                        onClick={() => {
-                          setBookingLocation('Current GPS: Spintex Road, Accra (5.632, -0.108)');
-                          showToast('GPS location updated');
+                        disabled={isDetectingLocation}
+                        onClick={async () => {
+                          setIsDetectingLocation(true);
+                          try {
+                            const found = await locateMe();
+                            setBookingLocation([found.street, found.town, found.region].filter(Boolean).join(', '));
+                            showToast(found.fromGps ? '📍 Location found. Add your house number if you can.' : '📍 Approximate location. Please add your street and house number.');
+                          } catch (err) {
+                            showToast(`⚠️ ${err instanceof Error ? err.message : "Couldn't find your location."}`);
+                          } finally {
+                            setIsDetectingLocation(false);
+                          }
                         }}
-                        className="text-[10.5px] font-bold text-orange-600 hover:text-orange-700 flex items-center gap-1 cursor-pointer"
+                        className="text-[10.5px] font-bold text-orange-600 hover:text-orange-700 flex items-center gap-1 cursor-pointer disabled:opacity-60"
                       >
-                        <Crosshair size={12} />
-                        <span>Use Current GPS</span>
+                        <Crosshair size={12} className={isDetectingLocation ? 'animate-spin' : ''} />
+                        <span>{isDetectingLocation ? 'Finding…' : 'Use my location'}</span>
                       </button>
                     </div>
 
@@ -22814,7 +22684,7 @@ export default function RootLayout() {
                             <span className="text-[11px] text-slate-400">Displays on client cards</span>
                           </div>
                           <div className="bg-[#F3F4FB] rounded-2xl p-2.5 px-3 flex items-center gap-2 border border-slate-200/50">
-                            <Cog size={16} className="text-orange-500 shrink-0 stroke-[2.2]" />
+                            <span className="text-orange-500 shrink-0 flex">{tradeIcon(artisanCategoryFor(sellerRegForm.tradeSkill || ''))}</span>
                             <input
                               type="text"
                               value={artisanHeadline}
@@ -22831,7 +22701,7 @@ export default function RootLayout() {
                             Select Trade / Primary Craft <span className="text-red-500 font-bold">*</span>
                           </label>
                           <div className="relative bg-[#F3F4FB] rounded-2xl p-2.5 px-3 border border-slate-200/80 hover:border-orange-500 transition-colors focus-within:border-orange-500 focus-within:bg-white focus-within:ring-2 focus-within:ring-orange-100 flex items-center gap-2">
-                            <Cog size={16} className="text-orange-600 shrink-0 stroke-[2.2]" />
+                            <span className="text-orange-600 shrink-0 flex">{tradeIcon(artisanCategoryFor(sellerRegForm.tradeSkill || ''))}</span>
                             <select
                               value={sellerRegForm.tradeSkill || ''}
                               onChange={(e) => {
@@ -22861,7 +22731,7 @@ export default function RootLayout() {
                           </div>
                           {sellerRegForm.tradeSkill && (
                             <div className="mt-1.5 flex items-center gap-1.5 text-[11px] font-bold text-brand">
-                              <CheckCircle2 size={12} className="text-brand shrink-0" />
+                              <span className="shrink-0 flex">{tradeIcon(artisanCategoryFor(sellerRegForm.tradeSkill), 12)}</span>
                               <span>Selected: {sellerRegForm.tradeSkill}</span>
                             </div>
                           )}
@@ -23206,150 +23076,33 @@ export default function RootLayout() {
 
                         {/* Interactive Audio Recorder inside Card */}
                         <div className="space-y-2 py-1">
-                          {isRecordingArtisanAudio ? (
-                            /* State 1: Active Recording in Progress - Structured 3-row Card, zero text overlap */
-                            <div className="bg-red-50/60 border border-red-200/90 rounded-2xl p-4 space-y-3 shadow-2xs">
-                              {/* Row 1: Header with Pulsing Live Indicator and Monospace Timer Badge */}
-                              <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                                  <div className="relative flex items-center justify-center">
-                                    <div className="w-3 h-3 rounded-full bg-red-600 animate-ping absolute" />
-                                    <div className="w-2.5 h-2.5 rounded-full bg-red-600" />
-                                  </div>
-                                  <span className="text-xs font-black text-red-600 tracking-wide uppercase">
-                                    Recording Voice Intro...
-                                  </span>
-                                </div>
-                                <span className="font-mono text-xs font-black bg-red-100 text-red-700 px-2.5 py-0.5 rounded-full border border-red-200 shrink-0">
-                                  00:{artisanLiveRecordingSeconds < 10 ? `0${artisanLiveRecordingSeconds}` : artisanLiveRecordingSeconds} / 00:30
-                                </span>
-                              </div>
-
-                              {/* Row 2: Live Soundwave Visualizer & Instructions */}
-                              <div className="space-y-1.5">
-                                <div className="flex items-center gap-1 h-5 bg-white/90 rounded-xl px-2.5 border border-red-100">
-                                  {[30, 60, 90, 45, 80, 100, 75, 40, 85, 95, 60, 70, 50, 80, 60, 40].map((h, i) => (
-                                    <span
-                                      key={i}
-                                      className="flex-1 bg-red-500 rounded-full animate-pulse"
-                                      style={{
-                                        height: `${Math.max(4, (h / 100) * 16)}px`,
-                                        animationDelay: `${(i % 4) * 150}ms`,
-                                      }}
-                                    />
-                                  ))}
-                                </div>
-                                <p className="text-[11px] text-slate-600 leading-snug">
-                                  Speak clearly about your trade, experience &amp; response speed in Ghana.
-                                </p>
-                              </div>
-
-                              {/* Row 3: Distinct Action Buttons - Clean spacing, never overlapping text */}
-                              <div className="flex items-center justify-end gap-2.5 pt-1 border-t border-red-100/90">
-                                <button
-                                  type="button"
-                                  onClick={() => stopArtisanRecording(false)}
-                                  className="px-3.5 py-1.5 rounded-xl text-xs font-bold text-slate-600 hover:text-slate-900 bg-white border border-slate-200 hover:bg-slate-50 transition-all cursor-pointer"
-                                >
-                                  Cancel
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => stopArtisanRecording(true)}
-                                  className="px-4 py-1.5 rounded-xl text-xs font-black bg-red-600 hover:bg-red-700 active:scale-95 text-white flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
-                                >
-                                  <Square size={12} className="fill-white" />
-                                  <span>Done</span>
-                                </button>
-                              </div>
-                            </div>
-                          ) : hasRecordedArtisanAudio ? (
-                            /* State 2: Audio Recorded / Attached with Player Controls */
-                            <div className="py-2 space-y-2">
-                              <div className="flex items-center justify-between gap-2 flex-wrap">
-                                <span className="text-[11.5px] font-bold text-slate-800 truncate">
-                                  Voice Note Intro ({artisanLanguages.slice(0, 2).join(' & ') || 'English & Twi'})
-                                </span>
-                                <span className="text-[10.5px] font-bold text-orange-600 shrink-0">
-                                  Active on profile
-                                </span>
-                              </div>
-
-                              <div className="flex items-center gap-3 py-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={isRecordingArtisanAudio ? () => stopArtisanRecording(true) : startArtisanRecording}
+                              className={`py-2 px-3.5 rounded-xl text-xs font-bold cursor-pointer flex items-center gap-1.5 ${isRecordingArtisanAudio ? 'bg-red-600 text-white' : 'bg-slate-900 text-white'}`}
+                            >
+                              {isRecordingArtisanAudio ? <Square size={13} /> : <Mic size={14} />}
+                              <span>{isRecordingArtisanAudio ? 'Stop recording' : hasRecordedArtisanAudio ? 'Record again' : 'Record intro'}</span>
+                            </button>
+                            {hasRecordedArtisanAudio && !isRecordingArtisanAudio && (
+                              <>
                                 <button
                                   type="button"
                                   onClick={togglePlayArtisanAudio}
-                                  className="w-8 h-8 rounded-full bg-orange-500 hover:bg-orange-600 text-white flex items-center justify-center shadow-xs cursor-pointer shrink-0 active:scale-95 transition-transform"
-                                  title={isPlayingArtisanAudio ? 'Pause voice note' : 'Play voice note'}
+                                  className="py-2 px-3.5 rounded-xl border border-slate-200 text-slate-700 text-xs font-bold cursor-pointer flex items-center gap-1.5"
                                 >
-                                  {isPlayingArtisanAudio ? (
-                                    <Pause size={14} className="fill-white" />
-                                  ) : (
-                                    <Play size={14} className="fill-white ml-0.5" />
-                                  )}
+                                  {isPlayingArtisanAudio ? <Pause size={13} /> : <Play size={13} />}
+                                  <span>{isPlayingArtisanAudio ? 'Stop' : 'Listen'}</span>
                                 </button>
-                                <div className="flex-1 flex items-center gap-1 h-6 min-w-0">
-                                  {[40, 65, 30, 85, 95, 55, 75, 45, 90, 60, 80, 40, 70, 50, 85, 60, 35, 20].map((h, i) => {
-                                    const isActive = (i / 18) <= artisanRegAudioProgress;
-                                    return (
-                                      <span
-                                        key={i}
-                                        className={`w-1 rounded-full transition-all ${
-                                          isActive
-                                            ? 'bg-orange-500'
-                                            : isPlayingArtisanAudio
-                                            ? 'bg-orange-400'
-                                            : 'bg-slate-300'
-                                        }`}
-                                        style={{ height: `${(h / 100) * 18 + 4}px` }}
-                                      />
-                                    );
-                                  })}
-                                </div>
-                                <span className="text-[11px] font-mono font-bold text-slate-600 shrink-0">
-                                  {isPlayingArtisanAudio
-                                    ? `0:${Math.round(artisanRegAudioProgress * artisanAudioDuration) < 10 ? '0' : ''}${Math.round(artisanRegAudioProgress * artisanAudioDuration)}`
-                                    : `0:${artisanAudioDuration < 10 ? '0' : ''}${artisanAudioDuration}`}
-                                </span>
-                              </div>
-
-                              <div className="flex items-center justify-between text-[11px] pt-1">
-                                <button
-                                  type="button"
-                                  onClick={startArtisanRecording}
-                                  className="text-[11px] font-bold text-orange-600 hover:underline cursor-pointer flex items-center gap-1 bg-transparent p-0 border-0"
-                                >
-                                  <RotateCcw size={12} />
-                                  <span>Re-record audio intro</span>
+                                <button type="button" onClick={deleteArtisanAudio} className="py-2 px-3 rounded-xl text-red-600 text-xs font-bold cursor-pointer">
+                                  Remove
                                 </button>
-                                <button
-                                  type="button"
-                                  onClick={deleteArtisanAudio}
-                                  className="text-slate-400 hover:text-red-500 cursor-pointer flex items-center gap-1 bg-transparent p-0 border-0 text-[11px]"
-                                  title="Remove audio"
-                                >
-                                  <Trash2 size={12} />
-                                  <span>Delete</span>
-                                </button>
-                              </div>
-                            </div>
-                          ) : (
-                            /* State 3: Ready to Record Button */
-                            <div className="py-2 space-y-1.5">
-                              <button
-                                type="button"
-                                onClick={startArtisanRecording}
-                                className="text-orange-600 hover:underline font-bold text-xs flex items-center gap-2 cursor-pointer bg-transparent p-0 border-0 py-1"
-                              >
-                                <div className="w-7 h-7 rounded-full bg-orange-500 text-white flex items-center justify-center shrink-0 shadow-xs">
-                                  <Mic size={14} />
-                                </div>
-                                <span>Record Audio (Tap to Record Voice Intro)</span>
-                              </button>
-                              <span className="text-slate-400 text-[10.5px] block">
-                                Introduce yourself, your skills &amp; response speed in 20-30 seconds
-                              </span>
-                            </div>
+                              </>
+                            )}
+                          </div>
+                          {isRecordingArtisanAudio && (
+                            <p className="text-[11px] font-bold text-red-600">Recording… {artisanLiveRecordingSeconds}s. Tap Stop when you finish.</p>
                           )}
                         </div>
 
@@ -23399,7 +23152,7 @@ export default function RootLayout() {
                             <h3 className="text-sm font-black text-slate-900 flex items-center gap-1.5 flex-wrap">
                               <span>Services &amp; Pricing</span>
                               <span className="text-red-500 font-black text-base">*</span>
-                              <span className="text-[11px] font-black uppercase px-2 py-0.5 rounded-full bg-red-50 text-red-600 border border-red-200">
+                              <span className="text-[11px] font-black uppercase text-red-600">
                                 Required • Non-Skippable
                               </span>
                             </h3>
@@ -23474,7 +23227,7 @@ export default function RootLayout() {
                               <span>Past Projects</span>
                               <span className="text-red-500 font-black text-base">*</span>
                               <span className="text-slate-400 font-normal">({artisanPortfolio.length})</span>
-                              <span className="text-[11px] font-black uppercase px-2 py-0.5 rounded-full bg-red-50 text-red-600 border border-red-200">
+                              <span className="text-[11px] font-black uppercase text-red-600">
                                 Required • Non-Skippable
                               </span>
                             </h3>
