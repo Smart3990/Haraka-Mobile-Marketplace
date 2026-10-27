@@ -236,26 +236,6 @@ export const CATEGORIES: Category[] = [
     bgLight: '#E8EDF2',
     subcategories: ['Fresh Farm Produce', 'Grains & Rice Bags', 'Farm Machinery & Irrigation', 'Poultry & Livestock'],
   },
-  {
-    id: 'cat-books',
-    name: 'Books & Stationery',
-    slug: 'books',
-    icon: 'BookOpen',
-    count: 0,
-    color: '#0F172A',
-    bgLight: '#E8EDF2',
-    subcategories: ['Textbooks', 'Novels', "Children's Books", 'Religious Books', 'Stationery'],
-  },
-  {
-    id: 'cat-pets',
-    name: 'Animals & Pets',
-    slug: 'pets',
-    icon: 'PawPrint',
-    count: 4,
-    color: '#0F172A',
-    bgLight: '#E8EDF2',
-    subcategories: ['Dogs & Puppies', 'Pet Food & Feeding Bowls', 'Birds & Parrots', 'Aquariums & Fish'],
-  },
 ];
 
 export interface GhanaRegion {

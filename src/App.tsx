@@ -128,6 +128,7 @@ import {
   BrickWall,
   PaintRoller,
   Beef,
+  Handshake,
 } from 'lucide-react';
 import {
   CATEGORIES,
@@ -6957,8 +6958,6 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
         return <Baby size={22} strokeWidth={2} className="text-slate-800" />;
       case 'agriculture':
         return <Wheat size={22} strokeWidth={2} className="text-slate-800" />;
-      case 'pets':
-        return <PawPrint size={22} strokeWidth={2} className="text-slate-800" />;
       case 'livestock':
         return <Beef size={22} strokeWidth={2} className="text-slate-800" />;
       default:
@@ -6977,12 +6976,10 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     appliances: 'Home Appliances',
     livestock: 'Livestock',
     leisure: 'Sports',
-    books: 'Books',
     tools: 'Tools',
     kids: 'Baby & Kids',
     beauty: 'Health & Beauty',
     agriculture: 'Groceries',
-    pets: 'Pets',
   };
 
   /** A category as a photo tile with its name underneath (Home row and the Categories page) */
@@ -12120,6 +12117,16 @@ export default function RootLayout() {
               <div className="bg-white p-3.5 rounded-3xl border border-slate-100 shadow-2xs">
                 <div className="grid grid-cols-4 gap-x-2.5 gap-y-3.5">
                   {CATEGORIES.map((cat) => renderCategoryTile(cat, 'w-full h-[56px]'))}
+                  <button
+                    type="button"
+                    onClick={() => navigateTo({ type: 'artisans' })}
+                    className="flex flex-col items-center gap-1.5 min-w-0 active:scale-95 transition-transform cursor-pointer select-none"
+                  >
+                    <div className="w-full h-[56px] rounded-[8px] overflow-hidden bg-[#E8EDF2] flex items-center justify-center shadow-2xs">
+                      <Handshake size={22} strokeWidth={2} className="text-slate-800" />
+                    </div>
+                    <span className="text-[10.5px] font-semibold text-slate-800 text-center leading-tight line-clamp-2 w-full">Services</span>
+                  </button>
                 </div>
               </div>
 
@@ -16259,7 +16266,12 @@ export default function RootLayout() {
         );
 
       case 'artisans':
+        // Opened from a service tile: that trade only, with no other filters
+        const serviceOnly = currentRoute.filterCategory
+          ? SERVICES_CATEGORIES.find((srv) => srv.slug === currentRoute.filterCategory)
+          : undefined;
         const filteredArtisans = ARTISANS_DIRECTORY.filter((a) => {
+          if (serviceOnly) return a.category === serviceOnly.slug;
           if (artisanFilter === 'all') return true;
           if (artisanFilter === 'available') return getArtisanAvailability(a.id);
           if (artisanFilter === 'busy') return !getArtisanAvailability(a.id);
@@ -16281,16 +16293,19 @@ export default function RootLayout() {
                   </button>
                   <div>
                     <h1 className="text-base font-black text-slate-900 leading-tight">
-                      Artisans & Local Services
+                      {serviceOnly ? serviceOnly.name : 'Artisans & Local Services'}
                     </h1>
                     <p className="text-[11px] text-slate-500 font-medium">
-                      Real-time availability, instant callouts & trade bookings
+                      {serviceOnly
+                        ? `${filteredArtisans.length} artisan${filteredArtisans.length === 1 ? '' : 's'} on Haraka`
+                        : 'Real-time availability, instant callouts & trade bookings'}
                     </p>
                   </div>
                 </div>
               </div>
 
               {/* Artisan Filter Pills matching Image 3 with Live Dispatch Filters */}
+              {!serviceOnly && (
               <div className="flex gap-1.5 overflow-x-auto no-scrollbar pt-1">
                 {[
                   { id: 'all', label: `All (${ARTISANS_DIRECTORY.length})` },
@@ -16315,6 +16330,7 @@ export default function RootLayout() {
                   </button>
                 ))}
               </div>
+              )}
             </div>
 
             {/* Artisans Feed */}
