@@ -70,6 +70,10 @@ export interface UserProfileDoc {
   notificationsReadAtISO?: string;
   /** People this user blocked: they cannot message or call them, and their ads and chats are hidden */
   blockedUserIds?: string[];
+  /** Seller details filled in from "Finish your profile" */
+  operatingHours?: string;
+  safeMeetupSpots?: string[];
+  responseTime?: string;
   createdAt: string;
 }
 
@@ -869,7 +873,40 @@ export function updateMyArtisanProfile(
   return write();
 }
 
-export type BookingStatus = 'Pending' | 'Confirmed' | 'In Progress' | 'Completed' | 'Cancelled' | 'Declined';
+/** The details an artisan fills in from "Finish your profile" (shown on their public page) */
+export type ArtisanDetails = Pick<
+  ArtisanProfileDoc,
+  | 'headline'
+  | 'bio'
+  | 'avatar'
+  | 'whatsapp'
+  | 'responseTime'
+  | 'experienceYears'
+  | 'inspectionFee'
+  | 'servicesAndPricing'
+  | 'verifiedWorkPortfolio'
+  | 'voiceIntroUrl'
+  | 'serviceCoverageAreas'
+  | 'languagesSpoken'
+>;
+
+/** The signed-in artisan updates their public profile; new photos and the voice intro are stored first. */
+export async function updateMyArtisanDetails(details: ArtisanDetails): Promise<void> {
+  const uid = auth.currentUser?.uid;
+  if (!uid) throw new Error('Please log in again.');
+  const update: ArtisanDetails = { ...details };
+  update.avatar = (await storeMedia(update.avatar, 'avatars', 120_000)) || '';
+  update.voiceIntroUrl = (await storeMedia(update.voiceIntroUrl, 'voice', 0)) || '';
+  update.verifiedWorkPortfolio = await Promise.all(
+    update.verifiedWorkPortfolio.map(async (w) => ({ ...w, img: (await storeMedia(w.img, 'portfolio', 90_000)) || '' }))
+  );
+  if (JSON.stringify(update).length > 950_000) {
+    throw new Error('Your photos and voice note are too large together. Remove a project photo or record a shorter intro.');
+  }
+  await updateDoc(doc(db, 'artisans', uid), stripUndefined(update));
+}
+
+export type BookingStatus ='Pending' | 'Confirmed' | 'In Progress' | 'Completed' | 'Cancelled' | 'Declined';
 
 export interface BookingDoc {
   id: string;

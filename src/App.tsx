@@ -129,6 +129,8 @@ import {
   PaintRoller,
   Beef,
   Handshake,
+  ClipboardList,
+  Circle,
 } from 'lucide-react';
 import {
   CATEGORIES,
@@ -190,6 +192,7 @@ import {
   setBookingStatus,
   submitReview,
   updateMyArtisanProfile,
+  updateMyArtisanDetails,
   signOutUser,
   submitApplication,
   submitReport,
@@ -306,6 +309,7 @@ type ScreenRoute =
   | { type: 'register-seller' }
   | { type: 'register-artisan' }
   | { type: 'pending-application'; applicantId?: string }
+  | { type: 'partner-setup' }
   | { type: 'safety-guide' }
   | { type: 'post-ad-step1' }
   | { type: 'post-ad-step2'; draft: Partial<Listing> }
@@ -2042,6 +2046,8 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
 
   // Real Firebase session: restores a saved login on launch and loads the user's profile
   const [firebaseUid, setFirebaseUid] = useState<string | null>(null);
+  /** The signed-in account's own record, as saved */
+  const [myProfileDoc, setMyProfileDoc] = useState<UserProfileDoc | null>(null);
   /** False while a signed-in user has not yet confirmed their email address */
   const [emailConfirmed, setEmailConfirmed] = useState(true);
   const [isFirebaseAdmin, setIsFirebaseAdmin] = useState(false);
@@ -2060,6 +2066,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
   const profileRoleRef = useRef<'buyer' | 'seller' | 'artisan'>('buyer');
   useEffect(() => {
     return watchAuth((user, profile) => {
+      setMyProfileDoc(profile);
       firebaseUidRef.current = user?.uid ?? null;
       if (user) signedOutRef.current = false; // a new sign-in
       setFirebaseUid(user?.uid ?? null);
@@ -4067,6 +4074,12 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     );
   };
 
+  /** Photo for the Services tile (it opens Artisans & Local Services, so it is not an ad category) */
+  const servicesTileImage = () => {
+    const image = categoryDocs().find((d) => d.slug === 'services')?.image || '';
+    return image ? thumbnailUrl(image, 160) : '';
+  };
+
   const renderCategoryManagerCard = () => {
     if (!can('categories')) return null;
     const replaced = new Set(categoryDocs().filter((d) => d.image).map((d) => d.slug));
@@ -4141,6 +4154,23 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
         )}
 
         <div className="divide-y divide-slate-100">
+          <div className="py-2 flex items-center gap-3">
+            <div className="w-11 h-11 rounded-[8px] overflow-hidden bg-[#E8EDF2] flex items-center justify-center shrink-0">
+              {servicesTileImage() ? <img src={servicesTileImage()} alt="" className="w-full h-full object-cover" /> : <Handshake size={20} className="text-slate-800" />}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-bold text-slate-900 truncate">Services</p>
+              <p className="text-[10.5px] text-slate-500">{servicesTileImage() ? 'Your photo' : 'Icon'} • opens Artisans & Local Services</p>
+            </div>
+            <button
+              type="button"
+              disabled={Boolean(savingCategory)}
+              onClick={() => pickCategoryImage('services')}
+              className={`${smallButton} bg-slate-900 text-white shrink-0`}
+            >
+              {savingCategory === 'services' ? '…' : 'Photo'}
+            </button>
+          </div>
           {CATEGORIES.map((cat) => (
             <div key={cat.slug} className="py-2 space-y-2">
             <div className="flex items-center gap-3 select-none" {...longPress(() => askDeleteCategory(cat))}>
@@ -4467,6 +4497,617 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     } finally {
       setIsSendingVerification(false);
     }
+  };
+
+  // ---------- "Finish your profile" for approved sellers and artisans ----------
+  type PartnerDraft = {
+    avatar: string;
+    storeName: string;
+    bio: string;
+    whatsapp: string;
+    location: string;
+    responseTime: string;
+    operatingHours: string;
+    meetupSpots: string[];
+    headline: string;
+    experienceYears: string;
+    inspectionFee: number;
+    services: { title: string; desc: string; price: string }[];
+    portfolio: { title: string; tag: string; sub: string; img: string }[];
+    voiceIntroUrl: string;
+    coverage: string[];
+    languages: string[];
+  };
+  const PARTNER_LANGUAGES = ['English', 'Twi', 'Ga', 'Ewe', 'Fante', 'Hausa', 'Dagbani', 'Nzema', 'French'];
+  const RESPONSE_TIMES = ['within 15 minutes', 'within 1 hour', 'within a few hours', 'within a day'];
+  const partnerRole: 'seller' | 'artisan' | null =
+    myProfileDoc?.role === 'seller' || myProfileDoc?.role === 'artisan' ? myProfileDoc.role : null;
+  const myArtisanDoc = artisanProfiles.find((a) => a.id === firebaseUid);
+  const [partnerDraft, setPartnerDraft] = useState<PartnerDraft | null>(null);
+  const [partnerSaving, setPartnerSaving] = useState(false);
+  const [partnerSetupError, setPartnerSetupError] = useState('');
+  const [partnerTextInput, setPartnerTextInput] = useState({ spot: '', area: '' });
+  const [partnerRecording, setPartnerRecording] = useState(false);
+  const [partnerPlaying, setPartnerPlaying] = useState(false);
+  const partnerRecorderRef = useRef<VoiceRecording | null>(null);
+  const partnerStopPlayRef = useRef<(() => void) | null>(null);
+  const partnerPhotoInputRef = useRef<HTMLInputElement>(null);
+  const partnerPhotoTargetRef = useRef<'avatar' | number>('avatar');
+
+  // Leaving the page turns the microphone and playback off
+  useEffect(() => {
+    if (currentRoute.type === 'partner-setup') return;
+    partnerRecorderRef.current?.stop(false).catch(() => {});
+    partnerRecorderRef.current = null;
+    partnerStopPlayRef.current?.();
+    partnerStopPlayRef.current = null;
+    setPartnerRecording(false);
+    setPartnerPlaying(false);
+  }, [currentRoute.type]);
+
+  const draftFromSaved = (): PartnerDraft => {
+    const a = myArtisanDoc;
+    return {
+      avatar: a?.avatar || userProfile.avatar || '',
+      storeName: myProfileDoc?.storeName || userProfile.storeName || '',
+      bio: (partnerRole === 'artisan' ? a?.bio : myProfileDoc?.bio) || '',
+      whatsapp: cleanGhanaPhoneNumber(a?.whatsapp || myProfileDoc?.whatsapp || ''),
+      location: myProfileDoc?.location || '',
+      responseTime: (partnerRole === 'artisan' ? a?.responseTime : myProfileDoc?.responseTime) || '',
+      operatingHours: myProfileDoc?.operatingHours || '',
+      meetupSpots: myProfileDoc?.safeMeetupSpots || [],
+      headline: a?.headline || '',
+      experienceYears: a?.experienceYears || '',
+      inspectionFee: a?.inspectionFee || 0,
+      services: a?.servicesAndPricing || [],
+      portfolio: a?.verifiedWorkPortfolio || [],
+      voiceIntroUrl: a?.voiceIntroUrl || '',
+      coverage: a?.serviceCoverageAreas || [],
+      languages: a?.languagesSpoken || [],
+    };
+  };
+
+  /** What a complete partner profile needs, ticked off from what is saved (or being edited) */
+  const partnerChecklist = (d: PartnerDraft) =>
+    partnerRole === 'artisan'
+      ? [
+          { label: 'Profile photo', done: Boolean(d.avatar) },
+          { label: 'Headline', done: d.headline.trim().length >= 5 },
+          { label: 'About your work', done: d.bio.trim().length >= 20 },
+          { label: 'Voice introduction', done: Boolean(d.voiceIntroUrl) },
+          { label: 'Services & prices', done: d.services.some((x) => x.title.trim() && x.price.trim()) },
+          { label: 'Past projects with photos', done: d.portfolio.some((p) => p.img && p.title.trim()) },
+          { label: 'Areas you cover', done: d.coverage.length > 0 },
+          { label: 'Languages', done: d.languages.length > 0 },
+          { label: 'Response time', done: Boolean(d.responseTime) },
+        ]
+      : [
+          { label: 'Profile photo', done: Boolean(d.avatar) },
+          { label: 'Store or display name', done: d.storeName.trim().length >= 2 },
+          { label: 'About your business', done: d.bio.trim().length >= 20 },
+          { label: 'WhatsApp number', done: isValidGhanaPhoneNumber(d.whatsapp) },
+          { label: 'Town / area', done: Boolean(d.location.trim()) },
+          { label: 'Safe meetup spots', done: d.meetupSpots.length > 0 },
+          { label: 'Opening hours', done: Boolean(d.operatingHours.trim()) },
+          { label: 'Response time', done: Boolean(d.responseTime) },
+        ];
+
+  const openPartnerSetup = () => {
+    setPartnerDraft(draftFromSaved());
+    setPartnerSetupError('');
+    setPartnerTextInput({ spot: '', area: '' });
+    navigateTo({ type: 'partner-setup' });
+  };
+
+  const pickPartnerPhoto = (target: 'avatar' | number) => {
+    partnerPhotoTargetRef.current = target;
+    partnerPhotoInputRef.current?.click();
+  };
+
+  const handlePartnerPhoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || !partnerDraft) return;
+    try {
+      const img = await fileToPhotoDataUrl(file);
+      const target = partnerPhotoTargetRef.current;
+      setPartnerDraft((d) =>
+        !d
+          ? d
+          : target === 'avatar'
+          ? { ...d, avatar: img }
+          : { ...d, portfolio: d.portfolio.map((p, i) => (i === target ? { ...p, img } : p)) }
+      );
+    } catch {
+      showToast('⚠️ That photo could not be read. Please choose a JPG or PNG photo.');
+    }
+  };
+
+  const stopPartnerRecording = async () => {
+    const rec = partnerRecorderRef.current;
+    if (!rec) return;
+    partnerRecorderRef.current = null;
+    setPartnerRecording(false);
+    const result = await rec.stop().catch(() => null);
+    if (result) setPartnerDraft((d) => (d ? { ...d, voiceIntroUrl: result.dataUrl } : d));
+  };
+
+  const togglePartnerRecording = async () => {
+    if (partnerRecorderRef.current) {
+      await stopPartnerRecording();
+      return;
+    }
+    partnerStopPlayRef.current?.();
+    try {
+      partnerRecorderRef.current = await startVoiceRecording(() => {
+        showToast('That is the longest intro allowed. Saving it now.');
+        stopPartnerRecording();
+      });
+      setPartnerRecording(true);
+    } catch (err) {
+      showToast(`⚠️ ${err instanceof Error ? err.message : 'Could not start recording.'}`);
+    }
+  };
+
+  const togglePartnerPlayback = () => {
+    if (partnerPlaying) {
+      partnerStopPlayRef.current?.();
+      partnerStopPlayRef.current = null;
+      setPartnerPlaying(false);
+      return;
+    }
+    if (!partnerDraft?.voiceIntroUrl) return;
+    setPartnerPlaying(true);
+    const done = () => {
+      partnerStopPlayRef.current = null;
+      setPartnerPlaying(false);
+    };
+    partnerStopPlayRef.current = playVoice(partnerDraft.voiceIntroUrl, { onEnd: done, onError: done });
+  };
+
+  const savePartnerSetup = async () => {
+    const d = partnerDraft;
+    if (!d || !firebaseUid || !partnerRole || partnerSaving) return;
+    if (d.whatsapp && !isValidGhanaPhoneNumber(d.whatsapp)) {
+      setPartnerSetupError('Enter a valid 9-digit Ghana WhatsApp number (e.g. 24 498 1209), or leave it empty.');
+      return;
+    }
+    if (partnerRecording) {
+      setPartnerSetupError('Stop the voice recording first.');
+      return;
+    }
+    setPartnerSetupError('');
+    setPartnerSaving(true);
+    const whatsapp = d.whatsapp ? '+233 ' + cleanGhanaPhoneNumber(d.whatsapp) : '';
+    try {
+      if (partnerRole === 'artisan') {
+        await updateMyArtisanDetails({
+          avatar: d.avatar,
+          headline: d.headline.trim(),
+          bio: d.bio.trim(),
+          whatsapp,
+          responseTime: d.responseTime,
+          experienceYears: d.experienceYears,
+          inspectionFee: Math.max(0, d.inspectionFee || 0),
+          servicesAndPricing: d.services
+            .map((x) => ({ title: x.title.trim(), desc: x.desc.trim(), price: x.price.trim() }))
+            .filter((x) => x.title),
+          verifiedWorkPortfolio: d.portfolio.filter((p) => p.img || p.title.trim()).map((p) => ({ ...p, title: p.title.trim() })),
+          voiceIntroUrl: d.voiceIntroUrl,
+          serviceCoverageAreas: d.coverage,
+          languagesSpoken: d.languages,
+        });
+        await saveUserProfile(firebaseUid, { whatsapp, ...(d.avatar.startsWith('data:') ? { avatar: d.avatar } : {}) });
+      } else {
+        await saveUserProfile(firebaseUid, {
+          avatar: d.avatar,
+          storeName: d.storeName.trim(),
+          bio: d.bio.trim(),
+          whatsapp,
+          location: d.location.trim(),
+          operatingHours: d.operatingHours.trim(),
+          safeMeetupSpots: d.meetupSpots,
+          responseTime: d.responseTime,
+        });
+      }
+      showToast('Your profile is saved');
+      goBack();
+    } catch (err) {
+      console.warn('Could not save partner profile', err);
+      setPartnerSetupError(
+        err instanceof Error && !/firebase|firestore|permission|internal/i.test(err.message) ? err.message : 'Could not save. Check your connection and try again.'
+      );
+    } finally {
+      setPartnerSaving(false);
+    }
+  };
+
+  /** Profile card leading an approved seller or artisan to fill in everything buyers need */
+  const renderPartnerSetupCard = () => {
+    if (!partnerRole || adminAccess.isAdmin) return null;
+    const items = partnerChecklist(draftFromSaved());
+    const done = items.filter((i) => i.done).length;
+    const complete = done === items.length;
+    const what = partnerRole === 'artisan' ? 'artisan' : 'seller';
+    if (complete) {
+      return (
+        <button
+          type="button"
+          onClick={openPartnerSetup}
+          className="w-full bg-white rounded-2xl p-3.5 border border-slate-200/80 shadow-2xs flex items-center gap-3 text-left cursor-pointer active:scale-99"
+        >
+          <div className="w-10 h-10 rounded-xl bg-orange-50 text-accent flex items-center justify-center shrink-0">
+            <Edit3 size={18} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-black text-slate-900">Edit {what} profile</p>
+            <p className="text-[11px] text-slate-500">
+              {partnerRole === 'artisan' ? 'Services, prices, projects and voice intro' : 'About, hours, meetup spots and contact'}
+            </p>
+          </div>
+          <ChevronRight size={16} className="text-slate-400 shrink-0" />
+        </button>
+      );
+    }
+    const missing = items.filter((i) => !i.done).map((i) => i.label);
+    return (
+      <div className="rounded-2xl p-3.5 border border-orange-200 bg-orange-50/70 shadow-2xs space-y-2.5">
+        <div className="flex items-start gap-3">
+          <div className="w-10 h-10 rounded-xl bg-white border border-orange-200 text-accent flex items-center justify-center shrink-0">
+            <ClipboardList size={19} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-black text-slate-900">Finish your {what} profile</p>
+            <p className="text-xs text-slate-600 leading-relaxed mt-0.5">
+              Buyers choose {partnerRole === 'artisan' ? 'artisans' : 'sellers'} with full profiles. Still missing: {missing.slice(0, 3).join(', ')}
+              {missing.length > 3 ? ` and ${missing.length - 3} more` : ''}.
+            </p>
+          </div>
+        </div>
+        <div className="h-2 rounded-full bg-white overflow-hidden border border-orange-100">
+          <div className="h-full bg-accent rounded-full" style={{ width: `${Math.round((done / items.length) * 100)}%` }} />
+        </div>
+        <button
+          type="button"
+          onClick={openPartnerSetup}
+          className="w-full py-2.5 rounded-xl bg-accent text-white text-xs font-bold cursor-pointer shadow-2xs active:scale-98 transition-transform"
+        >
+          Complete my profile ({done}/{items.length})
+        </button>
+      </div>
+    );
+  };
+
+  const renderPartnerSetupPage = () => {
+    if (!partnerRole) {
+      return renderUnavailable('Not available', 'This page is for approved sellers and artisans.');
+    }
+    const d = partnerDraft || draftFromSaved();
+    const set = (patch: Partial<PartnerDraft>) => setPartnerDraft({ ...d, ...patch });
+    const items = partnerChecklist(d);
+    const done = items.filter((i) => i.done).length;
+    const field = 'w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none focus:border-orange-500';
+    const label = 'text-[11px] font-bold text-slate-700 block mb-1';
+    const card = 'bg-white rounded-2xl p-3.5 border border-slate-200/80 shadow-2xs space-y-3';
+    const chipBtn = (on: boolean) =>
+      `px-3 py-1.5 rounded-full text-[11px] font-bold border cursor-pointer ${on ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-600 border-slate-200'}`;
+    const addTag = (key: 'meetupSpots' | 'coverage', input: 'spot' | 'area') => {
+      const value = partnerTextInput[input].trim();
+      if (!value || d[key].includes(value) || d[key].length >= 15) return;
+      set({ [key]: [...d[key], value] } as Partial<PartnerDraft>);
+      setPartnerTextInput((t) => ({ ...t, [input]: '' }));
+    };
+    const tagList = (key: 'meetupSpots' | 'coverage') => (
+      <div className="flex flex-wrap gap-1.5">
+        {d[key].map((tag) => (
+          <span key={tag} className="pl-3 pr-1.5 py-1 rounded-full bg-slate-100 text-[11px] font-semibold text-slate-700 flex items-center gap-1">
+            {tag}
+            <button type="button" aria-label={`Remove ${tag}`} onClick={() => set({ [key]: d[key].filter((t) => t !== tag) } as Partial<PartnerDraft>)} className="cursor-pointer">
+              <X size={12} />
+            </button>
+          </span>
+        ))}
+      </div>
+    );
+    return (
+      <div className="flex-1 flex flex-col bg-surface overflow-y-auto no-scrollbar">
+        <input ref={partnerPhotoInputRef} type="file" accept="image/*" className="hidden" onChange={handlePartnerPhoto} />
+        <div className="bg-white px-4 pt-3.5 pb-3 border-b border-slate-200/80 sticky top-0 z-20 flex items-center gap-3">
+          <button
+            type="button"
+            onClick={goBack}
+            aria-label="Back"
+            className="w-9 h-9 rounded-xl border border-slate-200 bg-white flex items-center justify-center text-slate-700 shadow-2xs active:scale-95 cursor-pointer shrink-0"
+          >
+            <ArrowLeft size={17} />
+          </button>
+          <div className="min-w-0 flex-1">
+            <h1 className="text-base font-black text-slate-900 truncate">{partnerRole === 'artisan' ? 'Your artisan profile' : 'Your seller profile'}</h1>
+            <p className="text-[11px] text-slate-500 font-medium">
+              {done}/{items.length} done • buyers see this on your {partnerRole === 'artisan' ? 'artisan page' : 'ads'}
+            </p>
+          </div>
+        </div>
+
+        <div className="p-3.5 space-y-3 pb-28">
+          <div className={card}>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => pickPartnerPhoto('avatar')}
+                aria-label="Change profile photo"
+                className="w-16 h-16 rounded-2xl overflow-hidden bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-400 shrink-0 cursor-pointer"
+              >
+                {d.avatar ? <img src={d.avatar.startsWith('data:') ? d.avatar : thumbnailUrl(d.avatar, 160)} alt="" className="w-full h-full object-cover" /> : <Camera size={20} />}
+              </button>
+              <div className="min-w-0">
+                <p className="text-xs font-bold text-slate-900">Profile photo</p>
+                <p className="text-[11px] text-slate-500">A clear photo of your face{partnerRole === 'seller' ? ' or shop' : ''}. Tap to change.</p>
+              </div>
+            </div>
+            {partnerRole === 'artisan' ? (
+              <div>
+                <label className={label}>Headline</label>
+                <input className={field} value={d.headline} maxLength={70} placeholder="e.g. Master carpenter, kitchens & wardrobes" onChange={(e) => set({ headline: e.target.value })} />
+              </div>
+            ) : (
+              <div>
+                <label className={label}>Store or display name</label>
+                <input className={field} value={d.storeName} maxLength={60} onChange={(e) => set({ storeName: e.target.value })} />
+              </div>
+            )}
+            <div>
+              <label className={label}>{partnerRole === 'artisan' ? 'About your work' : 'About your business'}</label>
+              <textarea
+                className={`${field} min-h-[88px] resize-none`}
+                value={d.bio}
+                maxLength={400}
+                placeholder={partnerRole === 'artisan' ? 'What you do, your experience and how you work' : 'What you sell and why buyers can trust you'}
+                onChange={(e) => set({ bio: e.target.value })}
+              />
+              <p className="text-[10px] text-slate-400 text-right">{d.bio.length} / 400</p>
+            </div>
+          </div>
+
+          {partnerRole === 'artisan' && (
+            <>
+              <div className={card}>
+                <div>
+                  <p className="text-xs font-black text-slate-900">Voice introduction</p>
+                  <p className="text-[11px] text-slate-500">Say who you are, your trade and where you work, in your own words.</p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={togglePartnerRecording}
+                    className={`py-2 px-3.5 rounded-xl text-xs font-bold cursor-pointer flex items-center gap-1.5 ${partnerRecording ? 'bg-red-600 text-white' : 'bg-slate-900 text-white'}`}
+                  >
+                    {partnerRecording ? <Square size={13} /> : <Mic size={14} />}
+                    <span>{partnerRecording ? 'Stop recording' : d.voiceIntroUrl ? 'Record again' : 'Record intro'}</span>
+                  </button>
+                  {d.voiceIntroUrl && !partnerRecording && (
+                    <>
+                      <button type="button" onClick={togglePartnerPlayback} className="py-2 px-3.5 rounded-xl border border-slate-200 text-slate-700 text-xs font-bold cursor-pointer flex items-center gap-1.5">
+                        {partnerPlaying ? <Pause size={13} /> : <Play size={13} />}
+                        <span>{partnerPlaying ? 'Stop' : 'Listen'}</span>
+                      </button>
+                      <button type="button" onClick={() => set({ voiceIntroUrl: '' })} className="py-2 px-3 rounded-xl text-red-600 text-xs font-bold cursor-pointer">
+                        Remove
+                      </button>
+                    </>
+                  )}
+                </div>
+                {partnerRecording && <p className="text-[11px] font-bold text-red-600">Recording… tap Stop when you finish.</p>}
+              </div>
+
+              <div className={card}>
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <p className="text-xs font-black text-slate-900">Services & prices</p>
+                    <p className="text-[11px] text-slate-500">What buyers can book you for, with a starting price.</p>
+                  </div>
+                  {d.services.length < 15 && (
+                    <button
+                      type="button"
+                      onClick={() => set({ services: [...d.services, { title: '', desc: '', price: '' }] })}
+                      className="py-1.5 px-2.5 rounded-lg bg-slate-900 text-white text-[11px] font-bold cursor-pointer flex items-center gap-1 shrink-0"
+                    >
+                      <Plus size={12} />
+                      <span>Add</span>
+                    </button>
+                  )}
+                </div>
+                {d.services.length === 0 && <p className="text-[11px] text-slate-400">No services yet. Tap Add.</p>}
+                {d.services.map((svc, i) => {
+                  const update = (patch: Partial<typeof svc>) => set({ services: d.services.map((x, j) => (j === i ? { ...x, ...patch } : x)) });
+                  return (
+                    <div key={i} className="rounded-xl border border-slate-200 bg-slate-50/70 p-2.5 space-y-2">
+                      <div className="flex gap-2">
+                        <input className={field} value={svc.title} maxLength={60} placeholder="Service, e.g. Fix leaking pipe" onChange={(e) => update({ title: e.target.value })} />
+                        <button type="button" aria-label="Remove service" onClick={() => set({ services: d.services.filter((_, j) => j !== i) })} className="px-2 text-red-600 cursor-pointer shrink-0">
+                          <Trash2 size={15} />
+                        </button>
+                      </div>
+                      <input className={field} value={svc.price} maxLength={30} placeholder="Price, e.g. From GH₵ 150" onChange={(e) => update({ price: e.target.value })} />
+                      <input className={field} value={svc.desc} maxLength={120} placeholder="Short description (optional)" onChange={(e) => update({ desc: e.target.value })} />
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className={card}>
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <p className="text-xs font-black text-slate-900">Past projects</p>
+                    <p className="text-[11px] text-slate-500">Photos of work you have done (up to 8).</p>
+                  </div>
+                  {d.portfolio.length < 8 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        set({ portfolio: [...d.portfolio, { title: '', tag: '', sub: '', img: '' }] });
+                        pickPartnerPhoto(d.portfolio.length);
+                      }}
+                      className="py-1.5 px-2.5 rounded-lg bg-slate-900 text-white text-[11px] font-bold cursor-pointer flex items-center gap-1 shrink-0"
+                    >
+                      <Plus size={12} />
+                      <span>Add</span>
+                    </button>
+                  )}
+                </div>
+                {d.portfolio.length === 0 && <p className="text-[11px] text-slate-400">No projects yet. Tap Add to choose a photo.</p>}
+                {d.portfolio.map((p, i) => {
+                  const update = (patch: Partial<typeof p>) => set({ portfolio: d.portfolio.map((x, j) => (j === i ? { ...x, ...patch } : x)) });
+                  return (
+                    <div key={i} className="flex gap-2.5 rounded-xl border border-slate-200 bg-slate-50/70 p-2.5">
+                      <button
+                        type="button"
+                        onClick={() => pickPartnerPhoto(i)}
+                        aria-label="Choose project photo"
+                        className="w-20 h-20 rounded-xl overflow-hidden bg-white border border-dashed border-slate-300 flex items-center justify-center text-slate-400 shrink-0 cursor-pointer"
+                      >
+                        {p.img ? <img src={p.img.startsWith('data:') ? p.img : thumbnailUrl(p.img, 200)} alt="" className="w-full h-full object-cover" /> : <Camera size={18} />}
+                      </button>
+                      <div className="flex-1 min-w-0 space-y-2">
+                        <input className={field} value={p.title} maxLength={60} placeholder="Project, e.g. Kitchen cabinets" onChange={(e) => update({ title: e.target.value })} />
+                        <input className={field} value={p.tag} maxLength={30} placeholder="Where / when (optional)" onChange={(e) => update({ tag: e.target.value })} />
+                      </div>
+                      <button type="button" aria-label="Remove project" onClick={() => set({ portfolio: d.portfolio.filter((_, j) => j !== i) })} className="px-1 text-red-600 cursor-pointer shrink-0 self-start">
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className={card}>
+                <div>
+                  <label className={label}>Areas you cover</label>
+                  <div className="flex gap-2">
+                    <input
+                      className={field}
+                      value={partnerTextInput.area}
+                      maxLength={40}
+                      placeholder="e.g. East Legon"
+                      onChange={(e) => setPartnerTextInput((t) => ({ ...t, area: e.target.value }))}
+                      onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addTag('coverage', 'area'))}
+                    />
+                    <button type="button" onClick={() => addTag('coverage', 'area')} className="px-3 rounded-xl bg-slate-900 text-white text-xs font-bold cursor-pointer shrink-0">
+                      Add
+                    </button>
+                  </div>
+                  <div className="mt-2">{tagList('coverage')}</div>
+                </div>
+                <div>
+                  <label className={label}>Languages you speak</label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {PARTNER_LANGUAGES.map((lang) => {
+                      const on = d.languages.includes(lang);
+                      return (
+                        <button key={lang} type="button" onClick={() => set({ languages: on ? d.languages.filter((l) => l !== lang) : [...d.languages, lang] })} className={chipBtn(on)}>
+                          {lang}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className={label}>Years of experience</label>
+                    <input className={field} value={d.experienceYears} inputMode="numeric" onChange={(e) => set({ experienceYears: e.target.value.replace(/[^0-9]/g, '').slice(0, 2) })} />
+                  </div>
+                  <div>
+                    <label className={label}>Inspection fee (GH₵)</label>
+                    <input
+                      className={field}
+                      value={d.inspectionFee || ''}
+                      inputMode="numeric"
+                      placeholder="0 = free"
+                      onChange={(e) => set({ inspectionFee: Number(e.target.value.replace(/[^0-9]/g, '').slice(0, 5)) || 0 })}
+                    />
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+
+          {partnerRole === 'seller' && (
+            <div className={card}>
+              <div>
+                <label className={label}>Town / area</label>
+                <input className={field} value={d.location} maxLength={60} placeholder="e.g. Madina, Greater Accra" onChange={(e) => set({ location: e.target.value })} />
+              </div>
+              <div>
+                <label className={label}>Opening hours</label>
+                <input className={field} value={d.operatingHours} maxLength={60} placeholder="e.g. Mon–Sat, 8am–6pm" onChange={(e) => set({ operatingHours: e.target.value })} />
+              </div>
+              <div>
+                <label className={label}>Safe meetup spots</label>
+                <div className="flex gap-2">
+                  <input
+                    className={field}
+                    value={partnerTextInput.spot}
+                    maxLength={50}
+                    placeholder="e.g. Accra Mall main entrance"
+                    onChange={(e) => setPartnerTextInput((t) => ({ ...t, spot: e.target.value }))}
+                    onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addTag('meetupSpots', 'spot'))}
+                  />
+                  <button type="button" onClick={() => addTag('meetupSpots', 'spot')} className="px-3 rounded-xl bg-slate-900 text-white text-xs font-bold cursor-pointer shrink-0">
+                    Add
+                  </button>
+                </div>
+                <p className="text-[10.5px] text-slate-400 mt-1">Busy public places where you meet buyers in daylight.</p>
+                <div className="mt-2">{tagList('meetupSpots')}</div>
+              </div>
+            </div>
+          )}
+
+          <div className={card}>
+            <div>
+              <label className={label}>WhatsApp number</label>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-bold text-slate-600">+233</span>
+                <input className={field} value={d.whatsapp} inputMode="tel" placeholder="24 498 1209" onChange={(e) => set({ whatsapp: e.target.value })} />
+              </div>
+            </div>
+            <div>
+              <label className={label}>How fast you usually reply</label>
+              <div className="flex flex-wrap gap-1.5">
+                {RESPONSE_TIMES.map((t) => (
+                  <button key={t} type="button" onClick={() => set({ responseTime: t })} className={chipBtn(d.responseTime === t)}>
+                    {t}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className={card}>
+            <p className="text-xs font-black text-slate-900">Checklist</p>
+            <div className="grid grid-cols-1 gap-1.5">
+              {items.map((item) => (
+                <div key={item.label} className="flex items-center gap-2 text-[11.5px]">
+                  {item.done ? <CheckCircle2 size={15} className="text-brand shrink-0" /> : <Circle size={15} className="text-slate-300 shrink-0" />}
+                  <span className={item.done ? 'text-slate-700 font-semibold' : 'text-slate-500'}>{item.label}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="sticky bottom-0 z-30 bg-white/95 backdrop-blur-md px-4 py-3 border-t border-slate-100 space-y-2">
+          {partnerSetupError && <p className="text-[11px] font-bold text-red-600">{partnerSetupError}</p>}
+          <button
+            type="button"
+            disabled={partnerSaving}
+            onClick={savePartnerSetup}
+            className="w-full py-3.5 rounded-2xl bg-accent text-white text-sm font-extrabold cursor-pointer disabled:opacity-60 shadow-md"
+          >
+            {partnerSaving ? 'Saving…' : 'Save profile'}
+          </button>
+        </div>
+      </div>
+    );
   };
 
   /** Profile card inviting an approved partner to get verified (or showing that it is in review). */
@@ -12310,7 +12951,11 @@ export default function RootLayout() {
                     className="flex flex-col items-center gap-1.5 min-w-0 active:scale-95 transition-transform cursor-pointer select-none"
                   >
                     <div className="w-full h-[56px] rounded-[8px] overflow-hidden bg-[#E8EDF2] flex items-center justify-center shadow-2xs">
-                      <Handshake size={22} strokeWidth={2} className="text-slate-800" />
+                      {servicesTileImage() ? (
+                        <img src={servicesTileImage()} alt="" className="w-full h-full object-cover" decoding="async" />
+                      ) : (
+                        <Handshake size={22} strokeWidth={2} className="text-slate-800" />
+                      )}
                     </div>
                     <span className="text-[10.5px] font-semibold text-slate-800 text-center leading-tight line-clamp-2 w-full">Services</span>
                   </button>
@@ -13487,6 +14132,7 @@ export default function RootLayout() {
                   )}
                 </div>
 
+                {renderPartnerSetupCard()}
                 {renderGetVerifiedCard()}
 
                 {/* SELLER ONLY: Full Marketplace Offers & Listings, Activity & Trades */}
@@ -23916,6 +24562,9 @@ export default function RootLayout() {
           </div>
         );
       }
+
+      case 'partner-setup':
+        return renderPartnerSetupPage();
 
       case 'pending-application': {
         const applicantId =

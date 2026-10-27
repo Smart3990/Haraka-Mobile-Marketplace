@@ -301,10 +301,16 @@ service cloud.firestore {
       allow create: if isAdmin();
       allow delete: if isAdmin() || isOwner(artisanId);
       allow update: if isAdmin()
-        // The artisan edits their own public details
+        // The artisan edits their own public details (their trade, badge, jobs and reviews stay as the admin set them)
         || (isOwner(artisanId)
           && request.resource.data.diff(resource.data).affectedKeys()
-            .hasOnly(['available', 'inspectionFee', 'bio', 'phone', 'whatsapp', 'avatar', 'responseTime']))
+            .hasOnly(['available', 'inspectionFee', 'bio', 'phone', 'whatsapp', 'avatar', 'responseTime',
+              'headline', 'experienceYears', 'servicesAndPricing', 'verifiedWorkPortfolio', 'voiceIntroUrl',
+              'serviceCoverageAreas', 'languagesSpoken'])
+          && request.resource.data.get('servicesAndPricing', []) is list && request.resource.data.get('servicesAndPricing', []).size() <= 15
+          && request.resource.data.get('verifiedWorkPortfolio', []) is list && request.resource.data.get('verifiedWorkPortfolio', []).size() <= 8
+          && request.resource.data.get('serviceCoverageAreas', []) is list && request.resource.data.get('serviceCoverageAreas', []).size() <= 15
+          && request.resource.data.get('languagesSpoken', []) is list && request.resource.data.get('languagesSpoken', []).size() <= 10)
         // Completing a booking adds exactly one job, once per booking
         || (isOwner(artisanId)
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['jobsCompleted', 'lastCompletedBookingId'])
