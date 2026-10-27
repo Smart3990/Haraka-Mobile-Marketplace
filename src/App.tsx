@@ -5082,6 +5082,9 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
             </div>
           </div>
 
+          {/* The Verified badge needs their own Ghana Card; an admin checks it */}
+          {myUnverifiedApplication() && renderGetVerifiedCard()}
+
           <div className={card}>
             <p className="text-xs font-black text-slate-900">Checklist</p>
             <div className="grid grid-cols-1 gap-1.5">
@@ -6486,7 +6489,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
       whatsapp: '+233 ' + sellerRegForm.phoneNumber,
       location: sellerRegForm.cityNeighborhood,
       ghanaCardId: sellerRegForm.ghanaCardPin,
-      isVerified: true,
+      isVerified: false,
     }));
     // Queue for Admin review
     setAdminApplicants((prev) => [
@@ -10310,7 +10313,7 @@ export default function RootLayout() {
                         id: `user-${b.id}`,
                         name: b.clientName,
                         avatar: b.clientAvatar,
-                        isVerified: true,
+                        isVerified: false,
                         online: true,
                         phone: b.clientPhone,
                       },
@@ -11297,7 +11300,7 @@ export default function RootLayout() {
                                         id: `user-${booking.id}`,
                                         name: booking.clientName,
                                         avatar: booking.clientAvatar,
-                                        isVerified: true,
+                                        isVerified: false,
                                         online: true,
                                         phone: booking.clientPhone,
                                       },
@@ -13616,7 +13619,7 @@ export default function RootLayout() {
                                     id: art.id,
                                     name: art.name,
                                     avatar: art.avatar,
-                                    isVerified: true,
+                                    isVerified: Boolean(art.verified),
                                     phone: art.phone,
                                   },
                                   {
@@ -17464,21 +17467,26 @@ export default function RootLayout() {
                       </p>
                     </div>
 
-                    {/* Verification Badges - Admin sees full breakdown (Ghana Card Verified, Police Cleared, Verified). All other roles see ONLY "Verified" for verified artisans, and NO tag for unverified users */}
+                    {/* Badges come from the admin's decision: admins see what was checked, everyone else sees "Verified" only once it is granted */}
                     {currentUserRole === 'admin' ? (
                       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2">
-                        <span className="inline-flex items-center gap-1 text-[11px] font-bold text-brand">
-                          <ShieldCheck size={13} className="text-brand" />
-                          Ghana Card Verified
-                        </span>
-                        <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-700">
-                          <ShieldCheck size={13} className="text-amber-600" />
-                          Police Cleared
-                        </span>
-                        <span className="inline-flex items-center gap-1 text-[11px] font-bold text-sky-700">
-                          <CheckCircle size={13} className="text-sky-600" />
-                          Verified
-                        </span>
+                        {artisan.verified ? (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-bold text-brand">
+                            <ShieldCheck size={13} className="text-brand" />
+                            Ghana Card Verified
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-bold text-slate-500">
+                            <ShieldCheck size={13} className="text-slate-400" />
+                            Not verified yet
+                          </span>
+                        )}
+                        {artisan.badges.includes('Police Cleared') && (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-700">
+                            <ShieldCheck size={13} className="text-amber-600" />
+                            Police Cleared
+                          </span>
+                        )}
                       </div>
                     ) : (
                       artisan.verified ? (
@@ -17636,7 +17644,7 @@ export default function RootLayout() {
                           id: artisan.id,
                           name: artisan.name,
                           avatar: artisan.avatar,
-                          isVerified: true,
+                          isVerified: Boolean(artisan.verified),
                           phone: artisan.phone,
                         },
                         {
@@ -17707,7 +17715,7 @@ export default function RootLayout() {
               <div>
                 <div className="flex items-center justify-between mb-2.5 px-1">
                   <h3 className="text-sm font-black text-slate-900 tracking-tight">
-                    Verified Work
+                    Past Projects
                   </h3>
                   <button
                     onClick={() => openGallery(profileData.portfolio, 0)}
@@ -18025,21 +18033,26 @@ export default function RootLayout() {
                       {profileData.subrole}
                     </p>
 
-                    {/* Verification Badges - Admin sees full breakdown (Ghana Card Verified, Police Cleared, Verified). All other roles see ONLY "Verified" for verified artisans, and NO tag for unverified users */}
+                    {/* Badges come from the admin's decision: admins see what was checked, everyone else sees "Verified" only once it is granted */}
                     {currentUserRole === 'admin' ? (
                       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2">
-                        <span className="inline-flex items-center gap-1 text-[11px] font-bold text-brand">
-                          <ShieldCheck size={13} className="text-brand" />
-                          Ghana Card Verified
-                        </span>
-                        <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-700">
-                          <ShieldCheck size={13} className="text-amber-600" />
-                          Police Cleared
-                        </span>
-                        <span className="inline-flex items-center gap-1 text-[11px] font-bold text-sky-700">
-                          <CheckCircle size={13} className="text-sky-600" />
-                          Verified
-                        </span>
+                        {artisan.verified ? (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-bold text-brand">
+                            <ShieldCheck size={13} className="text-brand" />
+                            Ghana Card Verified
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-bold text-slate-500">
+                            <ShieldCheck size={13} className="text-slate-400" />
+                            Not verified yet
+                          </span>
+                        )}
+                        {artisan.badges.includes('Police Cleared') && (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-700">
+                            <ShieldCheck size={13} className="text-amber-600" />
+                            Police Cleared
+                          </span>
+                        )}
                       </div>
                     ) : (
                       artisan.verified ? (
@@ -18657,12 +18670,14 @@ export default function RootLayout() {
                           <div className="flex items-center gap-3 mt-2">
                             <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-700">
                               <ShieldCheck size={12} className="text-slate-500" />
-                              Verified
+                              {artisan.verified ? 'Verified' : 'Not verified yet'}
                             </span>
-                            <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-700">
-                              <ShieldCheck size={12} className="text-slate-500" />
-                              Police Cleared
-                            </span>
+                            {artisan.badges.includes('Police Cleared') && (
+                              <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-700">
+                                <ShieldCheck size={12} className="text-slate-500" />
+                                Police Cleared
+                              </span>
+                            )}
                           </div>
                         ) : (
                           artisan.verified ? (
@@ -18972,7 +18987,7 @@ export default function RootLayout() {
                         id: artisan.id,
                         name: artisan.name,
                         avatar: artisan.avatar,
-                        isVerified: true,
+                        isVerified: Boolean(artisan.verified),
                         phone: artisan.phone,
                       },
                       {
@@ -19274,7 +19289,7 @@ export default function RootLayout() {
                             id: artisan.id,
                             name: artisan.name,
                             avatar: artisan.avatar,
-                            isVerified: true,
+                            isVerified: Boolean(artisan.verified),
                             phone: artisan.phone,
                           },
                           {
@@ -19536,7 +19551,7 @@ export default function RootLayout() {
                               id: b.artisanId,
                               name: b.artisanName,
                               avatar: b.artisanAvatar,
-                              isVerified: true,
+                              isVerified: Boolean(artisanProfiles.find((a) => a.id === b.artisanId)?.verified),
                               phone: b.artisanPhone,
                             },
                             {
@@ -19913,7 +19928,7 @@ export default function RootLayout() {
                           id: art.artisanId,
                           name: art.artisanName,
                           avatar: art.artisanAvatar,
-                          isVerified: true,
+                          isVerified: Boolean(artisanProfiles.find((a) => a.id === art.artisanId)?.verified),
                           phone: art.artisanPhone,
                         },
                         {
