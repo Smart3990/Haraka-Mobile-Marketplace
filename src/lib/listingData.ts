@@ -304,6 +304,8 @@ export const SERVICES_CATEGORIES: ServiceCategory[] = [
   { id: 'srv-10', name: 'Art & Crafts', slug: 'art-crafts', icon: 'Palette', count: 0 },
   { id: 'srv-11', name: 'Photography', slug: 'photography', icon: 'Camera', count: 0 },
   { id: 'srv-12', name: 'Catering & Food', slug: 'catering', icon: 'UtensilsCrossed', count: 0 },
+  { id: 'srv-13', name: 'Fashion Design', slug: 'tailoring', icon: 'Scissors', count: 0 },
+  { id: 'srv-14', name: 'Phone & Electronics Repair', slug: 'electronics', icon: 'Smartphone', count: 0 },
 ];
 
 export interface ArtisanItem {

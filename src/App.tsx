@@ -1382,7 +1382,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
       voiceLang: (p?.languagesSpoken || []).join(' & '),
       languages: p?.languagesSpoken?.length ? `Speaks: ${p.languagesSpoken.join(', ')}` : '',
       guaranteeLocation: (p?.serviceCoverageAreas || []).join(', ') || p?.location || '',
-      services: (p?.servicesAndPricing || []).map((svc) => ({ ...svc, icon: <Cog size={18} /> })),
+      services: (p?.servicesAndPricing || []).map((svc) => ({ ...svc, icon: tradeIcon(p?.category || artisanCategoryFor(p?.tradeSkill || ''), 18) })),
       portfolio: p?.verifiedWorkPortfolio || [],
       reviews: own.map((r) => ({
         initials: r.customerName
@@ -4594,6 +4594,200 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
   /** The signed-in partner's own application (holds their CID police clearance) */
   const myPartnerApplication = () => adminApplicants.find((a) => a.id === firebaseUid);
 
+  /** The icon for an artisan's trade, used for every service they offer */
+  const tradeIcon = (category: string, size = 16) => {
+    const props = { size, strokeWidth: 2 };
+    switch (category) {
+      case 'carpenters':
+        return <Hammer {...props} />;
+      case 'electricians':
+        return <Zap {...props} />;
+      case 'plumbers':
+        return <Wrench {...props} />;
+      case 'ac-repair':
+        return <Snowflake {...props} />;
+      case 'masons':
+        return <BrickWall {...props} />;
+      case 'painters':
+        return <PaintRoller {...props} />;
+      case 'mechanics':
+        return <Car {...props} />;
+      case 'welders':
+        return <Flame {...props} />;
+      case 'photography':
+        return <Camera {...props} />;
+      case 'catering':
+        return <UtensilsCrossed {...props} />;
+      case 'art-crafts':
+        return <Palette {...props} />;
+      case 'tailoring':
+        return <Scissors {...props} />;
+      case 'electronics':
+        return <Smartphone {...props} />;
+      case 'jobs':
+        return <Briefcase {...props} />;
+      default:
+        return <Cog {...props} />;
+    }
+  };
+
+  // Pop-up forms for adding (or changing) a service or a past project, used in registration and on the profile page
+  type ServiceSheet = { target: 'registration' | 'profile'; index: number | null; title: string; price: string; desc: string };
+  type ProjectSheet = { target: 'registration' | 'profile'; index: number | null; title: string; where: string; img: string };
+  const [serviceSheet, setServiceSheet] = useState<ServiceSheet | null>(null);
+  const [projectSheet, setProjectSheet] = useState<ProjectSheet | null>(null);
+  const [sheetError, setSheetError] = useState('');
+
+  /** "250" becomes "From GH₵ 250", "0" or "free" becomes "Free"; anything else is kept as typed */
+  const tidyPrice = (raw: string) => {
+    const p = raw.trim();
+    if (!p || /^(0|free)$/i.test(p)) return 'Free';
+    if (/^\d[\d,.]*$/.test(p)) return `From GH₵ ${p}`;
+    return p;
+  };
+
+  const saveServiceSheet = () => {
+    const sh = serviceSheet;
+    if (!sh) return;
+    if (!sh.title.trim()) return setSheetError('Enter the name of the service.');
+    if (!sh.price.trim()) return setSheetError('Enter a price, or 0 if it is free.');
+    const item = { title: sh.title.trim(), desc: sh.desc.trim(), price: tidyPrice(sh.price) };
+    const put = <T,>(list: T[], value: T) => (sh.index === null ? [...list, value] : list.map((x, i) => (i === sh.index ? value : x)));
+    if (sh.target === 'registration') {
+      setArtisanServices((prev) => put(prev, item));
+      clearSellerError('artisanServices');
+    } else {
+      setPartnerDraft((d) => (d ? { ...d, services: put(d.services, item) } : d));
+    }
+    setServiceSheet(null);
+  };
+
+  const saveProjectSheet = () => {
+    const sh = projectSheet;
+    if (!sh) return;
+    if (!sh.img) return setSheetError('Add a photo of the work.');
+    if (!sh.title.trim()) return setSheetError('Enter what the project was.');
+    const item = { title: sh.title.trim(), tag: sh.where.trim(), sub: '', img: sh.img };
+    const put = <T,>(list: T[], value: T) => (sh.index === null ? [...list, value] : list.map((x, i) => (i === sh.index ? value : x)));
+    if (sh.target === 'registration') {
+      setArtisanPortfolio((prev) => put(prev, item));
+      clearSellerError('artisanPortfolio');
+    } else {
+      setPartnerDraft((d) => (d ? { ...d, portfolio: put(d.portfolio, item) } : d));
+    }
+    setProjectSheet(null);
+  };
+
+  const openServiceSheet = (target: ServiceSheet['target'], index: number | null, current?: { title: string; desc: string; price: string }) => {
+    setSheetError('');
+    setServiceSheet({ target, index, title: current?.title || '', price: current?.price || '', desc: current?.desc || '' });
+  };
+  const openProjectSheet = (target: ProjectSheet['target'], index: number | null, current?: { title: string; tag: string; img: string }) => {
+    setSheetError('');
+    setProjectSheet({ target, index, title: current?.title || '', where: current?.tag || '', img: current?.img || '' });
+  };
+
+  const sheetFrame = (title: string, onClose: () => void, body: React.ReactNode, onSave: () => void, saveLabel: string) => (
+    <div className="fixed inset-0 z-[90] bg-slate-900/50 flex items-end justify-center" onClick={onClose}>
+      <div
+        className="w-full max-w-md bg-white rounded-t-3xl px-4 pt-3 pb-[calc(env(safe-area-inset-bottom,0px)+16px)] space-y-3 shadow-2xl max-h-[90vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="w-10 h-1.5 rounded-full bg-slate-200 mx-auto" />
+        <div className="flex items-center justify-between">
+          <p className="text-base font-black text-slate-900">{title}</p>
+          <button type="button" onClick={onClose} aria-label="Close" className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-600 cursor-pointer">
+            <X size={16} />
+          </button>
+        </div>
+        {body}
+        {sheetError && <p className="text-[11px] font-bold text-red-600">{sheetError}</p>}
+        <button type="button" onClick={onSave} className="w-full py-3.5 rounded-2xl bg-accent text-white text-sm font-extrabold cursor-pointer active:scale-98">
+          {saveLabel}
+        </button>
+      </div>
+    </div>
+  );
+  const sheetInput = 'w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm text-slate-900 outline-none focus:border-orange-500';
+  const sheetLabel = 'text-xs font-bold text-slate-700 block mb-1';
+
+  const renderServiceSheet = () => {
+    const sh = serviceSheet;
+    if (!sh) return null;
+    const set = (patch: Partial<ServiceSheet>) => {
+      setSheetError('');
+      setServiceSheet({ ...sh, ...patch });
+    };
+    return sheetFrame(
+      sh.index === null ? 'Add a service' : 'Change service',
+      () => setServiceSheet(null),
+      <div className="space-y-3">
+        <div>
+          <label className={sheetLabel}>Service</label>
+          <input autoFocus className={sheetInput} value={sh.title} maxLength={60} placeholder="e.g. Fix leaking pipes" onChange={(e) => set({ title: e.target.value })} />
+        </div>
+        <div>
+          <label className={sheetLabel}>Price (GH₵)</label>
+          <input className={sheetInput} value={sh.price} maxLength={30} inputMode="text" placeholder="e.g. 250, or 0 if free" onChange={(e) => set({ price: e.target.value })} />
+        </div>
+        <div>
+          <label className={sheetLabel}>
+            Short description <span className="text-slate-400 font-normal">(optional)</span>
+          </label>
+          <input className={sheetInput} value={sh.desc} maxLength={120} placeholder="What is included" onChange={(e) => set({ desc: e.target.value })} />
+        </div>
+      </div>,
+      saveServiceSheet,
+      sh.index === null ? 'Add service' : 'Save changes'
+    );
+  };
+
+  const renderProjectSheet = () => {
+    const sh = projectSheet;
+    if (!sh) return null;
+    const set = (patch: Partial<ProjectSheet>) => {
+      setSheetError('');
+      setProjectSheet({ ...sh, ...patch });
+    };
+    return sheetFrame(
+      sh.index === null ? 'Add a past project' : 'Change project',
+      () => setProjectSheet(null),
+      <div className="space-y-3">
+        <button
+          type="button"
+          onClick={() => portfolioImgInputRef.current?.click()}
+          className="w-full aspect-[16/10] rounded-2xl overflow-hidden border-2 border-dashed border-slate-300 bg-slate-50 flex flex-col items-center justify-center text-slate-500 cursor-pointer"
+        >
+          {sh.img ? (
+            <img src={sh.img.startsWith('data:') ? sh.img : thumbnailUrl(sh.img, 600)} alt="" className="w-full h-full object-cover" />
+          ) : (
+            <>
+              <Camera size={26} className="text-accent" />
+              <span className="text-xs font-bold mt-1.5">Tap to add a photo of the work</span>
+            </>
+          )}
+        </button>
+        {sh.img && (
+          <button type="button" onClick={() => portfolioImgInputRef.current?.click()} className="text-xs font-bold text-accent cursor-pointer">
+            Change photo
+          </button>
+        )}
+        <div>
+          <label className={sheetLabel}>What was the project?</label>
+          <input className={sheetInput} value={sh.title} maxLength={60} placeholder="e.g. Kitchen cabinets" onChange={(e) => set({ title: e.target.value })} />
+        </div>
+        <div>
+          <label className={sheetLabel}>
+            Where / when <span className="text-slate-400 font-normal">(optional)</span>
+          </label>
+          <input className={sheetInput} value={sh.where} maxLength={40} placeholder="e.g. East Legon, 2025" onChange={(e) => set({ where: e.target.value })} />
+        </div>
+      </div>,
+      saveProjectSheet,
+      sh.index === null ? 'Add project' : 'Save changes'
+    );
+  };
+
   /** Ghana Card / police / verified tags, showing only the ones that apply */
   const renderPartnerTags = (app: Record<string, any> | undefined, verified: boolean, isArtisan: boolean) => {
     const idPending = !verified && app?.verificationRequestStatus === 'pending';
@@ -5260,7 +5454,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
         )}
         {section(
           'Services & prices',
-          <Cog size={15} />,
+          tradeIcon(myArtisanDoc?.category || '', 15),
           <div className="divide-y divide-slate-100">
             {d.services.map((svc, i) => (
               <div key={i} className="py-1.5 flex items-start justify-between gap-3">
@@ -5444,35 +5638,33 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
                 <div className="flex items-center justify-between gap-2">
                   <div>
                     <p className="text-xs font-black text-slate-900">Services & prices</p>
-                    <p className="text-[11px] text-slate-500">What buyers can book you for, with a starting price.</p>
+                    <p className="text-[11px] text-slate-500">What buyers can book you for. Tap one to change it.</p>
                   </div>
                   {d.services.length < 15 && (
                     <button
                       type="button"
-                      onClick={() => set({ services: [...d.services, { title: '', desc: '', price: '' }] })}
-                      className="py-1.5 px-2.5 rounded-lg bg-slate-900 text-white text-[11px] font-bold cursor-pointer flex items-center gap-1 shrink-0"
+                      onClick={() => openServiceSheet('profile', null)}
+                      className="py-1.5 px-2.5 rounded-lg bg-accent text-white text-[11px] font-bold cursor-pointer flex items-center gap-1 shrink-0"
                     >
                       <Plus size={12} />
-                      <span>Add</span>
+                      <span>Add service</span>
                     </button>
                   )}
                 </div>
-                {d.services.length === 0 && <p className="text-[11px] text-slate-400">No services yet. Tap Add.</p>}
-                {d.services.map((svc, i) => {
-                  const update = (patch: Partial<typeof svc>) => set({ services: d.services.map((x, j) => (j === i ? { ...x, ...patch } : x)) });
-                  return (
-                    <div key={i} className="rounded-xl border border-slate-200 bg-slate-50/70 p-2.5 space-y-2">
-                      <div className="flex gap-2">
-                        <input className={field} value={svc.title} maxLength={60} placeholder="Service, e.g. Fix leaking pipe" onChange={(e) => update({ title: e.target.value })} />
-                        <button type="button" aria-label="Remove service" onClick={() => set({ services: d.services.filter((_, j) => j !== i) })} className="px-2 text-red-600 cursor-pointer shrink-0">
-                          <Trash2 size={15} />
-                        </button>
-                      </div>
-                      <input className={field} value={svc.price} maxLength={30} placeholder="Price, e.g. From GH₵ 150" onChange={(e) => update({ price: e.target.value })} />
-                      <input className={field} value={svc.desc} maxLength={120} placeholder="Short description (optional)" onChange={(e) => update({ desc: e.target.value })} />
-                    </div>
-                  );
-                })}
+                {d.services.length === 0 && <p className="text-[11px] text-slate-400">No services yet. Tap Add service.</p>}
+                {d.services.map((svc, i) => (
+                  <div key={i} className="flex items-center gap-2.5 rounded-xl border border-slate-200 bg-slate-50/70 p-2.5">
+                    <div className="w-9 h-9 rounded-xl bg-[#E8EDF2] text-black flex items-center justify-center shrink-0">{tradeIcon(myArtisanDoc?.category || '')}</div>
+                    <button type="button" onClick={() => openServiceSheet('profile', i, svc)} className="flex-1 min-w-0 text-left cursor-pointer">
+                      <p className="text-xs font-bold text-slate-900 truncate">{svc.title || 'Untitled service'}</p>
+                      {svc.desc && <p className="text-[11px] text-slate-500 truncate">{svc.desc}</p>}
+                    </button>
+                    <span className="text-xs font-black text-accent shrink-0">{svc.price}</span>
+                    <button type="button" aria-label="Remove service" onClick={() => set({ services: d.services.filter((_, j) => j !== i) })} className="p-1 text-slate-400 hover:text-red-600 cursor-pointer shrink-0">
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ))}
               </div>
 
               <div className={card}>
@@ -5484,40 +5676,38 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
                   {d.portfolio.length < 8 && (
                     <button
                       type="button"
-                      onClick={() => {
-                        set({ portfolio: [...d.portfolio, { title: '', tag: '', sub: '', img: '' }] });
-                        pickPartnerPhoto(d.portfolio.length);
-                      }}
-                      className="py-1.5 px-2.5 rounded-lg bg-slate-900 text-white text-[11px] font-bold cursor-pointer flex items-center gap-1 shrink-0"
+                      onClick={() => openProjectSheet('profile', null)}
+                      className="py-1.5 px-2.5 rounded-lg bg-accent text-white text-[11px] font-bold cursor-pointer flex items-center gap-1 shrink-0"
                     >
                       <Plus size={12} />
-                      <span>Add</span>
+                      <span>Add project</span>
                     </button>
                   )}
                 </div>
-                {d.portfolio.length === 0 && <p className="text-[11px] text-slate-400">No projects yet. Tap Add to choose a photo.</p>}
-                {d.portfolio.map((p, i) => {
-                  const update = (patch: Partial<typeof p>) => set({ portfolio: d.portfolio.map((x, j) => (j === i ? { ...x, ...patch } : x)) });
-                  return (
-                    <div key={i} className="flex gap-2.5 rounded-xl border border-slate-200 bg-slate-50/70 p-2.5">
+                {d.portfolio.length === 0 && <p className="text-[11px] text-slate-400">No projects yet. Tap Add project.</p>}
+                <div className="grid grid-cols-2 gap-2">
+                  {d.portfolio.map((p, i) => (
+                    <div key={i} className="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-50">
+                      <button type="button" onClick={() => openProjectSheet('profile', i, p)} className="block w-full text-left cursor-pointer">
+                        <div className="aspect-[4/3] bg-slate-100">
+                          {p.img && <img src={p.img.startsWith('data:') ? p.img : thumbnailUrl(p.img, 300)} alt="" className="w-full h-full object-cover" />}
+                        </div>
+                        <div className="p-2">
+                          <p className="text-[11px] font-bold text-slate-900 truncate">{p.title || 'Untitled project'}</p>
+                          {p.tag && <p className="text-[10.5px] text-slate-500 truncate">{p.tag}</p>}
+                        </div>
+                      </button>
                       <button
                         type="button"
-                        onClick={() => pickPartnerPhoto(i)}
-                        aria-label="Choose project photo"
-                        className="w-20 h-20 rounded-xl overflow-hidden bg-white border border-dashed border-slate-300 flex items-center justify-center text-slate-400 shrink-0 cursor-pointer"
+                        aria-label="Remove project"
+                        onClick={() => set({ portfolio: d.portfolio.filter((_, j) => j !== i) })}
+                        className="absolute top-1.5 right-1.5 w-6 h-6 rounded-full bg-black/60 text-white flex items-center justify-center cursor-pointer"
                       >
-                        {p.img ? <img src={p.img.startsWith('data:') ? p.img : thumbnailUrl(p.img, 200)} alt="" className="w-full h-full object-cover" /> : <Camera size={18} />}
-                      </button>
-                      <div className="flex-1 min-w-0 space-y-2">
-                        <input className={field} value={p.title} maxLength={60} placeholder="Project, e.g. Kitchen cabinets" onChange={(e) => update({ title: e.target.value })} />
-                        <input className={field} value={p.tag} maxLength={30} placeholder="Where / when (optional)" onChange={(e) => update({ tag: e.target.value })} />
-                      </div>
-                      <button type="button" aria-label="Remove project" onClick={() => set({ portfolio: d.portfolio.filter((_, j) => j !== i) })} className="px-1 text-red-600 cursor-pointer shrink-0 self-start">
-                        <Trash2 size={15} />
+                        <X size={12} />
                       </button>
                     </div>
-                  );
-                })}
+                  ))}
+                </div>
               </div>
 
               <div className={card}>
@@ -6934,7 +7124,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
       readPickedFile(file)
       .then((picked) => {
         setNewPortfolioImg(picked);
-        showToast('✓ Project photo attached');
+        setProjectSheet((p) => (p ? { ...p, img: picked } : p));
       })
       .catch(() => showToast('⚠️ Could not read that file. Please choose another one.'));
     }
@@ -8523,6 +8713,10 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
         return <Hammer size={22} strokeWidth={2} className="text-slate-800" />;
       case 'Zap':
         return <Zap size={22} strokeWidth={2} className="text-slate-800" />;
+      case 'Scissors':
+        return <Scissors size={22} strokeWidth={2} className="text-slate-800" />;
+      case 'Smartphone':
+        return <Smartphone size={22} strokeWidth={2} className="text-slate-800" />;
       case 'Snowflake':
         return <Snowflake size={22} strokeWidth={2} className="text-slate-800" />;
       case 'BrickWall':
@@ -10718,7 +10912,7 @@ export default function RootLayout() {
                         >
                           <div className="flex items-center gap-2.5 min-w-0">
                             <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-[#E8EDF2] text-black">
-                              <Cog size={16} />
+                              {tradeIcon(artisanCategoryFor(applicant.tradeSkill || applicant.tradeCategory || ''))}
                             </div>
                             <div className="min-w-0">
                               <h6 className="text-[11.5px] font-bold text-slate-900 break-words">{srv.title}</h6>
@@ -18180,8 +18374,6 @@ export default function RootLayout() {
                   { id: 'busy', label: `🟠 Busy (${ARTISANS_DIRECTORY.filter((a) => !getArtisanAvailability(a.id)).length})` },
                   ...[
                     ...SERVICES_CATEGORIES.map((srv) => ({ id: srv.slug, name: srv.name })),
-                    { id: 'electronics', name: 'Electronics & Appliances' },
-                    { id: 'tailoring', name: 'Tailoring' },
                   ].map((c) => ({ id: c.id, label: `${c.name} (${ARTISANS_DIRECTORY.filter((a) => a.category === c.id).length})` })),
                 ].map((pill) => (
                   <button
@@ -23217,7 +23409,7 @@ export default function RootLayout() {
                           </div>
                           <button
                             type="button"
-                            onClick={() => setShowAddServiceForm(!showAddServiceForm)}
+                            onClick={() => openServiceSheet('registration', null)}
                             className="flex items-center gap-1 px-3 py-1.5 rounded-full text-white text-[11px] font-bold bg-accent hover:bg-orange-600 transition-all cursor-pointer shadow-xs active:scale-95 shrink-0"
                           >
                             <Plus size={13} />
@@ -23245,13 +23437,13 @@ export default function RootLayout() {
                               key={idx}
                               className="bg-slate-50 rounded-2xl p-3 border border-slate-200/80 flex items-center justify-between gap-2.5 shadow-2xs hover:border-slate-300 transition-all"
                             >
-                              <div className="flex items-center gap-2.5 min-w-0">
+                              <div className="flex items-center gap-2.5 min-w-0 cursor-pointer" onClick={() => openServiceSheet('registration', idx, srv)}>
                                 <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0 bg-[#E8EDF2] text-black">
-                                  {renderServiceBlackIcon(srv.icon)}
+                                  {tradeIcon(artisanCategoryFor(sellerRegForm.tradeSkill || ''))}
                                 </div>
                                 <div className="min-w-0">
                                   <h4 className="text-xs font-bold text-slate-900 truncate">{srv.title}</h4>
-                                  <p className="text-[10.5px] text-slate-500 truncate">{srv.desc}</p>
+                                  {srv.desc && <p className="text-[10.5px] text-slate-500 truncate">{srv.desc}</p>}
                                 </div>
                               </div>
                               <div className="flex items-center gap-2 shrink-0">
@@ -23272,91 +23464,6 @@ export default function RootLayout() {
                           </div>
                         )}
 
-                        {/* Inline Add Service Form with Black Icon Picker */}
-                        {showAddServiceForm && (
-                          <div className="p-3.5 rounded-2xl bg-orange-50/50 border border-orange-200 space-y-3 animate-in fade-in">
-                            <h5 className="text-xs font-black text-slate-900">New Service Offering</h5>
-                            <input
-                              type="text"
-                              value={newServiceTitle}
-                              onChange={(e) => setNewServiceTitle(e.target.value)}
-                              placeholder="Service Title (e.g. Diagnostic Fault Inspection & Repair)"
-                              className="w-full text-xs font-bold bg-white border border-slate-200 rounded-xl p-2 px-3 outline-none focus:border-orange-500"
-                            />
-                            <input
-                              type="text"
-                              value={newServiceDesc}
-                              onChange={(e) => setNewServiceDesc(e.target.value)}
-                              placeholder="Brief description (e.g. Full system circuit check & diagnostics)"
-                              className="w-full text-xs font-medium bg-white border border-slate-200 rounded-xl p-2 px-3 outline-none focus:border-orange-500"
-                            />
-
-                            {/* Selectable Black Icons Picker */}
-                            <div>
-                              <label className="text-[11px] font-bold text-slate-700 block mb-1.5">
-                                Select Service Icon (All Black Icons)
-                              </label>
-                              <div className="grid grid-cols-7 gap-1.5 p-2 bg-white rounded-xl border border-slate-200">
-                                {SERVICE_BLACK_ICONS.map((item) => (
-                                  <button
-                                    key={item.id}
-                                    type="button"
-                                    onClick={() => setNewServiceIcon(item.id)}
-                                    title={item.label}
-                                    className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all cursor-pointer ${
-                                      newServiceIcon === item.id
-                                        ? 'bg-slate-900 text-white shadow-xs ring-2 ring-orange-500'
-                                        : 'bg-slate-100 text-black hover:bg-slate-200'
-                                    }`}
-                                  >
-                                    <div className={newServiceIcon === item.id ? 'text-white' : 'text-black'}>
-                                      {item.icon}
-                                    </div>
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
-
-                            <div className="flex gap-2">
-                              <input
-                                type="text"
-                                value={newServicePrice}
-                                onChange={(e) => setNewServicePrice(e.target.value)}
-                                placeholder="Starting price (e.g. Free or From GH₵ 250)"
-                                className="flex-1 text-xs font-bold bg-white border border-slate-200 rounded-xl p-2 px-3 outline-none focus:border-orange-500"
-                              />
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (newServiceTitle.trim()) {
-                                    setArtisanServices((prev) => [
-                                      ...prev,
-                                      {
-                                        title: newServiceTitle.trim(),
-                                        desc: newServiceDesc.trim() || 'Professional craftsmanship & diagnostics',
-                                        price: newServicePrice.trim().toLowerCase() === 'free' || newServicePrice.trim() === '0'
-                                          ? 'Free'
-                                          : newServicePrice.trim().startsWith('From') || newServicePrice.trim().startsWith('GH')
-                                          ? newServicePrice.trim()
-                                          : `From GH₵ ${newServicePrice.trim() || '250'}`,
-                                        icon: newServiceIcon || 'gear',
-                                      },
-                                    ]);
-                                    setNewServiceTitle('');
-                                    setNewServiceDesc('');
-                                    setNewServicePrice('');
-                                    setNewServiceIcon('gear');
-                                    setShowAddServiceForm(false);
-                                    showToast('✓ New service added to profile');
-                                  }
-                                }}
-                                className="px-4 py-2 rounded-xl bg-orange-500 hover:bg-orange-600 text-white font-bold text-xs cursor-pointer shadow-xs active:scale-95"
-                              >
-                                Add
-                              </button>
-                            </div>
-                          </div>
-                        )}
                       </div>
 
                       {/* Card: Verified Work Portfolio - REQUIRED (NON-SKIPPABLE) */}
@@ -23364,7 +23471,7 @@ export default function RootLayout() {
                         <div className="flex items-center justify-between">
                           <div>
                             <h3 className="text-sm font-black text-slate-900 flex items-center gap-1.5 flex-wrap">
-                              <span>Verified Work</span>
+                              <span>Past Projects</span>
                               <span className="text-red-500 font-black text-base">*</span>
                               <span className="text-slate-400 font-normal">({artisanPortfolio.length})</span>
                               <span className="text-[11px] font-black uppercase px-2 py-0.5 rounded-full bg-red-50 text-red-600 border border-red-200">
@@ -23377,7 +23484,7 @@ export default function RootLayout() {
                           </div>
                           <button
                             type="button"
-                            onClick={() => setShowAddPortfolioForm(true)}
+                            onClick={() => openProjectSheet('registration', null)}
                             className="flex items-center gap-1 px-3 py-1.5 rounded-full text-white text-[11px] font-bold bg-accent hover:bg-orange-600 transition-all cursor-pointer shadow-xs active:scale-95 shrink-0"
                           >
                             <Plus size={13} />
@@ -23394,7 +23501,7 @@ export default function RootLayout() {
 
                         {artisanPortfolio.length === 0 && (
                           <div className={`py-5 text-center border rounded-2xl p-4 bg-slate-50/50 ${sellerErrors.artisanPortfolio ? 'border-red-300 bg-red-50/30' : 'border-dashed border-slate-200'}`}>
-                            <p className="text-xs font-bold text-slate-700">No verified work projects added yet <span className="text-red-500 font-black">*</span></p>
+                            <p className="text-xs font-bold text-slate-700">No past projects added yet <span className="text-red-500 font-black">*</span></p>
                             <p className="text-[11px] text-slate-500 mt-0.5">Tap &quot;Add Project&quot; above to add at least one past project with photo (Required)</p>
                           </div>
                         )}
@@ -23432,152 +23539,6 @@ export default function RootLayout() {
                           ))}
                         </div>
 
-                        {/* POPUP MODAL for Adding Project with Instant Photo Preview (No scroll down needed!) */}
-                        {showAddPortfolioForm && (
-                          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
-                            <div className="bg-white rounded-3xl w-full max-w-md p-5 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
-                              <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-                                <div>
-                                  <h4 className="text-sm font-black text-slate-900">Add Verified Work Project</h4>
-                                  <p className="text-[11px] text-slate-500">Showcase your completed craftsmanship to clients</p>
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setShowAddPortfolioForm(false);
-                                    setNewPortfolioImg('');
-                                  }}
-                                  className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center transition-colors cursor-pointer"
-                                >
-                                  <X size={16} />
-                                </button>
-                              </div>
-
-                              {/* Project Title */}
-                              <div>
-                                <label className="text-xs font-semibold text-slate-700 block mb-1">
-                                  Project Name / Title <span className="text-red-500">*</span>
-                                </label>
-                                <input
-                                  type="text"
-                                  value={newPortfolioTitle}
-                                  onChange={(e) => setNewPortfolioTitle(e.target.value)}
-                                  placeholder="e.g. 10kVA Solar Hybrid System Installation"
-                                  className="w-full text-xs font-bold bg-[#F3F4FB] border border-slate-200 rounded-xl p-2.5 px-3 outline-none focus:border-orange-500 focus:bg-white"
-                                />
-                              </div>
-
-                              <div className="grid grid-cols-2 gap-2.5">
-                                <div>
-                                  <label className="text-xs font-semibold text-slate-700 block mb-1">Trade Tag</label>
-                                  <input
-                                    type="text"
-                                    value={newPortfolioTag}
-                                    onChange={(e) => setNewPortfolioTag(e.target.value)}
-                                    placeholder="e.g. Solar, Wiring, Inverter"
-                                    className="w-full text-xs font-bold bg-[#F3F4FB] border border-slate-200 rounded-xl p-2.5 px-3 outline-none focus:border-orange-500 focus:bg-white"
-                                  />
-                                </div>
-                                <div>
-                                  <label className="text-xs font-semibold text-slate-700 block mb-1">Location</label>
-                                  <input
-                                    type="text"
-                                    value={newPortfolioSub}
-                                    onChange={(e) => setNewPortfolioSub(e.target.value)}
-                                    placeholder="e.g. East Legon, Accra"
-                                    className="w-full text-xs font-bold bg-[#F3F4FB] border border-slate-200 rounded-xl p-2.5 px-3 outline-none focus:border-orange-500 focus:bg-white"
-                                  />
-                                </div>
-                              </div>
-
-                              {/* Photo Upload with Instant Selected Preview */}
-                              <div>
-                                <label className="text-xs font-semibold text-slate-700 block mb-1.5">
-                                  Project Photo <span className="text-red-500">*</span>
-                                </label>
-
-                                {newPortfolioImg ? (
-                                  <div className="relative rounded-2xl overflow-hidden border border-slate-200 aspect-16/10 bg-slate-100 group">
-                                    <img
-                                      src={newPortfolioImg}
-                                      alt="Selected Project Preview"
-                                      className="w-full h-full object-cover"
-                                    />
-                                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
-                                      <button
-                                        type="button"
-                                        onClick={() => portfolioImgInputRef.current?.click()}
-                                        className="px-3 py-1.5 rounded-xl bg-white text-slate-800 text-xs font-bold shadow-md hover:bg-slate-50 cursor-pointer"
-                                      >
-                                        Change Photo
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => setNewPortfolioImg('')}
-                                        className="px-3 py-1.5 rounded-xl bg-red-600 text-white text-xs font-bold shadow-md hover:bg-red-700 cursor-pointer"
-                                      >
-                                        Remove
-                                      </button>
-                                    </div>
-                                  </div>
-                                ) : (
-                                  <div
-                                    onClick={() => portfolioImgInputRef.current?.click()}
-                                    className="rounded-2xl border-2 border-dashed border-slate-300 hover:border-orange-500 bg-slate-50 hover:bg-orange-50/20 p-5 flex flex-col items-center justify-center text-center cursor-pointer transition-colors"
-                                  >
-                                    <div className="w-10 h-10 rounded-full bg-white shadow-xs border border-slate-200 flex items-center justify-center text-orange-600 mb-2">
-                                      <Upload size={18} />
-                                    </div>
-                                    <span className="text-xs font-bold text-slate-800">Tap to upload photo from device</span>
-                                    <span className="text-[11px] text-slate-400 mt-0.5">JPG, PNG, or WEBP (preview will show immediately)</span>
-                                  </div>
-                                )}
-                              </div>
-
-                              {/* Action Buttons */}
-                              <div className="flex gap-2.5 pt-2 border-t border-slate-100">
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setShowAddPortfolioForm(false);
-                                    setNewPortfolioImg('');
-                                  }}
-                                  className="flex-1 py-2.5 px-3 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer transition-colors"
-                                >
-                                  Cancel
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    if (newPortfolioTitle.trim()) {
-                                      setArtisanPortfolio((prev) => [
-                                        ...prev,
-                                        {
-                                          title: newPortfolioTitle.trim(),
-                                          tag: newPortfolioTag.trim() || 'Work',
-                                          sub: newPortfolioSub.trim() || 'Accra • Completed Project',
-                                          img: newPortfolioImg || PLACEHOLDER_IMAGE,
-                                        },
-                                      ]);
-                                      setNewPortfolioTitle('');
-                                      setNewPortfolioTag('Solar');
-                                      setNewPortfolioSub('');
-                                      setNewPortfolioImg('');
-                                      setShowAddPortfolioForm(false);
-                                      clearSellerError('artisanPortfolio');
-                                      showToast('✓ Project added to verified portfolio');
-                                    } else {
-                                      showToast('Please enter a project name');
-                                    }
-                                  }}
-                                  className="flex-1 py-2.5 px-3 rounded-2xl bg-orange-500 hover:bg-orange-600 text-white font-bold text-xs cursor-pointer shadow-xs active:scale-95 transition-all"
-                                >
-                                  Add Project
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        )}
                       </div>
 
                       {/* Card: Identity Verification (Ghana Card) - Optional/Skippable */}
@@ -24631,7 +24592,7 @@ export default function RootLayout() {
                             >
                               <div className="flex items-center gap-2.5 min-w-0">
                                 <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-[#E8EDF2] text-black">
-                                  {renderServiceBlackIcon(srv.icon)}
+                                  {tradeIcon(artisanCategoryFor(sellerRegForm.tradeSkill || ''))}
                                 </div>
                                 <div className="min-w-0">
                                   <h5 className="text-[11.5px] font-bold text-slate-900 truncate">{srv.title}</h5>
@@ -27623,6 +27584,8 @@ export default function RootLayout() {
                 {renderChatActionSheet()}
                 {renderReportPersonModal()}
                 {renderGetVerifiedSheet()}
+                {renderServiceSheet()}
+                {renderProjectSheet()}
                 {renderDeleteCategorySheet()}
                 {renderAdminUnlockSheet()}
                 {renderBannerEditorSheet()}
@@ -27789,6 +27752,8 @@ export default function RootLayout() {
                 {renderChatActionSheet()}
                 {renderReportPersonModal()}
                 {renderGetVerifiedSheet()}
+                {renderServiceSheet()}
+                {renderProjectSheet()}
                 {renderDeleteCategorySheet()}
                 {renderAdminUnlockSheet()}
                 {renderBannerEditorSheet()}
