@@ -124,6 +124,11 @@ import {
   Paintbrush,
   Fan,
   HardHat,
+  Snowflake,
+  BrickWall,
+  PaintRoller,
+  Beef,
+  Handshake,
 } from 'lucide-react';
 import {
   CATEGORIES,
@@ -191,6 +196,7 @@ import {
   watchAdminAccess,
   watchArtisanBookings,
   watchArtisans,
+  artisanCategoryFor,
   watchChatMessages,
   watchMyApplication,
   watchMyBookings,
@@ -464,10 +470,12 @@ const SUBCATEGORY_KEYWORD_MAP: Record<
   tires: { categorySlug: 'vehicles', categoryName: 'Vehicles', matchedSubcategory: 'Car Parts & Accessories' },
 
   // Property
-  house: { categorySlug: 'property', categoryName: 'Property', matchedSubcategory: 'Houses for Rent' },
-  houses: { categorySlug: 'property', categoryName: 'Property', matchedSubcategory: 'Houses for Rent' },
-  rent: { categorySlug: 'property', categoryName: 'Property', matchedSubcategory: 'Houses for Rent' },
-  rental: { categorySlug: 'property', categoryName: 'Property', matchedSubcategory: 'Houses for Rent' },
+  house: { categorySlug: 'property', categoryName: 'Property', matchedSubcategory: 'Rooms for Rent' },
+  houses: { categorySlug: 'property', categoryName: 'Property', matchedSubcategory: 'Rooms for Rent' },
+  rent: { categorySlug: 'property', categoryName: 'Property', matchedSubcategory: 'Rooms for Rent' },
+  rental: { categorySlug: 'property', categoryName: 'Property', matchedSubcategory: 'Rooms for Rent' },
+  room: { categorySlug: 'property', categoryName: 'Property', matchedSubcategory: 'Rooms for Rent' },
+  rooms: { categorySlug: 'property', categoryName: 'Property', matchedSubcategory: 'Rooms for Rent' },
   apartment: { categorySlug: 'property', categoryName: 'Property', matchedSubcategory: 'Apartments for Sale' },
   apartments: { categorySlug: 'property', categoryName: 'Property', matchedSubcategory: 'Apartments for Sale' },
   flat: { categorySlug: 'property', categoryName: 'Property', matchedSubcategory: 'Apartments for Sale' },
@@ -1155,6 +1163,9 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     if (targetRoute.type === 'tabs') {
       setActiveTab(targetRoute.tab);
     }
+    if (targetRoute.type === 'artisans') {
+      setArtisanFilter(targetRoute.filterCategory || 'all');
+    }
     if (targetRoute.type === 'listing') {
       setActiveListingPhotoIndex(0);
       try {
@@ -1301,7 +1312,8 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
           rate: a.inspectionFee > 0 ? `GH₵ ${a.inspectionFee}` : 'FREE INSPECTION',
           avatar: a.avatar,
           verified: a.verified,
-          category: a.category,
+          // Re-derived from the trade so profiles saved before a category existed still land in it.
+          category: artisanCategoryFor(a.tradeSkill || a.headline || ''),
           badges: [...(a.verified ? ['Ghana Card Verified'] : []), ...(a.policeCleared ? ['Police Cleared'] : [])],
           audioIntro: a.voiceIntroUrl || undefined,
           portfolioCount: a.verifiedWorkPortfolio.length,
@@ -5504,6 +5516,10 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     'Locksmith, Key Programming & Security Safes',
     'Landscaping, Pavers & Compound Gardening',
     'General Handyman & Facility Maintenance',
+    'Photography & Videography',
+    'Art, Crafts & Beadwork',
+    'Catering & Event Cooking',
+    'Tailoring & Fashion Design',
   ];
 
   const SERVICE_BLACK_ICONS: Array<{ id: string; label: string; icon: React.ReactNode }> = [
@@ -6916,6 +6932,8 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
         return <Wheat size={22} strokeWidth={2} className="text-slate-800" />;
       case 'pets':
         return <PawPrint size={22} strokeWidth={2} className="text-slate-800" />;
+      case 'livestock':
+        return <Beef size={22} strokeWidth={2} className="text-slate-800" />;
       default:
         return <Package size={22} strokeWidth={2} className="text-slate-800" />;
     }
@@ -6925,11 +6943,12 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
   const CATEGORY_SHORT_NAMES: Record<string, string> = {
     vehicles: 'Vehicles',
     property: 'Property',
-    phones: 'Phones',
+    phones: 'Phone',
     electronics: 'Electronics',
     furniture: 'Furniture',
     fashion: 'Fashion',
     appliances: 'Home Appliances',
+    livestock: 'Livestock',
     leisure: 'Sports',
     books: 'Books',
     tools: 'Tools',
@@ -6974,6 +6993,18 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
         return <Cog size={22} strokeWidth={2} className="text-black" />;
       case 'Hammer':
         return <Hammer size={22} strokeWidth={2} className="text-slate-800" />;
+      case 'Zap':
+        return <Zap size={22} strokeWidth={2} className="text-slate-800" />;
+      case 'Snowflake':
+        return <Snowflake size={22} strokeWidth={2} className="text-slate-800" />;
+      case 'BrickWall':
+        return <BrickWall size={22} strokeWidth={2} className="text-slate-800" />;
+      case 'PaintRoller':
+        return <PaintRoller size={22} strokeWidth={2} className="text-slate-800" />;
+      case 'Car':
+        return <Car size={22} strokeWidth={2} className="text-slate-800" />;
+      case 'Flame':
+        return <Flame size={22} strokeWidth={2} className="text-slate-800" />;
       case 'Briefcase':
         return <Briefcase size={22} strokeWidth={2} className="text-slate-800" />;
       case 'FileText':
@@ -11660,17 +11691,46 @@ export default function RootLayout() {
                     </button>
                   </div>
 
-                  {/* One row of category photos; swipe sideways for the rest */}
-                  <div
-                    className="flex gap-2 px-4 overflow-x-auto no-scrollbar pb-1"
-                    style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
-                  >
-                    {CATEGORIES.map((cat) => (
-                      <div key={cat.id} className="w-[62px] shrink-0">
-                        {renderCategoryTile(cat, 'w-[62px] h-[52px]')}
+                  {/* Two rows of category photos that swipe sideways together; Books, Pets and
+                      admin-added categories are under View All */}
+                  {(() => {
+                    const pick = (key: string) =>
+                      CATEGORIES.find((c) => c.slug === key || c.name.toLowerCase() === key);
+                    const servicesTile = (
+                      <button
+                        key="home-services"
+                        type="button"
+                        onClick={() => navigateTo({ type: 'artisans' })}
+                        className="flex flex-col items-center gap-1.5 min-w-0 active:scale-95 transition-transform cursor-pointer select-none"
+                      >
+                        <div className="w-[62px] h-[52px] rounded-[8px] overflow-hidden bg-[#E8EDF2] flex items-center justify-center shadow-2xs">
+                          <Handshake size={22} strokeWidth={2} className="text-slate-800" />
+                        </div>
+                        <span className="text-[10.5px] font-semibold text-slate-800 text-center leading-tight line-clamp-2 w-full">
+                          Services
+                        </span>
+                      </button>
+                    );
+                    const row = (keys: string[]) =>
+                      keys.map((key) => {
+                        const cat = pick(key);
+                        if (cat) return <div key={cat.id} className="w-[62px] shrink-0">{renderCategoryTile(cat, 'w-[62px] h-[52px]')}</div>;
+                        return key === 'services' ? <div key="services" className="w-[62px] shrink-0">{servicesTile}</div> : null;
+                      });
+                    return (
+                      <div
+                        className="flex flex-col gap-3 px-4 overflow-x-auto no-scrollbar pb-1"
+                        style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+                      >
+                        <div className="flex gap-2 w-max">
+                          {row(['vehicles', 'property', 'phones', 'electronics', 'furniture', 'fashion', 'appliances'])}
+                        </div>
+                        <div className="flex gap-2 w-max">
+                          {row(['livestock', 'leisure', 'tools', 'kids', 'beauty', 'agriculture', 'services'])}
+                        </div>
                       </div>
-                    ))}
-                  </div>
+                    );
+                  })()}
                 </div>
 
                 {/* Interactive Multi-Slide Carousel Banner */}
@@ -16018,13 +16078,11 @@ export default function RootLayout() {
                   { id: 'all', label: `All (${ARTISANS_DIRECTORY.length})` },
                   { id: 'available', label: `🟢 Available Now (${ARTISANS_DIRECTORY.filter((a) => getArtisanAvailability(a.id)).length})` },
                   { id: 'busy', label: `🟠 Busy (${ARTISANS_DIRECTORY.filter((a) => !getArtisanAvailability(a.id)).length})` },
-                  { id: 'carpenters', label: `Carpenters (${ARTISANS_DIRECTORY.filter((a) => a.category === 'carpenters').length})` },
-                  { id: 'electricians', label: `Electricians (${ARTISANS_DIRECTORY.filter((a) => a.category === 'electricians').length})` },
-                  { id: 'painters', label: `Painters (${ARTISANS_DIRECTORY.filter((a) => a.category === 'painters').length})` },
-                  { id: 'tailoring', label: `Tailoring (${ARTISANS_DIRECTORY.filter((a) => a.category === 'tailoring').length})` },
-                  { id: 'catering', label: `Catering (${ARTISANS_DIRECTORY.filter((a) => a.category === 'catering').length})` },
-                  { id: 'electronics', label: `Electronics (${ARTISANS_DIRECTORY.filter((a) => a.category === 'electronics').length})` },
-                  { id: 'plumbers', label: `Plumbers (${ARTISANS_DIRECTORY.filter((a) => a.category === 'plumbers').length})` },
+                  ...[
+                    ...SERVICES_CATEGORIES.map((srv) => ({ id: srv.slug, name: srv.name })),
+                    { id: 'electronics', name: 'Electronics & Appliances' },
+                    { id: 'tailoring', name: 'Tailoring' },
+                  ].map((c) => ({ id: c.id, label: `${c.name} (${ARTISANS_DIRECTORY.filter((a) => a.category === c.id).length})` })),
                 ].map((pill) => (
                   <button
                     key={pill.id}
@@ -16043,6 +16101,12 @@ export default function RootLayout() {
 
             {/* Artisans Feed */}
             <div className="flex-1 p-3 overflow-y-auto space-y-3">
+              {filteredArtisans.length === 0 && (
+                <div className="bg-white rounded-3xl p-6 border border-slate-100 text-center">
+                  <p className="text-sm font-bold text-slate-800">No artisans here yet</p>
+                  <p className="text-xs text-slate-500 mt-1">Verified artisans for this service will appear here once approved.</p>
+                </div>
+              )}
               {filteredArtisans.map((artisan) => {
                 const isAvailable = getArtisanAvailability(artisan.id);
                 return (

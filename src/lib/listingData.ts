@@ -124,7 +124,7 @@ export const CATEGORIES: Category[] = [
     count: 5,
     color: '#0F172A',
     bgLight: '#E8EDF2',
-    subcategories: ['Houses for Rent', 'Apartments for Sale', 'Land & Plots', 'Commercial Property', 'Short Stays'],
+    subcategories: ['Rooms for Rent', 'Apartments for Sale', 'Land & Plots', 'Commercial Property', 'Short Stays'],
   },
   {
     id: 'cat-phones',
@@ -177,6 +177,16 @@ export const CATEGORIES: Category[] = [
     subcategories: ['Fridges & Freezers', 'Washing Machines', 'Cookers & Microwaves', 'Air Conditioners & Fans', 'Kitchen Appliances'],
   },
   {
+    id: 'cat-livestock',
+    name: 'Livestock',
+    slug: 'livestock',
+    icon: 'Beef',
+    count: 0,
+    color: '#0F172A',
+    bgLight: '#E8EDF2',
+    subcategories: ['Cattle & Cows', 'Goats & Sheep', 'Poultry & Eggs', 'Pigs', 'Animal Feed & Vet Supplies'],
+  },
+  {
     id: 'cat-leisure',
     name: 'Leisure & Activities',
     slug: 'leisure',
@@ -185,16 +195,6 @@ export const CATEGORIES: Category[] = [
     color: '#0F172A',
     bgLight: '#E8EDF2',
     subcategories: ['Sports & Fitness Equipment', 'Musical Instruments', 'Books & Stationery', 'Camping & Outdoors'],
-  },
-  {
-    id: 'cat-books',
-    name: 'Books & Stationery',
-    slug: 'books',
-    icon: 'BookOpen',
-    count: 0,
-    color: '#0F172A',
-    bgLight: '#E8EDF2',
-    subcategories: ['Textbooks', 'Novels', "Children's Books", 'Religious Books', 'Stationery'],
   },
   {
     id: 'cat-tools',
@@ -235,6 +235,16 @@ export const CATEGORIES: Category[] = [
     color: '#0F172A',
     bgLight: '#E8EDF2',
     subcategories: ['Fresh Farm Produce', 'Grains & Rice Bags', 'Farm Machinery & Irrigation', 'Poultry & Livestock'],
+  },
+  {
+    id: 'cat-books',
+    name: 'Books & Stationery',
+    slug: 'books',
+    icon: 'BookOpen',
+    count: 0,
+    color: '#0F172A',
+    bgLight: '#E8EDF2',
+    subcategories: ['Textbooks', 'Novels', "Children's Books", 'Religious Books', 'Stationery'],
   },
   {
     id: 'cat-pets',
@@ -300,17 +310,20 @@ export interface ServiceCategory {
   count: number;
 }
 
+/** Trades in rows of four; each slug is an artisan directory category, so a tile shows only that trade. */
 export const SERVICES_CATEGORIES: ServiceCategory[] = [
-  { id: 'srv-1', name: 'Services', slug: 'services', icon: 'Cog', count: 410 },
-  { id: 'srv-2', name: 'Repair & Construction', slug: 'repair-construction', icon: 'Hammer', count: 325 },
-  { id: 'srv-3', name: 'Commercial Equipment & Tools', slug: 'commercial-tools', icon: 'Briefcase', count: 180 },
-  { id: 'srv-4', name: 'Jobs', slug: 'jobs', icon: 'Briefcase', count: 290 },
-  { id: 'srv-5', name: 'Seeking Work - CVs', slug: 'seeking-work', icon: 'FileText', count: 145 },
-  { id: 'srv-6', name: 'Art & Crafts', slug: 'art-crafts', icon: 'Palette', count: 88 },
-  { id: 'srv-7', name: 'Photography', slug: 'photography', icon: 'Camera', count: 72 },
-  { id: 'srv-8', name: 'Catering & Food', slug: 'catering-food', icon: 'UtensilsCrossed', count: 96 },
-  { id: 'srv-9', name: 'Tutoring', slug: 'tutoring', icon: 'GraduationCap', count: 64 },
-  { id: 'srv-10', name: 'Professional', slug: 'professional', icon: 'Briefcase', count: 41 },
+  { id: 'srv-1', name: 'Carpentry', slug: 'carpenters', icon: 'Hammer', count: 0 },
+  { id: 'srv-2', name: 'Electrical & Solar', slug: 'electricians', icon: 'Zap', count: 0 },
+  { id: 'srv-3', name: 'Plumbing', slug: 'plumbers', icon: 'Wrench', count: 0 },
+  { id: 'srv-4', name: 'AC & Fridge Repair', slug: 'ac-repair', icon: 'Snowflake', count: 0 },
+  { id: 'srv-5', name: 'Masonry & Tiling', slug: 'masons', icon: 'BrickWall', count: 0 },
+  { id: 'srv-6', name: 'Painting', slug: 'painters', icon: 'PaintRoller', count: 0 },
+  { id: 'srv-7', name: 'Auto Mechanic', slug: 'mechanics', icon: 'Car', count: 0 },
+  { id: 'srv-8', name: 'Welding', slug: 'welders', icon: 'Flame', count: 0 },
+  { id: 'srv-9', name: 'Jobs', slug: 'jobs', icon: 'Briefcase', count: 0 },
+  { id: 'srv-10', name: 'Art & Crafts', slug: 'art-crafts', icon: 'Palette', count: 0 },
+  { id: 'srv-11', name: 'Photography', slug: 'photography', icon: 'Camera', count: 0 },
+  { id: 'srv-12', name: 'Catering & Food', slug: 'catering', icon: 'UtensilsCrossed', count: 0 },
 ];
 
 export interface ArtisanItem {
@@ -323,7 +336,9 @@ export interface ArtisanItem {
   rate: string;
   avatar: string;
   verified: boolean;
-  category: 'carpenters' | 'electricians' | 'plumbers' | 'painters' | 'tailoring' | 'catering' | 'electronics' | 'other';
+  category:
+    | 'carpenters' | 'electricians' | 'plumbers' | 'ac-repair' | 'masons' | 'painters' | 'mechanics' | 'welders'
+    | 'jobs' | 'art-crafts' | 'photography' | 'tailoring' | 'catering' | 'electronics' | 'other';
   badges: string[];
   audioIntro?: string;
   portfolioCount?: number;

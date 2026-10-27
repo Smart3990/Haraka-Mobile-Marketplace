@@ -669,18 +669,26 @@ async function syncSellerAdsVerified(sellerId: string, verified: boolean): Promi
 // ---------------------------------------------------------------------------
 
 export type ArtisanCategory =
-  | 'carpenters' | 'electricians' | 'plumbers' | 'painters' | 'tailoring' | 'catering' | 'electronics' | 'other';
+  | 'carpenters' | 'electricians' | 'plumbers' | 'ac-repair' | 'masons' | 'painters' | 'mechanics' | 'welders'
+  | 'jobs' | 'art-crafts' | 'photography' | 'tailoring' | 'catering' | 'electronics' | 'other';
 
-/** Directory category from the trade the artisan entered. */
+/** Directory category from the trade the artisan entered. Order matters: the most specific trades are checked first. */
 export function artisanCategoryFor(trade: string): ArtisanCategory {
   const t = trade.toLowerCase();
-  if (/carpent|wood|furniture|joiner/.test(t)) return 'carpenters';
-  if (/electric|solar|wiring|inverter/.test(t)) return 'electricians';
-  if (/plumb|drain|pipe|water/.test(t)) return 'plumbers';
-  if (/paint|decor|plaster/.test(t)) return 'painters';
+  if (/photo|video|camera|drone/.test(t)) return 'photography';
+  if (/appliance|phone|laptop|electronic|computer|\btech/.test(t)) return 'electronics';
+  if (/\bac\b|air.?con|refrigerat|fridge/.test(t)) return 'ac-repair';
+  if (/mechanic|auto|vehicle|diagnos|vulcani/.test(t)) return 'mechanics';
+  if (/weld|metal|fabricat|alumin|glazing/.test(t)) return 'welders';
+  if (/carpent|wood|furniture|joiner|upholster/.test(t)) return 'carpenters';
+  if (/mason|tiling|tile|block|concrete|terrazzo|epoxy|roof|paver|build/.test(t)) return 'masons';
+  if (/paint|decor|plaster|ceiling|gypsum/.test(t)) return 'painters';
+  if (/electric|solar|wiring|inverter|generator|cctv|intercom/.test(t)) return 'electricians';
+  if (/plumb|drain|pipe|borehole|water pump/.test(t)) return 'plumbers';
   if (/tailor|sew|fashion|dress/.test(t)) return 'tailoring';
   if (/cater|cook|food|chef|bak/.test(t)) return 'catering';
-  if (/phone|laptop|electronic|computer|repair|tech/.test(t)) return 'electronics';
+  if (/\bart\b|artist|craft|sculpt|bead|pottery|weav|kente/.test(t)) return 'art-crafts';
+  if (/\bjobs?\b|labou?r|cleaner|driver|security guard|nanny|househelp|domestic/.test(t)) return 'jobs';
   return 'other';
 }
 
