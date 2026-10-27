@@ -677,6 +677,44 @@ export async function requestVerification(
   });
 }
 
+/**
+ * An approved artisan sends their CID police clearance (reference number and/or a photo of the
+ * certificate). An admin checks it before the "Police Cleared" badge shows.
+ */
+export async function submitPoliceClearance(certNumber: string, photo: string): Promise<void> {
+  const user = auth.currentUser;
+  if (!user) throw new Error('Please log in again.');
+  const number = certNumber.trim().toUpperCase().slice(0, 60);
+  if (!number && !photo) throw new Error('Add your CID reference number or a photo of the certificate.');
+  let stored = '';
+  if (photo) {
+    try {
+      stored = photo.startsWith('data:') ? await compressImage(photo, 150_000) : photo;
+    } catch {
+      throw new Error('The certificate photo could not be read. Please choose a JPG or PNG photo.');
+    }
+  }
+  await updateDoc(doc(db, 'applications', user.uid), {
+    policeClearanceCertNumber: number,
+    policeClearancePhoto: stored,
+    policeClearanceStatus: 'pending',
+    policeClearanceRequestedAtISO: new Date().toISOString(),
+  });
+}
+
+/** Admin: confirms (or turns down) an artisan's police clearance; the public badge follows. */
+export async function setPoliceClearance(app: StoredApplication, cleared: boolean): Promise<void> {
+  if (!auth.currentUser?.email) throw new Error('Please log in again.');
+  const batch = writeBatch(db);
+  batch.update(doc(db, 'applications', app.uid), {
+    policeClearanceStatus: cleared ? 'cleared' : 'declined',
+    decidedAtISO: new Date().toISOString(),
+    decidedBy: auth.currentUser.email,
+  });
+  if (app.role === 'artisan' && app.status === 'approved') batch.set(doc(db, 'artisans', app.uid), { policeCleared: cleared }, { merge: true });
+  await batch.commit();
+}
+
 /** Admin turns down a verification request (the partner stays approved and can send new documents). */
 export async function declineVerification(app: StoredApplication, reason: string): Promise<void> {
   if (!auth.currentUser?.email) throw new Error('Please log in again.');

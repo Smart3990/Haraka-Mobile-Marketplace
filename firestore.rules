@@ -208,6 +208,13 @@ service cloud.firestore {
         && request.resource.data.verificationRequestStatus == 'pending'
         && request.resource.data.idVerificationSkipped == false
         && request.resource.data.ghanaCardId is string && request.resource.data.ghanaCardId.size() >= 10;
+      // An approved artisan sends their CID police clearance (only an admin marks it cleared)
+      allow update: if isOwner(userId) && isVerifiedUser()
+        && resource.data.status == 'approved'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'policeClearanceCertNumber', 'policeClearancePhoto', 'policeClearanceStatus', 'policeClearanceRequestedAtISO'])
+        && request.resource.data.policeClearanceStatus == 'pending'
+        && request.resource.data.policeClearanceCertNumber is string && request.resource.data.policeClearanceCertNumber.size() <= 60;
       allow delete: if isAdmin() || isOwner(userId);
     }
 

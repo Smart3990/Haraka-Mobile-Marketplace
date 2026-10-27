@@ -194,6 +194,8 @@ import {
   submitReview,
   updateMyArtisanProfile,
   updateMyArtisanDetails,
+  submitPoliceClearance,
+  setPoliceClearance,
   setUserDisabled,
   deleteUserAccount,
   watchDisabledUserIds,
@@ -4553,6 +4555,8 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     voiceIntroUrl: string;
     coverage: string[];
     languages: string[];
+    policeNumber: string;
+    policePhoto: string;
   };
   const PARTNER_LANGUAGES = ['English', 'Twi', 'Ga', 'Ewe', 'Fante', 'Hausa', 'Dagbani', 'Nzema', 'French'];
   const RESPONSE_TIMES = ['within 15 minutes', 'within 1 hour', 'within a few hours', 'within a day'];
@@ -4568,7 +4572,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
   const partnerRecorderRef = useRef<VoiceRecording | null>(null);
   const partnerStopPlayRef = useRef<(() => void) | null>(null);
   const partnerPhotoInputRef = useRef<HTMLInputElement>(null);
-  const partnerPhotoTargetRef = useRef<'avatar' | number>('avatar');
+  const partnerPhotoTargetRef = useRef<'avatar' | 'police' | number>('avatar');
 
   // Leaving the page turns the microphone and playback off
   useEffect(() => {
@@ -4580,6 +4584,11 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     setPartnerRecording(false);
     setPartnerPlaying(false);
   }, [currentRoute.type]);
+
+  // Applications: every one for admins, only their own for everyone else (filled in further down)
+  const [adminApplicants, setAdminApplicants] = useState<AdminApplicant[]>([]);
+  /** The signed-in partner's own application (holds their CID police clearance) */
+  const myPartnerApplication = () => adminApplicants.find((a) => a.id === firebaseUid);
 
   const draftFromSaved = (): PartnerDraft => {
     const a = myArtisanDoc;
@@ -4600,6 +4609,8 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
       voiceIntroUrl: a?.voiceIntroUrl || '',
       coverage: a?.serviceCoverageAreas || [],
       languages: a?.languagesSpoken || [],
+      policeNumber: (myPartnerApplication() as any)?.policeClearanceCertNumber || '',
+      policePhoto: (myPartnerApplication() as any)?.policeClearancePhoto || '',
     };
   };
 
@@ -4616,6 +4627,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
           { label: 'Areas you cover', done: d.coverage.length > 0, required: true },
           { label: 'Languages', done: d.languages.length > 0, required: true },
           { label: 'Response time', done: Boolean(d.responseTime), required: true },
+          { label: 'Police clearance (CID)', done: Boolean(d.policeNumber.trim() || d.policePhoto), required: false },
         ]
       : [
           { label: 'Profile photo', done: Boolean(d.avatar), required: true },
@@ -4661,7 +4673,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     navigateTo({ type: 'partner-setup' });
   };
 
-  const pickPartnerPhoto = (target: 'avatar' | number) => {
+  const pickPartnerPhoto = (target: 'avatar' | 'police' | number) => {
     partnerPhotoTargetRef.current = target;
     partnerPhotoInputRef.current?.click();
   };
@@ -4678,6 +4690,8 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
           ? d
           : target === 'avatar'
           ? { ...d, avatar: img }
+          : target === 'police'
+          ? { ...d, policePhoto: img }
           : { ...d, portfolio: d.portfolio.map((p, i) => (i === target ? { ...p, img } : p)) }
       );
     } catch {
@@ -4760,6 +4774,12 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
           languagesSpoken: d.languages,
         });
         await saveUserProfile(firebaseUid, { whatsapp, ...(d.avatar.startsWith('data:') ? { avatar: d.avatar } : {}) });
+        const app = myPartnerApplication() as any;
+        const changed = d.policeNumber.trim().toUpperCase() !== (app?.policeClearanceCertNumber || '') || d.policePhoto !== (app?.policeClearancePhoto || '');
+        if (app && (d.policeNumber.trim() || d.policePhoto) && changed) {
+          await submitPoliceClearance(d.policeNumber, d.policePhoto);
+          notifyAdmins('Police clearance to check', 'An artisan sent their CID police clearance. Open the Admin Control Dashboard to check it.');
+        }
       } else {
         await saveUserProfile(firebaseUid, {
           avatar: d.avatar,
@@ -5304,6 +5324,51 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
               </div>
             </>
           )}
+
+          {partnerRole === 'artisan' && (() => {
+            const status = (myPartnerApplication() as any)?.policeClearanceStatus || '';
+            const statusLabel =
+              status === 'cleared' ? 'Police Cleared' : status === 'pending' && (d.policeNumber || d.policePhoto) ? 'Sent, waiting for Haraka to check' : status === 'declined' ? 'Not accepted, please send again' : 'Not provided';
+            const statusTone = status === 'cleared' ? 'text-brand' : status === 'declined' ? 'text-red-600' : status === 'pending' ? 'text-amber-600' : 'text-slate-500';
+            return (
+              <div className={card}>
+                <div>
+                  <p className="text-xs font-black text-slate-900">Criminal Records & Police Clearance (CID)</p>
+                  <p className="text-[11px] text-slate-500">Optional. Haraka checks it, then the "Police Cleared" badge shows on your page.</p>
+                  <p className={`text-[11px] font-bold mt-1 ${statusTone}`}>Status: {statusLabel}</p>
+                </div>
+                <div>
+                  <label className={label}>CID Clearance Reference ID</label>
+                  <input
+                    className={field}
+                    value={d.policeNumber}
+                    maxLength={60}
+                    placeholder="e.g. CID-HQ-GH-2024-12345"
+                    onChange={(e) => set({ policeNumber: e.target.value })}
+                  />
+                </div>
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => pickPartnerPhoto('police')}
+                    aria-label="Add certificate photo"
+                    className="w-20 h-20 rounded-xl overflow-hidden bg-white border border-dashed border-slate-300 flex items-center justify-center text-slate-400 shrink-0 cursor-pointer"
+                  >
+                    {d.policePhoto ? <img src={d.policePhoto} alt="" className="w-full h-full object-cover" /> : <Camera size={18} />}
+                  </button>
+                  <div className="min-w-0">
+                    <p className="text-xs font-bold text-slate-900">Certificate photo</p>
+                    <p className="text-[11px] text-slate-500">A clear photo of your police clearance certificate.</p>
+                    {d.policePhoto && (
+                      <button type="button" onClick={() => set({ policePhoto: '' })} className="text-[11px] font-bold text-red-600 mt-1 cursor-pointer">
+                        Remove photo
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
 
           {partnerRole === 'seller' && (
             <div className={card}>
@@ -7276,7 +7341,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     verifiedBadge?: boolean;
     // Missing artisan features from profile / application
     headline?: string;
-    policeClearanceStatus?: 'cleared' | 'pending' | 'skipped';
+    policeClearanceStatus?: 'cleared' | 'pending' | 'skipped' | 'declined';
     policeClearanceCertNumber?: string;
     policeClearancePhoto?: string;
     serviceCoverageAreas?: string[];
@@ -7289,7 +7354,6 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     verifiedWorkPortfolio?: Array<{ title: string; tag: string; sub: string; img: string }>;
   }
 
-  const [adminApplicants, setAdminApplicants] = useState<AdminApplicant[]>([]);
   // Admins see every application live; other users see only their own
   useEffect(() => {
     if (!firebaseUid) return;
@@ -10265,28 +10329,32 @@ export default function RootLayout() {
                   </div>
                   <div className="flex items-center justify-between py-0.5">
                     <span className="text-slate-500 font-medium">Target Response Time:</span>
-                    <span className="font-bold text-slate-800 text-right">{applicant.responseTime || '< 15 mins'}</span>
+                    <span className="font-bold text-slate-800 text-right">{artisanProfiles.find((a) => a.id === (applicant as any).uid)?.responseTime || applicant.responseTime || 'Not given'}</span>
                   </div>
 
                   {/* Police Clearance Review for Artisan */}
                   <div className="space-y-1.5 pt-2 border-t border-slate-200/60">
                     <div className="flex items-center justify-between">
                       <span className="text-slate-700 font-bold text-[11px] block">Criminal Records &amp; Police Clearance (CID):</span>
-                      {applicant.policeClearanceCertNumber || applicant.policeClearancePhoto ? (
-                        <span className="text-xs font-bold text-amber-700 flex items-center gap-1">
+                      {applicant.policeClearanceStatus === 'cleared' ? (
+                        <span className="text-xs font-bold text-brand flex items-center gap-1">
                           <CheckCircle2 size={12} />
                           <span>Police Cleared</span>
                         </span>
+                      ) : applicant.policeClearanceCertNumber || applicant.policeClearancePhoto ? (
+                        <span className="text-xs font-bold text-amber-700">
+                          {applicant.policeClearanceStatus === 'declined' ? 'Not accepted' : 'Waiting for your check'}
+                        </span>
                       ) : (
                         <span className="text-xs font-semibold text-slate-500">
-                          {applicant.policeClearanceStatus === 'skipped' ? 'Skipped' : 'Pending'}
+                          {applicant.policeClearanceStatus === 'skipped' ? 'Skipped' : 'Not provided'}
                         </span>
                       )}
                     </div>
                     <div className="flex items-center justify-between py-0.5">
                       <span className="text-slate-500 font-medium">CID Clearance Reference ID:</span>
                       <span className="font-mono font-bold text-slate-900 text-right">
-                        {applicant.policeClearanceCertNumber || 'CID-HQ-GH-2023-88219'}
+                        {applicant.policeClearanceCertNumber || '—'}
                       </span>
                     </div>
                     {applicant.policeClearancePhoto && (
@@ -10305,6 +10373,44 @@ export default function RootLayout() {
                         <span>Inspect Police Clearance Document</span>
                       </button>
                     )}
+                    {applicant.status === 'approved' &&
+                      applicant.policeClearanceStatus === 'pending' &&
+                      Boolean(applicant.policeClearanceCertNumber || applicant.policeClearancePhoto) && (
+                        <div className="flex gap-1.5 pt-1">
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              try {
+                                await setPoliceClearance(applicant as unknown as StoredApplication, true);
+                                setViewingApplicantDetails({ ...applicant, policeClearanceStatus: 'cleared' });
+                                showToast('Police clearance confirmed. The badge now shows on their page.');
+                                notifyUser((applicant as any).uid, 'Police clearance confirmed', 'The Police Cleared badge now shows on your artisan page.', { type: 'application', id: (applicant as any).uid });
+                              } catch {
+                                showToast('⚠️ Could not save. Try again.');
+                              }
+                            }}
+                            className="py-1.5 px-3 rounded-lg bg-brand text-white text-[11px] font-bold cursor-pointer"
+                          >
+                            Confirm cleared
+                          </button>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              try {
+                                await setPoliceClearance(applicant as unknown as StoredApplication, false);
+                                setViewingApplicantDetails({ ...applicant, policeClearanceStatus: 'declined' });
+                                showToast('Police clearance not accepted.');
+                                notifyUser((applicant as any).uid, 'Police clearance not accepted', 'Please send a clear photo of your certificate and the correct CID reference.', { type: 'application', id: (applicant as any).uid });
+                              } catch {
+                                showToast('⚠️ Could not save. Try again.');
+                              }
+                            }}
+                            className="py-1.5 px-3 rounded-lg border border-red-200 text-red-600 text-[11px] font-bold cursor-pointer"
+                          >
+                            Not valid
+                          </button>
+                        </div>
+                      )}
                   </div>
 
                   {/* Artisan Voice Note & Languages Spoken */}
@@ -10315,7 +10421,7 @@ export default function RootLayout() {
                         <span className="text-slate-800 font-bold text-xs">Artisan Voice Note</span>
                       </div>
                       <span className="text-[11px] font-bold text-slate-600">
-                        {applicant.voiceNoteLanguages || 'English & Twi'}
+                        {(artisanProfiles.find((a) => a.id === (applicant as any).uid)?.languagesSpoken || applicant.languagesSpoken || []).join(' & ') || '—'}
                       </span>
                     </div>
 
@@ -10323,7 +10429,11 @@ export default function RootLayout() {
                     <div className="flex items-center gap-3 py-1">
                       <button
                         type="button"
-                        onClick={() => ((applicant as any).voiceIntroUrl ? toggleIntro(`app-${applicant.id}`, (applicant as any).voiceIntroUrl) : showToast('No voice intro was recorded.'))}
+                        onClick={() => {
+                          const url = artisanProfiles.find((a) => a.id === (applicant as any).uid)?.voiceIntroUrl || (applicant as any).voiceIntroUrl;
+                          if (url) toggleIntro(`app-${applicant.id}`, url);
+                          else showToast('No voice intro was recorded.');
+                        }}
                         className="w-8 h-8 rounded-full bg-orange-500 hover:bg-orange-600 text-white flex items-center justify-center shadow-xs cursor-pointer shrink-0 active:scale-95 transition-transform"
                       >
                         {introPlayingId === `app-${applicant.id}` ? <Pause size={14} className="fill-white" /> : <Play size={14} className="fill-white ml-0.5" />}
@@ -10338,14 +10448,16 @@ export default function RootLayout() {
                         ))}
                       </div>
                       <span className="text-[11px] font-mono font-bold text-slate-600 shrink-0">
-                        {applicant.voiceNoteDuration || '0:22'}
+                        {artisanProfiles.find((a) => a.id === (applicant as any).uid)?.voiceIntroUrl || (applicant as any).voiceIntroUrl
+                          ? applicant.voiceNoteDuration || ''
+                          : 'None'}
                       </span>
                     </div>
 
                     <div className="flex items-center justify-between text-[11px] pt-0.5">
                       <div className="flex items-center gap-1 text-slate-600 font-semibold">
                         <Languages size={12} className="text-slate-400" />
-                        <span>Speaks: {applicant.languagesSpoken?.join(', ') || 'English, Twi, Ga'}</span>
+                        <span>Speaks: {(artisanProfiles.find((a) => a.id === (applicant as any).uid)?.languagesSpoken || applicant.languagesSpoken || []).join(', ') || 'Not given'}</span>
                       </div>
                       <span className="text-brand font-bold">Ready to inspect</span>
                     </div>
@@ -11763,7 +11875,10 @@ export default function RootLayout() {
             const adminPct = totalUsersCalculated > 0 ? ((platformAdminsTotal / totalUsersCalculated) * 100).toFixed(1) : '0.0';
             // New applications plus approved partners who sent ID documents for the badge
             const pendingCount = adminApplicants.filter(
-              (a) => a.status === 'pending' || (a.status === 'approved' && a.verificationRequestStatus === 'pending')
+              (a) =>
+                a.status === 'pending' ||
+                (a.status === 'approved' && a.verificationRequestStatus === 'pending') ||
+                (a.status === 'approved' && a.policeClearanceStatus === 'pending' && Boolean(a.policeClearanceCertNumber || a.policeClearancePhoto))
             ).length;
             const liveAdsTotal = listings.length;
 
@@ -11863,7 +11978,12 @@ export default function RootLayout() {
                           ? (
                               <span className="inline-flex items-center gap-1">
                                 {`Approved (${adminApplicants.filter((a) => a.status === 'approved').length})`}
-                                {adminApplicants.some((a) => a.status === 'approved' && a.verificationRequestStatus === 'pending') && (
+                                {adminApplicants.some(
+                                  (a) =>
+                                    a.status === 'approved' &&
+                                    (a.verificationRequestStatus === 'pending' ||
+                                      (a.policeClearanceStatus === 'pending' && Boolean(a.policeClearanceCertNumber || a.policeClearancePhoto)))
+                                ) && (
                                   <span className="w-1.5 h-1.5 rounded-full bg-accent" aria-label="Verification requests waiting" />
                                 )}
                               </span>
@@ -11899,6 +12019,11 @@ export default function RootLayout() {
 
                             {/* Name & Sub Info */}
                             <div className="flex-1 min-w-0">
+                              {applicant.status === 'approved' &&
+                                applicant.policeClearanceStatus === 'pending' &&
+                                Boolean(applicant.policeClearanceCertNumber || applicant.policeClearancePhoto) && (
+                                  <p className="text-[10.5px] font-bold text-amber-600 mb-0.5">Police clearance to check</p>
+                                )}
                               <div className="flex items-center justify-between gap-1.5">
                                 <h4 className="text-xs font-bold text-slate-900 truncate">
                                   {applicant.name}
@@ -25170,7 +25295,7 @@ export default function RootLayout() {
                       confirmSafeTradePayout: confirmSafeTradePayout,
                       // Artisan Specific Features (Image 1, 2, 3)
                       headline: isArtisan ? (artisanHeadline || '') : undefined,
-                      policeClearanceStatus: isArtisan ? (isPoliceClearanceSkipped ? 'skipped' : (policeClearanceCertNumber || policeClearancePhoto ? 'cleared' : 'pending')) : undefined,
+                      policeClearanceStatus: isArtisan ? (isPoliceClearanceSkipped ? 'skipped' : 'pending') : undefined,
                       policeClearanceCertNumber: isArtisan && !isPoliceClearanceSkipped ? (policeClearanceCertNumber.trim() || undefined) : undefined,
                       policeClearancePhoto: isArtisan && !isPoliceClearanceSkipped ? (policeClearancePhoto || undefined) : undefined,
                       serviceCoverageAreas: isArtisan ? artisanCoverageAreas : undefined,
