@@ -83,7 +83,7 @@ service cloud.firestore {
         && !('verified' in request.resource.data);
       allow update: if isAdmin() || (
         isOwner(userId)
-        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'verified'])
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'verified', 'disabled', 'disabledReason', 'disabledAtISO'])
       );
       // Users can delete their own account
       allow delete: if isAdmin() || isOwner(userId);
@@ -211,12 +211,41 @@ service cloud.firestore {
       allow delete: if isAdmin() || isOwner(userId);
     }
 
+    // Accounts the system admin disabled; everyone reads the list so their ads and profile are hidden
+    match /disabledUsers/{userId} {
+      allow get, list: if true;
+      allow create, update, delete: if isSystemAdmin() && recentlyConfirmed();
+    }
+
+    // A disabled person asks for their account back; only the system admin decides
+    match /appeals/{userId} {
+      allow get: if isOwner(userId) || isSystemAdmin();
+      allow list: if isSystemAdmin();
+      allow create, update: if isOwner(userId)
+        && get(/databases/$(database)/documents/users/$(userId)).data.get('disabled', false) == true
+        && request.resource.data.keys().hasOnly(['uid', 'name', 'email', 'message', 'status', 'adminReply', 'createdAtISO'])
+        && request.resource.data.uid == userId
+        && request.resource.data.status == 'open'
+        && request.resource.data.message is string && request.resource.data.message.size() <= 1000;
+      allow update: if isSystemAdmin() && recentlyConfirmed();
+      allow delete: if isSystemAdmin() && recentlyConfirmed();
+    }
+
+    // Emails whose account the system admin deleted: signing in with them says no account exists.
+    // Anyone may check one email; a new account with that email clears the note.
+    match /deletedAccounts/{email} {
+      allow get: if true;
+      allow create, update: if isSystemAdmin() && recentlyConfirmed();
+      allow delete: if isSystemAdmin() || (isSignedIn() && request.auth.token.email == email);
+    }
+
     // Marketplace listings: anyone can browse; only approved sellers/artisans post
     match /listings/{listingId} {
       allow get, list: if true;
       allow create: if isVerifiedUser() && isValidId(listingId)
         && request.resource.data.sellerId == request.auth.uid
-        && userRole() in ['seller', 'artisan'];
+        && userRole() in ['seller', 'artisan']
+        && !exists(/databases/$(database)/documents/disabledUsers/$(request.auth.uid));
       // The seller edits their own ad; the system admin (or an admin given access) can correct someone
       // else's ad, and admins with category access can move ads to another category
       allow update: if isSignedIn() && isValidId(listingId) && (

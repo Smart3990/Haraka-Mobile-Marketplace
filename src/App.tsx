@@ -193,6 +193,14 @@ import {
   submitReview,
   updateMyArtisanProfile,
   updateMyArtisanDetails,
+  setUserDisabled,
+  deleteUserAccount,
+  watchDisabledUserIds,
+  submitAppeal,
+  watchMyAppeal,
+  watchAppeals,
+  declineAppeal,
+  type AppealDoc,
   signOutUser,
   submitApplication,
   submitReport,
@@ -245,6 +253,7 @@ import {
 import { HarakaLogo } from './components/HarakaLogo';
 import { HARAKA_LOGO, HARAKA_MARK, WELCOME_HERO, WELCOME_HERO_TRANS } from './lib/images';
 import { useBranding, THEME_COLORS, type ThemeColorKey } from './lib/branding';
+import { saveDraft, loadDraft, clearDraft, stripMedia } from './lib/drafts';
 import { CATEGORY_IMAGES } from './lib/categoryImages';
 import {
   BANNER_GRADIENTS,
@@ -289,7 +298,7 @@ type ScreenRoute =
   | { type: 'splash' }
   | { type: 'onboarding' }
   | { type: 'welcome' }
-  | { type: 'admin-settings'; section?: 'banners' | 'categories' | 'branding' | 'permissions' | 'ads' | 'users' | 'problems' }
+  | { type: 'admin-settings'; section?: 'banners' | 'categories' | 'branding' | 'permissions' | 'ads' | 'users' | 'appeals' | 'problems' }
   | { type: 'sign-up' }
   | { type: 'login' }
   | { type: 'demo-accounts' }
@@ -1303,12 +1312,17 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
 
   // Approved artisans (public profiles) and their reviews, live from Firestore
   const [artisanProfiles, setArtisanProfiles] = useState<ArtisanProfileDoc[]>([]);
+  /** Accounts the system admin disabled: their ads and artisan profile are hidden */
+  const [disabledUserIds, setDisabledUserIds] = useState<string[]>([]);
+  const disabledUserIdsRef = useRef<string[]>([]);
+  disabledUserIdsRef.current = disabledUserIds;
+  useEffect(() => watchDisabledUserIds(setDisabledUserIds), []);
   const [artisanReviews, setArtisanReviews] = useState<ReviewDoc[]>([]);
   useEffect(() => watchArtisans(setArtisanProfiles), []);
   useEffect(() => watchReviews(setArtisanReviews), []);
   const ARTISANS_DIRECTORY: ArtisanItem[] = useMemo(
     () =>
-      artisanProfiles.map((a) => {
+      artisanProfiles.filter((a) => !disabledUserIds.includes(a.id)).map((a) => {
         const own = artisanReviews.filter((r) => r.artisanId === a.id);
         const rating = own.length ? Math.round((own.reduce((sum, r) => sum + r.rating, 0) / own.length) * 10) / 10 : 0;
         return {
@@ -1329,7 +1343,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
           phone: a.phone,
         };
       }),
-    [artisanProfiles, artisanReviews]
+    [artisanProfiles, artisanReviews, disabledUserIds]
   );
   const FEATURED_ARTISANS = useMemo(() => ARTISANS_DIRECTORY.filter((a) => a.verified).slice(0, 6), [ARTISANS_DIRECTORY]);
 
@@ -1864,7 +1878,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
   };
 
   // Ad draft
-  const [adDraft, setAdDraft] = useState<Partial<Listing>>({
+  const [adDraft, setAdDraft] = useState<Partial<Listing>>(() => loadDraft<Partial<Listing>>('postAd') || {
     title: '',
     category: '',
     categoryName: '',
@@ -2065,8 +2079,12 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
   // The role the admin granted on the account (buyer / seller / artisan); admins see the admin dashboard on top
   const profileRoleRef = useRef<'buyer' | 'seller' | 'artisan'>('buyer');
   useEffect(() => {
-    return watchAuth((user, profile) => {
+    return watchAuth((user, profile, removed) => {
       setMyProfileDoc(profile);
+      if (removed) {
+        showToast('No account exists with this email address.');
+        setCurrentRoute({ type: 'login' });
+      }
       firebaseUidRef.current = user?.uid ?? null;
       if (user) signedOutRef.current = false; // a new sign-in
       setFirebaseUid(user?.uid ?? null);
@@ -4592,8 +4610,17 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
           { label: 'Response time', done: Boolean(d.responseTime) },
         ];
 
+  const partnerSetupDraftKey = `partnerSetup.${firebaseUid || ''}`;
+  useEffect(() => {
+    if (currentRoute.type !== 'partner-setup' || !partnerDraft || !firebaseUid) return;
+    const timer = setTimeout(() => saveDraft(partnerSetupDraftKey, partnerDraft, stripMedia), 500);
+    return () => clearTimeout(timer);
+  }, [currentRoute.type, partnerDraft, partnerSetupDraftKey]);
+
   const openPartnerSetup = () => {
-    setPartnerDraft(draftFromSaved());
+    const kept = loadDraft<PartnerDraft>(partnerSetupDraftKey);
+    setPartnerDraft(kept ? { ...draftFromSaved(), ...kept } : draftFromSaved());
+    if (kept) showToast('We kept the changes you had not saved yet.');
     setPartnerSetupError('');
     setPartnerTextInput({ spot: '', area: '' });
     navigateTo({ type: 'partner-setup' });
@@ -4710,6 +4737,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
           responseTime: d.responseTime,
         });
       }
+      clearDraft(partnerSetupDraftKey);
       showToast('Your profile is saved');
       goBack();
     } catch (err) {
@@ -5630,7 +5658,9 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
   const remoteListingsRef = useRef<StoredListing[]>([]);
   const showRemoteListings = (remote: StoredListing[]) => {
     const remoteIds = new Set(remote.map((l) => l.id));
-    const visible = remote.filter((l) => !blockedUserIdsRef.current.includes(l.sellerId || ''));
+    const visible = remote.filter(
+      (l) => !blockedUserIdsRef.current.includes(l.sellerId || '') && !disabledUserIdsRef.current.includes(l.sellerId || '')
+    );
     setListings((prev) => [
       ...visible,
       ...prev.filter((l) => !remoteIds.has(l.id) && !l.id.startsWith('listing-new-')),
@@ -5638,7 +5668,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
   };
   useEffect(() => {
     if (remoteListingsRef.current.length) showRemoteListings(remoteListingsRef.current);
-  }, [blockedUserIds]);
+  }, [blockedUserIds, disabledUserIds]);
   useEffect(() => {
     return watchListings((remote) => {
       setListingsLoaded(true);
@@ -5867,6 +5897,110 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
   const portfolioImgInputRef = useRef<HTMLInputElement>(null);
 
   // Helper to completely reset seller & artisan registration states to pristine, empty defaults
+  // ---- Ad draft: kept while it has something in it; an empty form (e.g. after publishing) clears it ----
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const hasContent = Boolean(adDraft.title?.trim() || adDraft.description?.trim() || adDraft.images?.length || adDraft.price);
+      if (hasContent) saveDraft('postAd', adDraft, stripMedia);
+      else clearDraft('postAd');
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [adDraft]);
+
+  // ---- Partner registration draft: everything typed is kept on the phone until the application is sent ----
+  const PARTNER_REG_DRAFT = 'partnerRegistration';
+  useEffect(() => {
+    if (currentRoute.type !== 'register-seller' && currentRoute.type !== 'register-artisan') return;
+    const draft = {
+      sellerRegStep,
+      sellerRegType,
+      sellerRegForm,
+      isIdVerificationSkipped,
+      isCertVerificationSkipped,
+      businessCertNumber,
+      businessCertPhoto,
+      businessCertName,
+      ghanaCardFrontName,
+      ghanaCardFrontPreview,
+      ghanaCardBackName,
+      ghanaCardBackPreview,
+      storeBannerImage,
+      storePhysicalPhoto,
+      storeDisplayCounterPhoto,
+      shopWorkingHours,
+      shopGuarantees,
+      agreedToSellerCode,
+      sellerAvatarPhoto,
+      sellerBio,
+      sellerResponseTime,
+      neighborhoodPrivacyGuard,
+      selectedSafeHubs,
+      allowCourierDispatch,
+      confirmSafeTradePayout,
+      artisanHeadline,
+      policeClearanceCertNumber,
+      policeClearancePhoto,
+      policeClearanceName,
+      isPoliceClearanceSkipped,
+      artisanCoverageAreas,
+      artisanLanguages,
+      hasVoiceNoteIntro,
+      hasRecordedArtisanAudio,
+      artisanAudioDuration,
+      artisanAudioBlob,
+      artisanServices,
+      artisanPortfolio,
+    };
+    const timer = setTimeout(() => saveDraft(PARTNER_REG_DRAFT, draft, stripMedia), 500);
+    return () => clearTimeout(timer);
+  }, [currentRoute.type, sellerRegStep, sellerRegType, sellerRegForm, isIdVerificationSkipped, isCertVerificationSkipped, businessCertNumber, businessCertPhoto, businessCertName, ghanaCardFrontName, ghanaCardFrontPreview, ghanaCardBackName, ghanaCardBackPreview, storeBannerImage, storePhysicalPhoto, storeDisplayCounterPhoto, shopWorkingHours, shopGuarantees, agreedToSellerCode, sellerAvatarPhoto, sellerBio, sellerResponseTime, neighborhoodPrivacyGuard, selectedSafeHubs, allowCourierDispatch, confirmSafeTradePayout, artisanHeadline, policeClearanceCertNumber, policeClearancePhoto, policeClearanceName, isPoliceClearanceSkipped, artisanCoverageAreas, artisanLanguages, hasVoiceNoteIntro, hasRecordedArtisanAudio, artisanAudioDuration, artisanAudioBlob, artisanServices, artisanPortfolio]);
+
+  /** Puts back what was typed last time for this kind of application. Returns false when there is nothing to restore. */
+  const restorePartnerDraft = (type: 'private' | 'storefront' | 'artisan'): boolean => {
+    const d = loadDraft<Record<string, unknown>>(PARTNER_REG_DRAFT);
+    if (!d || (d.sellerRegType === 'artisan') !== (type === 'artisan')) return false;
+    if ('sellerRegStep' in d) setSellerRegStep(d.sellerRegStep as any);
+    if ('sellerRegType' in d) setSellerRegType(d.sellerRegType as any);
+    if ('sellerRegForm' in d) setSellerRegForm(d.sellerRegForm as any);
+    if ('isIdVerificationSkipped' in d) setIsIdVerificationSkipped(d.isIdVerificationSkipped as any);
+    if ('isCertVerificationSkipped' in d) setIsCertVerificationSkipped(d.isCertVerificationSkipped as any);
+    if ('businessCertNumber' in d) setBusinessCertNumber(d.businessCertNumber as any);
+    if ('businessCertPhoto' in d) setBusinessCertPhoto(d.businessCertPhoto as any);
+    if ('businessCertName' in d) setBusinessCertName(d.businessCertName as any);
+    if ('ghanaCardFrontName' in d) setGhanaCardFrontName(d.ghanaCardFrontName as any);
+    if ('ghanaCardFrontPreview' in d) setGhanaCardFrontPreview(d.ghanaCardFrontPreview as any);
+    if ('ghanaCardBackName' in d) setGhanaCardBackName(d.ghanaCardBackName as any);
+    if ('ghanaCardBackPreview' in d) setGhanaCardBackPreview(d.ghanaCardBackPreview as any);
+    if ('storeBannerImage' in d) setStoreBannerImage(d.storeBannerImage as any);
+    if ('storePhysicalPhoto' in d) setStorePhysicalPhoto(d.storePhysicalPhoto as any);
+    if ('storeDisplayCounterPhoto' in d) setStoreDisplayCounterPhoto(d.storeDisplayCounterPhoto as any);
+    if ('shopWorkingHours' in d) setShopWorkingHours(d.shopWorkingHours as any);
+    if ('shopGuarantees' in d) setShopGuarantees(d.shopGuarantees as any);
+    if ('agreedToSellerCode' in d) setAgreedToSellerCode(d.agreedToSellerCode as any);
+    if ('sellerAvatarPhoto' in d) setSellerAvatarPhoto(d.sellerAvatarPhoto as any);
+    if ('sellerBio' in d) setSellerBio(d.sellerBio as any);
+    if ('sellerResponseTime' in d) setSellerResponseTime(d.sellerResponseTime as any);
+    if ('neighborhoodPrivacyGuard' in d) setNeighborhoodPrivacyGuard(d.neighborhoodPrivacyGuard as any);
+    if ('selectedSafeHubs' in d) setSelectedSafeHubs(d.selectedSafeHubs as any);
+    if ('allowCourierDispatch' in d) setAllowCourierDispatch(d.allowCourierDispatch as any);
+    if ('confirmSafeTradePayout' in d) setConfirmSafeTradePayout(d.confirmSafeTradePayout as any);
+    if ('artisanHeadline' in d) setArtisanHeadline(d.artisanHeadline as any);
+    if ('policeClearanceCertNumber' in d) setPoliceClearanceCertNumber(d.policeClearanceCertNumber as any);
+    if ('policeClearancePhoto' in d) setPoliceClearancePhoto(d.policeClearancePhoto as any);
+    if ('policeClearanceName' in d) setPoliceClearanceName(d.policeClearanceName as any);
+    if ('isPoliceClearanceSkipped' in d) setIsPoliceClearanceSkipped(d.isPoliceClearanceSkipped as any);
+    if ('artisanCoverageAreas' in d) setArtisanCoverageAreas(d.artisanCoverageAreas as any);
+    if ('artisanLanguages' in d) setArtisanLanguages(d.artisanLanguages as any);
+    if ('hasVoiceNoteIntro' in d) setHasVoiceNoteIntro(d.hasVoiceNoteIntro as any);
+    if ('hasRecordedArtisanAudio' in d) setHasRecordedArtisanAudio(d.hasRecordedArtisanAudio as any);
+    if ('artisanAudioDuration' in d) setArtisanAudioDuration(d.artisanAudioDuration as any);
+    if ('artisanAudioBlob' in d) setArtisanAudioBlob(d.artisanAudioBlob as any);
+    if ('artisanServices' in d) setArtisanServices(d.artisanServices as any);
+    if ('artisanPortfolio' in d) setArtisanPortfolio(d.artisanPortfolio as any);
+    showToast('We kept the details you entered before. Carry on where you stopped.');
+    return true;
+  };
+
   const resetSellerRegForm = (type: 'private' | 'storefront' | 'artisan' = 'private') => {
     setSellerRegStep(1);
     setSellerRegType(type);
@@ -11810,7 +11944,7 @@ export default function RootLayout() {
 
   /** Friendly screen for links to things that no longer exist (or never did). */
   // ---------- Platform Settings: system admin tools (all ads, all users, problems from phones) ----------
-  type SettingsSection = 'banners' | 'categories' | 'branding' | 'permissions' | 'ads' | 'users' | 'problems';
+  type SettingsSection = 'banners' | 'categories' | 'branding' | 'permissions' | 'ads' | 'users' | 'appeals' | 'problems';
   const settingsSection: SettingsSection | null = currentRoute.type === 'admin-settings' ? currentRoute.section || null : null;
   const [allAds, setAllAds] = useState<StoredListing[]>([]);
   const [allUsers, setAllUsers] = useState<UserProfileDoc[]>([]);
@@ -11825,6 +11959,9 @@ export default function RootLayout() {
   const [openUserId, setOpenUserId] = useState('');
   const [adminToolBusy, setAdminToolBusy] = useState('');
   const [adminToolConfirm, setAdminToolConfirm] = useState('');
+  const [appeals, setAppeals] = useState<AppealDoc[]>([]);
+  const [appealReply, setAppealReply] = useState<{ uid: string; text: string } | null>(null);
+  const [disableDraft, setDisableDraft] = useState<{ uid: string; reason: string } | null>(null);
   const [partnerForm, setPartnerForm] = useState<(AdminPartnerInput & { uid: string; agreed: boolean }) | null>(null);
   const [partnerError, setPartnerError] = useState('');
 
@@ -11897,7 +12034,7 @@ export default function RootLayout() {
   const onSystemAdminSettings = adminAccess.isSystemAdmin && currentRoute.type === 'admin-settings';
   useEffect(() => {
     if (!onSystemAdminSettings) return;
-    const stops = [watchAllListings(setAllAds), watchAllUsers(setAllUsers), watchClientErrors(setClientErrors)];
+    const stops = [watchAllListings(setAllAds), watchAllUsers(setAllUsers), watchClientErrors(setClientErrors), watchAppeals(setAppeals)];
     return () => stops.forEach((stop) => stop());
   }, [onSystemAdminSettings]);
 
@@ -12186,6 +12323,171 @@ export default function RootLayout() {
     );
   };
 
+  /** System admin: disable, enable or delete an account (not their own) */
+  const renderAccountActions = (u: UserProfileDoc) => {
+    if ((u.email || '').toLowerCase() === 'blanc.69458@gmail.com') return null;
+    const busy = adminToolBusy.endsWith(u.id);
+    const drafting = disableDraft?.uid === u.id;
+    return (
+      <div className="pt-2 mt-1 border-t border-slate-100 space-y-2">
+        {u.disabled ? (
+          <div className="rounded-xl bg-red-50 border border-red-200 px-2.5 py-2">
+            <p className="text-[11px] font-black text-red-700">Account disabled {formatDay(u.disabledAtISO) && `on ${formatDay(u.disabledAtISO)}`}</p>
+            {u.disabledReason && <p className="text-[11px] text-red-700">Reason: {u.disabledReason}</p>}
+          </div>
+        ) : null}
+        {drafting && (
+          <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-2.5 space-y-2">
+            <label className="text-[11px] font-bold text-slate-700 block">Why? (they will see this)</label>
+            <input
+              value={disableDraft!.reason}
+              maxLength={200}
+              onChange={(e) => setDisableDraft({ uid: u.id, reason: e.target.value })}
+              placeholder="e.g. Selling fake items"
+              className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-900 outline-none focus:border-orange-500"
+            />
+            <div className="flex gap-1.5">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() =>
+                  runAdminTool(`disable:${u.id}`, async () => {
+                    await setUserDisabled(u, true, disableDraft!.reason.trim());
+                    setDisableDraft(null);
+                  }, 'Account disabled. Their ads and profile are hidden.')
+                }
+                className={`${smallBtn} bg-red-600 text-white`}
+              >
+                {adminToolBusy === `disable:${u.id}` ? 'Saving…' : 'Disable account'}
+              </button>
+              <button type="button" onClick={() => setDisableDraft(null)} className={`${smallBtn} border border-slate-200 text-slate-600`}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+        <div className="flex flex-wrap gap-1.5">
+          {u.disabled ? (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => runAdminTool(`enable:${u.id}`, () => setUserDisabled(u, false), 'Account enabled again')}
+              className={`${smallBtn} bg-brand text-white`}
+            >
+              {adminToolBusy === `enable:${u.id}` ? 'Saving…' : 'Enable account'}
+            </button>
+          ) : (
+            !drafting && (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => setDisableDraft({ uid: u.id, reason: '' })}
+                className={`${smallBtn} border border-red-200 text-red-600`}
+              >
+                Disable account
+              </button>
+            )
+          )}
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => confirmTap(`deluser:${u.id}`, () => runAdminTool(`deluser:${u.id}`, () => deleteUserAccount(u), 'Account deleted'))}
+            className={`${smallBtn} ${adminToolConfirm === `deluser:${u.id}` ? 'bg-red-600 text-white' : 'text-red-600 hover:bg-red-50'}`}
+          >
+            {adminToolBusy === `deluser:${u.id}` ? 'Deleting…' : adminToolConfirm === `deluser:${u.id}` ? 'Tap again to delete forever' : 'Delete account'}
+          </button>
+        </div>
+        {adminToolConfirm === `deluser:${u.id}` && (
+          <p className="text-[10.5px] text-red-600 leading-snug">
+            Removes their ads, profile, artisan page and documents. Signing in with their email will say no account exists.
+          </p>
+        )}
+      </div>
+    );
+  };
+
+  const renderAppealsPage = () => {
+    if (!adminAccess.isSystemAdmin) return null;
+    const users = new Map(allUsers.map((u) => [u.id, u]));
+    const sorted = [...appeals].sort((a, b) => Number(b.status === 'open') - Number(a.status === 'open'));
+    if (sorted.length === 0) return <p className="text-[11px] text-slate-500 text-center py-8">No appeals yet.</p>;
+    return (
+      <div className="space-y-3">
+        {sorted.map((a) => {
+          const u = users.get(a.uid);
+          const replying = appealReply?.uid === a.uid;
+          const busy = adminToolBusy.endsWith(a.uid);
+          return (
+            <div key={a.uid} className="bg-white rounded-2xl p-3 border border-slate-200/80 shadow-2xs space-y-2">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="text-xs font-bold text-slate-900 truncate">{a.name || u?.name || 'No name'}</p>
+                  <p className="text-[11px] text-slate-500 truncate">
+                    {a.email} • {formatDay(a.createdAtISO)}
+                  </p>
+                </div>
+                <span
+                  className={`shrink-0 px-2 py-0.5 rounded-full text-[10px] font-black uppercase ${
+                    a.status === 'open' ? 'bg-amber-100 text-amber-700' : a.status === 'accepted' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'
+                  }`}
+                >
+                  {a.status === 'open' ? 'Waiting' : a.status === 'accepted' ? 'Enabled' : 'Declined'}
+                </span>
+              </div>
+              {u?.disabledReason && <p className="text-[11px] text-slate-600">Disabled for: {u.disabledReason}</p>}
+              <p className="text-xs text-slate-800 bg-slate-50 border border-slate-100 rounded-xl px-3 py-2 leading-relaxed whitespace-pre-wrap">{a.message}</p>
+              {a.status === 'declined' && a.adminReply && <p className="text-[11px] text-slate-500">Your reply: {a.adminReply}</p>}
+              {a.status === 'open' && u && (
+                <>
+                  {replying && (
+                    <textarea
+                      value={appealReply!.text}
+                      maxLength={500}
+                      onChange={(e) => setAppealReply({ uid: a.uid, text: e.target.value })}
+                      placeholder="Reply they will see (optional)"
+                      className="w-full min-h-[70px] rounded-xl border border-slate-200 px-2.5 py-2 text-xs text-slate-900 outline-none focus:border-orange-500 resize-none"
+                    />
+                  )}
+                  <div className="flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => runAdminTool(`enable:${a.uid}`, () => setUserDisabled(u, false), 'Account enabled again')}
+                      className={`${smallBtn} bg-brand text-white`}
+                    >
+                      {adminToolBusy === `enable:${a.uid}` ? 'Saving…' : 'Enable account'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() =>
+                        replying
+                          ? runAdminTool(`decline:${a.uid}`, async () => {
+                              await declineAppeal(a.uid, appealReply!.text);
+                              setAppealReply(null);
+                            }, 'Appeal declined; the account stays disabled')
+                          : setAppealReply({ uid: a.uid, text: '' })
+                      }
+                      className={`${smallBtn} border border-red-200 text-red-600`}
+                    >
+                      {adminToolBusy === `decline:${a.uid}` ? 'Saving…' : replying ? 'Send & keep disabled' : 'Keep disabled'}
+                    </button>
+                    {replying && (
+                      <button type="button" onClick={() => setAppealReply(null)} className={`${smallBtn} text-slate-500`}>
+                        Cancel
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
+              {a.status === 'open' && !u && <p className="text-[11px] text-slate-400">This account no longer exists.</p>}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
   const renderAllUsersPage = () => {
     if (!adminAccess.isSystemAdmin) return null;
     const q = usersQuery.trim().toLowerCase();
@@ -12233,6 +12535,7 @@ export default function RootLayout() {
                   </p>
                   <p className="text-[11px] text-slate-500 truncate">{u.email}</p>
                 </div>
+                {u.disabled && <span className="shrink-0 px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-red-100 text-red-700">Disabled</span>}
                 <span className={`shrink-0 px-2 py-0.5 rounded-full text-[10px] font-black uppercase ${roleBadge[role] || roleBadge.buyer}`}>{role}</span>
                 <ChevronRight size={15} className={`text-slate-400 shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />
               </button>
@@ -12327,6 +12630,7 @@ export default function RootLayout() {
                     </div>
                   )}
                   {role === 'buyer' && partnerForm?.uid === u.id && renderPartnerForm(u)}
+                  {renderAccountActions(u)}
                 </div>
               )}
             </div>
@@ -12388,6 +12692,16 @@ export default function RootLayout() {
     { key: 'banners', title: 'Home Banners', note: 'Add, edit, reorder and delete banners', icon: <Megaphone size={18} />, show: can('banners') },
     { key: 'categories', title: 'Categories', note: 'Photos, new categories, moving ads', icon: <LayoutGrid size={18} />, show: can('categories') },
     { key: 'branding', title: 'App Branding', note: 'App bar logo and Welcome picture', icon: <Palette size={18} />, show: can('branding') },
+    {
+      key: 'appeals',
+      title: 'Appeals',
+      note: (() => {
+        const open = appeals.filter((a) => a.status === 'open').length;
+        return open ? `${open} waiting • disabled accounts asking to come back` : 'Disabled accounts asking to come back';
+      })(),
+      icon: <ShieldAlert size={18} />,
+      show: adminAccess.isSystemAdmin,
+    },
     { key: 'permissions', title: 'Admin Permissions', note: 'Choose what each admin can do', icon: <KeyRound size={18} />, show: adminAccess.isSystemAdmin },
     {
       key: 'problems',
@@ -12426,6 +12740,8 @@ export default function RootLayout() {
         return renderAllAdsPage();
       case 'users':
         return renderAllUsersPage();
+      case 'appeals':
+        return renderAppealsPage();
       case 'problems':
         return renderProblemsPage();
       case 'banners':
@@ -12467,7 +12783,110 @@ export default function RootLayout() {
     }
   };
 
+  const accountDisabled = Boolean(myProfileDoc?.disabled) && !adminAccess.isAdmin;
+  const [myAppeal, setMyAppeal] = useState<AppealDoc | null>(null);
+  const [appealText, setAppealText] = useState('');
+  const [sendingAppeal, setSendingAppeal] = useState(false);
+  useEffect(() => {
+    if (!accountDisabled || !firebaseUid) {
+      setMyAppeal(null);
+      return;
+    }
+    return watchMyAppeal(firebaseUid, setMyAppeal);
+  }, [accountDisabled, firebaseUid]);
+
+  const sendAppeal = async () => {
+    if (sendingAppeal) return;
+    setSendingAppeal(true);
+    try {
+      await submitAppeal(appealText, myProfileDoc?.name || userProfile.name);
+      setAppealText('');
+      showToast('Appeal sent. The Haraka team will review it.');
+    } catch (err) {
+      showToast(`⚠️ ${err instanceof Error && !/firebase|firestore|permission/i.test(err.message) ? err.message : 'Could not send. Check your connection and try again.'}`);
+    } finally {
+      setSendingAppeal(false);
+    }
+  };
+
+  const renderDisabledAccountScreen = () => {
+    const appeal = myAppeal;
+    const canWrite = !appeal || appeal.status !== 'open';
+    return (
+      <div className="flex-1 min-h-full flex flex-col bg-white px-6 pt-8 pb-6 overflow-y-auto">
+        <div className="flex justify-center">
+          <HarakaLogo className="h-10 w-auto" />
+        </div>
+        <div className="flex flex-col items-center text-center pt-8">
+          <div className="w-16 h-16 rounded-full bg-red-50 flex items-center justify-center">
+            <ShieldAlert size={32} className="text-red-600" />
+          </div>
+          <h1 className="text-xl font-black text-slate-900 mt-4">Account temporarily disabled</h1>
+          <p className="text-sm text-slate-600 mt-2 leading-relaxed">
+            Your Haraka account has been temporarily disabled for violating our policies and terms of use. Your ads and profile are hidden while it is
+            disabled.
+          </p>
+          {myProfileDoc?.disabledReason && (
+            <p className="text-xs text-slate-700 mt-3 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2">
+              <span className="font-bold">Reason:</span> {myProfileDoc.disabledReason}
+            </p>
+          )}
+        </div>
+
+        <div className="mt-6 space-y-3">
+          {appeal?.status === 'open' && (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3.5">
+              <p className="text-sm font-black text-amber-900">Appeal sent</p>
+              <p className="text-xs text-amber-800 mt-1 leading-relaxed">We are reviewing your appeal and will update your account when we decide.</p>
+              <p className="text-xs text-slate-700 mt-2 italic">"{appeal.message}"</p>
+            </div>
+          )}
+          {appeal?.status === 'declined' && (
+            <div className="rounded-2xl border border-red-200 bg-red-50 p-3.5">
+              <p className="text-sm font-black text-red-800">Appeal not accepted</p>
+              {appeal.adminReply && <p className="text-xs text-red-800 mt-1 leading-relaxed">{appeal.adminReply}</p>}
+              <p className="text-xs text-slate-600 mt-1">You can send a new appeal below.</p>
+            </div>
+          )}
+          {canWrite && (
+            <div className="space-y-2">
+              <label htmlFor="appeal-text" className="text-xs font-bold text-slate-800 block">
+                Send an appeal
+              </label>
+              <textarea
+                id="appeal-text"
+                value={appealText}
+                maxLength={1000}
+                onChange={(e) => setAppealText(e.target.value)}
+                placeholder="Explain what happened and why your account should be enabled again"
+                className="w-full min-h-[120px] rounded-2xl border border-slate-200 px-3.5 py-3 text-sm text-slate-900 outline-none focus:border-orange-500 resize-none"
+              />
+              <button
+                type="button"
+                disabled={sendingAppeal || appealText.trim().length < 10}
+                onClick={sendAppeal}
+                className="w-full py-3.5 rounded-2xl bg-accent text-white text-sm font-extrabold cursor-pointer disabled:opacity-50"
+              >
+                {sendingAppeal ? 'Sending…' : 'Send Appeal'}
+              </button>
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={handleSignOut}
+            className="w-full py-3 rounded-2xl border border-slate-200 text-slate-700 text-sm font-bold cursor-pointer"
+          >
+            Log Out
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   const renderCurrentScreen = () => {
+    if (accountDisabled && !['splash', 'onboarding', 'welcome', 'sign-up', 'login', 'forgot-password'].includes(currentRoute.type)) {
+      return renderDisabledAccountScreen();
+    }
     // Signed in but email not confirmed yet: only the confirmation screen (and sign-in screens) are available
     if (needsEmailVerification && !['splash', 'onboarding', 'welcome', 'sign-up', 'login', 'forgot-password'].includes(currentRoute.type)) {
       return renderVerifyEmailScreen();
@@ -20093,7 +20512,7 @@ export default function RootLayout() {
                       navigateTo({ type: 'pending-application', applicantId: pending.id });
                       return;
                     }
-                    resetSellerRegForm('storefront');
+                    if (!restorePartnerDraft('storefront')) resetSellerRegForm('storefront');
                     navigateTo({ type: 'register-seller' });
                   }}
                   className="w-full py-3.5 px-4 rounded-xl bg-[#01573B] hover:bg-[#014730] active:scale-98 text-white font-extrabold text-sm flex items-center justify-center gap-2 shadow-xs transition-all cursor-pointer mt-3"
@@ -20140,7 +20559,7 @@ export default function RootLayout() {
                       navigateTo({ type: 'pending-application', applicantId: pending.id });
                       return;
                     }
-                    resetSellerRegForm('artisan');
+                    if (!restorePartnerDraft('artisan')) resetSellerRegForm('artisan');
                     navigateTo({ type: 'register-artisan' });
                   }}
                   className="w-full py-3.5 px-4 rounded-xl bg-[#FF5722] hover:bg-[#E64A19] active:scale-98 text-white font-extrabold text-sm flex items-center justify-center gap-2 shadow-xs transition-all cursor-pointer mt-3"
@@ -24544,6 +24963,7 @@ export default function RootLayout() {
                       const saved = await submitApplication(applicantRecord);
                       setAdminApplicants((prev) => [saved as unknown as AdminApplicant, ...prev.filter((a) => a.id !== saved.id)]);
                       setSubmittedSellerApplicantId(saved.id);
+                      clearDraft(PARTNER_REG_DRAFT);
                       notifyAdmins('New partner application', 'Someone applied to sell or offer services on Haraka. Open the Admin Control Dashboard to review it.');
                     } catch (err) {
                       console.warn('Could not submit application', err);
@@ -26613,7 +27033,7 @@ export default function RootLayout() {
               </div>
 
               {/* Bottom Tab Bar matching user screenshot */}
-              {currentRoute.type === 'tabs' && !needsEmailVerification && !viewingApplicantDetails && !viewingArtisanBookingDetails && (
+              {currentRoute.type === 'tabs' && !needsEmailVerification && !accountDisabled && !viewingApplicantDetails && !viewingArtisanBookingDetails && (
                 <div data-kb-hide className="sticky bottom-0 left-0 right-0 shrink-0 bg-white border-t border-slate-200/80 pt-2 pb-[calc(env(safe-area-inset-bottom,0px)+14px)] px-3 flex items-center justify-around z-40 select-none shadow-lg">
                   {/* 1. Explore */}
                   <button
@@ -26778,7 +27198,7 @@ export default function RootLayout() {
                 </div>
 
                 {/* BOTTOM TAB BAR (Navigation) matching user screenshot */}
-                {currentRoute.type === 'tabs' && !needsEmailVerification && !viewingApplicantDetails && !viewingArtisanBookingDetails && (
+                {currentRoute.type === 'tabs' && !needsEmailVerification && !accountDisabled && !viewingApplicantDetails && !viewingArtisanBookingDetails && (
                   <div data-kb-hide className="bg-white border-t border-slate-200/80 pt-2 pb-[calc(env(safe-area-inset-bottom,0px)+14px)] px-3 flex items-center justify-around z-40 select-none shadow-lg">
                     {/* 1. Explore */}
                     <button

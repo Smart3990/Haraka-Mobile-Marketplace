@@ -70,6 +70,10 @@ export interface UserProfileDoc {
   notificationsReadAtISO?: string;
   /** People this user blocked: they cannot message or call them, and their ads and chats are hidden */
   blockedUserIds?: string[];
+  /** Set by the system admin for policy violations: the person only sees the "disabled" page */
+  disabled?: boolean;
+  disabledReason?: string;
+  disabledAtISO?: string;
   /** Seller details filled in from "Finish your profile" */
   operatingHours?: string;
   safeMeetupSpots?: string[];
@@ -329,8 +333,50 @@ export async function checkEmailVerified(): Promise<boolean> {
 }
 
 export async function signInWithEmail(email: string, password: string): Promise<User> {
-  const cred = await signInWithEmailAndPassword(auth, email, password);
-  return cred.user;
+  let user: User;
+  try {
+    user = (await signInWithEmailAndPassword(auth, email, password)).user;
+  } catch (error) {
+    if (await wasAccountRemoved(email)) throw new Error(NO_ACCOUNT_MESSAGE);
+    throw error;
+  }
+  // The system admin deleted this account: remove the login and say there is no account
+  if (await removeIfAccountDeleted(user)) throw new Error(NO_ACCOUNT_MESSAGE);
+  return user;
+}
+
+const NO_ACCOUNT_MESSAGE = 'No account exists with this email address.';
+
+/** True when the system admin deleted the account that used this email. */
+async function wasAccountRemoved(email: string): Promise<boolean> {
+  try {
+    return (await getDoc(doc(db, 'deletedAccounts', email.trim().toLowerCase()))).exists();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Called whenever someone is signed in. If the system admin deleted this account, the login is
+ * removed too (so the email has no account any more) and true is returned. A new account made
+ * later with the same email clears the old note instead.
+ */
+async function removeIfAccountDeleted(user: User): Promise<boolean> {
+  const email = (user.email || '').toLowerCase();
+  if (!email) return false;
+  let note;
+  try {
+    note = await getDoc(doc(db, 'deletedAccounts', email));
+  } catch {
+    return false;
+  }
+  if (!note.exists()) return false;
+  if (note.data().uid !== user.uid) {
+    await deleteDoc(note.ref).catch(() => {});
+    return false;
+  }
+  await deleteUser(user).catch(() => firebaseSignOut(auth));
+  return true;
 }
 
 export function sendPasswordReset(email: string): Promise<void> {
@@ -422,7 +468,7 @@ export async function saveUserProfile(uid: string, data: Partial<UserProfileDoc>
  * Calls back with the signed-in user and their profile, or nulls when signed out.
  * The profile is watched live, so an admin's decision (new role) shows up at once.
  */
-export function watchAuth(callback: (user: User | null, profile: UserProfileDoc | null) => void): () => void {
+export function watchAuth(callback: (user: User | null, profile: UserProfileDoc | null, removed?: boolean) => void): () => void {
   let stopProfile: (() => void) | null = null;
   let current = '';
   // Token changes also report a newly confirmed email, which creates the account profile
@@ -442,10 +488,24 @@ export function watchAuth(callback: (user: User | null, profile: UserProfileDoc 
       return;
     }
     try {
+      if (await removeIfAccountDeleted(user)) {
+        current = '';
+        callback(null, null, true);
+        return;
+      }
       await loadUserProfile(user); // creates the profile on first sign-in
       stopProfile = onSnapshot(
         doc(db, 'users', user.uid),
-        (snap) => callback(user, snap.exists() ? (snap.data() as UserProfileDoc) : null),
+        async (snap) => {
+          if (!snap.exists() && (await removeIfAccountDeleted(user))) {
+            stopProfile?.();
+            stopProfile = null;
+            current = '';
+            callback(null, null, true);
+            return;
+          }
+          callback(user, snap.exists() ? (snap.data() as UserProfileDoc) : null);
+        },
         (error) => {
           console.warn('Could not watch user profile', error);
           callback(user, null);
@@ -751,6 +811,121 @@ export async function makeUserPartner(user: UserProfileDoc, input: AdminPartnerI
   }) as StoredApplication;
   await setDoc(doc(db, 'applications', user.id), record);
   await decideApplication(record, 'approve');
+}
+
+// ---------------------------------------------------------------------------
+// Disabled accounts, appeals and deleted accounts (system admin)
+// ---------------------------------------------------------------------------
+
+function requireSystemAdmin(): string {
+  const email = auth.currentUser?.email?.toLowerCase() || '';
+  if (email !== SYSTEM_ADMIN_EMAIL) throw new Error('Only the system admin can do this.');
+  return email;
+}
+
+/** Everyone: the accounts that are disabled, so their ads and artisan profile are hidden. */
+export function watchDisabledUserIds(callback: (ids: string[]) => void): () => void {
+  return onSnapshot(
+    collection(db, 'disabledUsers'),
+    (snap) => callback(snap.docs.map((d) => d.id)),
+    (error) => console.warn('Could not load disabled accounts', error)
+  );
+}
+
+/** System admin: disables an account for breaking the rules, or enables it again. */
+export async function setUserDisabled(user: UserProfileDoc, disabled: boolean, reason = ''): Promise<void> {
+  const by = requireSystemAdmin();
+  if (user.email?.toLowerCase() === SYSTEM_ADMIN_EMAIL) throw new Error('The system admin account cannot be disabled.');
+  const now = new Date().toISOString();
+  const batch = writeBatch(db);
+  batch.update(doc(db, 'users', user.id), {
+    disabled,
+    disabledReason: disabled ? reason : '',
+    disabledAtISO: disabled ? now : '',
+  });
+  if (disabled) batch.set(doc(db, 'disabledUsers', user.id), { atISO: now, by });
+  else batch.delete(doc(db, 'disabledUsers', user.id));
+  await batch.commit();
+  if (!disabled) {
+    // An open appeal is answered by enabling the account
+    const appeal = await getDoc(doc(db, 'appeals', user.id)).catch(() => null);
+    if (appeal?.exists() && appeal.data().status === 'open') {
+      await updateDoc(appeal.ref, { status: 'accepted', decidedAtISO: now }).catch(() => {});
+    }
+  }
+}
+
+export interface AppealDoc {
+  uid: string;
+  name: string;
+  email: string;
+  message: string;
+  status: 'open' | 'accepted' | 'declined';
+  adminReply?: string;
+  createdAtISO: string;
+  decidedAtISO?: string;
+}
+
+/** A disabled user asks for their account back (one appeal at a time; sending again replaces it). */
+export async function submitAppeal(message: string, name: string): Promise<void> {
+  const user = auth.currentUser;
+  if (!user) throw new Error('Please log in again.');
+  const text = message.trim();
+  if (text.length < 10) throw new Error('Please explain a little more (at least 10 characters).');
+  const appeal: AppealDoc = {
+    uid: user.uid,
+    name: name || user.displayName || '',
+    email: user.email || '',
+    message: text.slice(0, 1000),
+    status: 'open',
+    adminReply: '',
+    createdAtISO: new Date().toISOString(),
+  };
+  await setDoc(doc(db, 'appeals', user.uid), appeal);
+}
+
+export function watchMyAppeal(uid: string, callback: (appeal: AppealDoc | null) => void): () => void {
+  return onSnapshot(
+    doc(db, 'appeals', uid),
+    (snap) => callback(snap.exists() ? (snap.data() as AppealDoc) : null),
+    () => callback(null)
+  );
+}
+
+/** System admin: every appeal, newest first. */
+export function watchAppeals(callback: (appeals: AppealDoc[]) => void): () => void {
+  return onSnapshot(
+    query(collection(db, 'appeals'), orderBy('createdAtISO', 'desc')),
+    (snap) => callback(snap.docs.map((d) => d.data() as AppealDoc)),
+    (error) => console.warn('Could not load appeals', error)
+  );
+}
+
+/** System admin: turns down an appeal (the account stays disabled); the person sees the reply. */
+export async function declineAppeal(uid: string, reply: string): Promise<void> {
+  requireSystemAdmin();
+  await updateDoc(doc(db, 'appeals', uid), { status: 'declined', adminReply: reply.trim().slice(0, 500), decidedAtISO: new Date().toISOString() });
+}
+
+/**
+ * System admin: deletes an account and everything public about it (ads, artisan profile,
+ * application with ID documents, notification token, appeal). Chats and bookings stay so the
+ * other person keeps their history. The login itself is removed the next time it is used, so
+ * signing in with that email then says no account exists.
+ */
+export async function deleteUserAccount(user: UserProfileDoc): Promise<void> {
+  const by = requireSystemAdmin();
+  const email = (user.email || '').toLowerCase();
+  if (email === SYSTEM_ADMIN_EMAIL) throw new Error('The system admin account cannot be deleted.');
+  if (email) {
+    await setDoc(doc(db, 'deletedAccounts', email), { uid: user.id, email, deletedAtISO: new Date().toISOString(), deletedBy: by });
+  }
+  const ads = await getDocs(query(collection(db, 'listings'), where('sellerId', '==', user.id)));
+  await Promise.all(ads.docs.map((d) => deleteDoc(d.ref)));
+  await Promise.all(
+    ['applications', 'artisans', 'pushTokens', 'appeals', 'disabledUsers'].map((col) => deleteDoc(doc(db, col, user.id)).catch(() => {}))
+  );
+  await deleteDoc(doc(db, 'users', user.id));
 }
 
 /** Admins: sets (or clears) the Verified tag on every ad a seller has posted. */
