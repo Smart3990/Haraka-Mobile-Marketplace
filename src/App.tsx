@@ -194,6 +194,8 @@ import {
   submitReview,
   updateMyArtisanProfile,
   updateMyArtisanDetails,
+  ARTISAN_LIMITS,
+  artisanLimitProblem,
   watchSellerPublic,
   publishMySellerPage,
   type SellerPublicDoc,
@@ -4652,6 +4654,9 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     if (!sh.price.trim()) return setSheetError('Enter a price, or 0 if it is free.');
     const item = { title: sh.title.trim(), desc: sh.desc.trim(), price: tidyPrice(sh.price) };
     const put = <T,>(list: T[], value: T) => (sh.index === null ? [...list, value] : list.map((x, i) => (i === sh.index ? value : x)));
+    if (sh.index === null && (sh.target === 'registration' ? artisanServices.length : partnerDraft?.services.length || 0) >= ARTISAN_LIMITS.services) {
+      return setSheetError(`You can list up to ${ARTISAN_LIMITS.services} services.`);
+    }
     if (sh.target === 'registration') {
       setArtisanServices((prev) => put(prev, item));
       clearSellerError('artisanServices');
@@ -4668,6 +4673,9 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
     if (!sh.title.trim()) return setSheetError('Enter what the project was.');
     const item = { title: sh.title.trim(), tag: sh.where.trim(), sub: '', img: sh.img };
     const put = <T,>(list: T[], value: T) => (sh.index === null ? [...list, value] : list.map((x, i) => (i === sh.index ? value : x)));
+    if (sh.index === null && (sh.target === 'registration' ? artisanPortfolio.length : partnerDraft?.portfolio.length || 0) >= ARTISAN_LIMITS.projects) {
+      return setSheetError(`You can show up to ${ARTISAN_LIMITS.projects} projects.`);
+    }
     if (sh.target === 'registration') {
       setArtisanPortfolio((prev) => put(prev, item));
       clearSellerError('artisanPortfolio');
@@ -4994,6 +5002,12 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
       setPartnerSetupError('Stop the voice recording first.');
       return;
     }
+    const overLimit =
+      partnerRole === 'artisan' ? artisanLimitProblem({ services: d.services, projects: d.portfolio, areas: d.coverage, languages: d.languages }) : '';
+    if (overLimit) {
+      setPartnerSetupError(overLimit);
+      return;
+    }
     setPartnerSetupError('');
     setPartnerSaving(true);
     const whatsapp = d.whatsapp ? '+233 ' + cleanGhanaPhoneNumber(d.whatsapp) : '';
@@ -5058,7 +5072,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
       const code = (err as { code?: string })?.code || '';
       setPartnerSetupError(
         code === 'permission-denied'
-          ? 'Haraka refused to save this profile. Please log out and in again, then try once more. (permission-denied)'
+          ? 'Haraka could not save this profile. The problem has been sent to the Haraka team; please try again in a little while. (permission-denied)'
           : code === 'not-found'
           ? 'Your artisan page is missing. Please contact Haraka support. (not-found)'
           : err instanceof Error && !code && !/firebase|firestore|internal/i.test(err.message)
@@ -5520,7 +5534,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
       `px-3 py-1.5 rounded-full text-[11px] font-bold border cursor-pointer ${on ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-600 border-slate-200'}`;
     const addTag = (key: 'meetupSpots' | 'coverage', input: 'spot' | 'area') => {
       const value = partnerTextInput[input].trim();
-      if (!value || d[key].includes(value) || d[key].length >= 15) return;
+      if (!value || d[key].includes(value) || d[key].length >= (key === 'coverage' ? ARTISAN_LIMITS.areas : 15)) return;
       set({ [key]: [...d[key], value] } as Partial<PartnerDraft>);
       setPartnerTextInput((t) => ({ ...t, [input]: '' }));
     };
@@ -5639,7 +5653,7 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
                     <p className="text-xs font-black text-slate-900">Services & prices</p>
                     <p className="text-[11px] text-slate-500">What buyers can book you for. Tap one to change it.</p>
                   </div>
-                  {d.services.length < 15 && (
+                  {d.services.length < ARTISAN_LIMITS.services && (
                     <button
                       type="button"
                       onClick={() => openServiceSheet('profile', null)}
@@ -5670,9 +5684,9 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
                 <div className="flex items-center justify-between gap-2">
                   <div>
                     <p className="text-xs font-black text-slate-900">Past projects</p>
-                    <p className="text-[11px] text-slate-500">Photos of work you have done (up to 8).</p>
+                    <p className="text-[11px] text-slate-500">Photos of work you have done (up to {ARTISAN_LIMITS.projects}).</p>
                   </div>
-                  {d.portfolio.length < 8 && (
+                  {d.portfolio.length < ARTISAN_LIMITS.projects && (
                     <button
                       type="button"
                       onClick={() => openProjectSheet('profile', null)}
@@ -5733,7 +5747,12 @@ export default function App({ native = false, nativeBridge }: { native?: boolean
                     {PARTNER_LANGUAGES.map((lang) => {
                       const on = d.languages.includes(lang);
                       return (
-                        <button key={lang} type="button" onClick={() => set({ languages: on ? d.languages.filter((l) => l !== lang) : [...d.languages, lang] })} className={chipBtn(on)}>
+                        <button
+                          key={lang}
+                          type="button"
+                          onClick={() => set({ languages: on ? d.languages.filter((l) => l !== lang) : d.languages.length >= ARTISAN_LIMITS.languages ? d.languages : [...d.languages, lang] })}
+                          className={chipBtn(on)}
+                        >
                           {lang}
                         </button>
                       );
@@ -22910,7 +22929,7 @@ export default function RootLayout() {
                                   if (e.key === 'Enter') {
                                     e.preventDefault();
                                     if (newCoverageAreaInput.trim() && !artisanCoverageAreas.includes(newCoverageAreaInput.trim())) {
-                                      setArtisanCoverageAreas((prev) => [...prev, newCoverageAreaInput.trim()]);
+                                      setArtisanCoverageAreas((prev) => (prev.length >= ARTISAN_LIMITS.areas ? prev : [...prev, newCoverageAreaInput.trim()]));
                                       setNewCoverageAreaInput('');
                                     }
                                   }
@@ -22923,7 +22942,7 @@ export default function RootLayout() {
                               type="button"
                               onClick={() => {
                                 if (newCoverageAreaInput.trim() && !artisanCoverageAreas.includes(newCoverageAreaInput.trim())) {
-                                  setArtisanCoverageAreas((prev) => [...prev, newCoverageAreaInput.trim()]);
+                                  setArtisanCoverageAreas((prev) => (prev.length >= ARTISAN_LIMITS.areas ? prev : [...prev, newCoverageAreaInput.trim()]));
                                   setNewCoverageAreaInput('');
                                 }
                               }}
@@ -22939,7 +22958,7 @@ export default function RootLayout() {
                               <button
                                 key={t}
                                 type="button"
-                                onClick={() => setArtisanCoverageAreas((prev) => [...prev, t])}
+                                onClick={() => setArtisanCoverageAreas((prev) => (prev.length >= ARTISAN_LIMITS.areas ? prev : [...prev, t]))}
                                 className="text-[10.5px] font-bold text-slate-700 hover:text-accent hover:border-orange-400 bg-white border border-slate-200 px-2.5 py-0.5 rounded-full cursor-pointer transition-colors shadow-2xs"
                               >
                                 + {t}
@@ -23116,7 +23135,7 @@ export default function RootLayout() {
                                         setArtisanLanguages((prev) => prev.filter((l) => l !== lang));
                                       }
                                     } else {
-                                      setArtisanLanguages((prev) => [...prev, lang]);
+                                      setArtisanLanguages((prev) => (prev.length >= ARTISAN_LIMITS.languages ? prev : [...prev, lang]));
                                     }
                                   }}
                                   className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all cursor-pointer ${

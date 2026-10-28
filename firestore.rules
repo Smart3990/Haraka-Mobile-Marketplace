@@ -351,6 +351,10 @@ service cloud.firestore {
     }
 
     // Public artisan profiles, created by an admin when an artisan application is approved
+    function artisanListOk(field, max) {
+      return !(field in request.resource.data.diff(resource.data).affectedKeys())
+        || (request.resource.data[field] is list && request.resource.data[field].size() <= max);
+    }
     match /artisans/{artisanId} {
       allow get, list: if true;
       allow create: if isAdmin();
@@ -362,10 +366,12 @@ service cloud.firestore {
             .hasOnly(['available', 'inspectionFee', 'bio', 'phone', 'whatsapp', 'avatar', 'responseTime',
               'headline', 'experienceYears', 'servicesAndPricing', 'verifiedWorkPortfolio', 'voiceIntroUrl',
               'serviceCoverageAreas', 'languagesSpoken'])
-          && request.resource.data.get('servicesAndPricing', []) is list && request.resource.data.get('servicesAndPricing', []).size() <= 15
-          && request.resource.data.get('verifiedWorkPortfolio', []) is list && request.resource.data.get('verifiedWorkPortfolio', []).size() <= 8
-          && request.resource.data.get('serviceCoverageAreas', []) is list && request.resource.data.get('serviceCoverageAreas', []).size() <= 15
-          && request.resource.data.get('languagesSpoken', []) is list && request.resource.data.get('languagesSpoken', []).size() <= 10)
+          // Limits match ARTISAN_LIMITS in src/lib/backend.ts. Only lists being changed are checked, so an
+          // older page that is over a limit never blocks saving the artisan's other details.
+          && artisanListOk('servicesAndPricing', 30)
+          && artisanListOk('verifiedWorkPortfolio', 20)
+          && artisanListOk('serviceCoverageAreas', 40)
+          && artisanListOk('languagesSpoken', 15))
         // Completing a booking adds exactly one job, once per booking
         || (isOwner(artisanId)
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['jobsCompleted', 'lastCompletedBookingId'])

@@ -1136,6 +1136,22 @@ export async function publishMySellerPage(
   });
 }
 
+/**
+ * How many of each an artisan's page can hold. Registration, the profile page and the database
+ * rules (firestore.rules, "artisans") all use these same numbers, so a page that registration
+ * accepted can always be saved again later.
+ */
+export const ARTISAN_LIMITS = { services: 30, projects: 20, areas: 40, languages: 15 } as const;
+
+/** What is over a limit, in words to show the artisan (empty when everything fits). */
+export function artisanLimitProblem(d: { services: unknown[]; projects: unknown[]; areas: unknown[]; languages: unknown[] }): string {
+  if (d.services.length > ARTISAN_LIMITS.services) return `You can list up to ${ARTISAN_LIMITS.services} services. Please remove ${d.services.length - ARTISAN_LIMITS.services}.`;
+  if (d.projects.length > ARTISAN_LIMITS.projects) return `You can show up to ${ARTISAN_LIMITS.projects} projects. Please remove ${d.projects.length - ARTISAN_LIMITS.projects}.`;
+  if (d.areas.length > ARTISAN_LIMITS.areas) return `You can list up to ${ARTISAN_LIMITS.areas} areas. Please remove ${d.areas.length - ARTISAN_LIMITS.areas}.`;
+  if (d.languages.length > ARTISAN_LIMITS.languages) return `You can choose up to ${ARTISAN_LIMITS.languages} languages.`;
+  return '';
+}
+
 /** The details an artisan fills in from "Finish your profile" (shown on their public page) */
 export type ArtisanDetails = Pick<
   ArtisanProfileDoc,
@@ -1157,6 +1173,16 @@ export type ArtisanDetails = Pick<
 export async function updateMyArtisanDetails(details: ArtisanDetails): Promise<void> {
   const uid = auth.currentUser?.uid;
   if (!uid) throw new Error('Please log in again.');
+  const problem = artisanLimitProblem({
+    services: details.servicesAndPricing,
+    projects: details.verifiedWorkPortfolio,
+    areas: details.serviceCoverageAreas,
+    languages: details.languagesSpoken,
+  });
+  if (problem) throw new Error(problem);
+  if (!(await getDoc(doc(db, 'artisans', uid))).exists()) {
+    throw new Error('Your artisan page is missing. Please contact Haraka support so an admin can restore it.');
+  }
   const update: ArtisanDetails = { ...details };
   update.avatar = (await storeMedia(update.avatar, 'avatars', 120_000)) || '';
   update.voiceIntroUrl = (await storeMedia(update.voiceIntroUrl, 'voice', 0)) || '';
